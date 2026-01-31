@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主容器：包含顶部工具栏、候选词、以及用于放置具体键盘的 FrameLayout -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/maincontent"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#DDDDDD"
+    android:paddingBottom="0dp">
+
+    <!-- 1. 顶部区域 (50dp) -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:background="#EEEEEE">
+
+        <!-- 工具栏 -->
+        <LinearLayout
+            android:id="@+id/toolbarcontainer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="5dp"
+            android:paddingEnd="5dp">
+
+            <Button
+                android:id="@+id/btntoollayout"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="⌨"
+                android:textSize="24sp"
+                android:backgroundTint="#DDDDDD"
+                android:textColor="#333333"
+                android:layout_marginEnd="5dp" />
+
+            <Button
+                android:id="@+id/btntooltheme"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="🎨"
+                android:textSize="22sp"
+                android:backgroundTint="#DDDDDD"
+                android:textColor="#333333"
+                android:layout_marginStart="5dp" />
+        </LinearLayout>
+
+        <!-- 横向候选词条 -->
+        <LinearLayout
+            android:id="@+id/candidatestrip"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recyclercandidateshorizontal"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:scrollbars="none" />
+
+            <!-- 展开按钮 -->
+            <ImageButton
+                android:id="@+id/btnexpandcandidates"
+                android:layout_width="50dp"
+                android:layout_height="match_parent"
+                android:src="@drawable/ic_chevron_down"
+                android:background="?android:attr/selectableItemBackground"
+                android:scaleType="centerInside"
+                android:padding="12dp"
+                android:contentDescription="展开" />
+        </LinearLayout>
+
+        <!-- 拼音预览 -->
+        <TextView
+            android:id="@+id/tvcomposingpreview"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="#F5F5F5"
+            android:padding="5dp"
+            android:textColor="#2196F3"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- 2. 键盘主体容器 (具体的 Qwerty/T9 布局将加载到这里) -->
+    <FrameLayout
+        android:id="@+id/keyboardbodyframe"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="200dp">
+        <!-- 内容由代码动态加载 -->
+    </FrameLayout>
+
+    <!-- 3. 展开的候选词面板 (覆盖层) -->
+    <LinearLayout
+        android:id="@+id/expandedcandidatespanel"
+        android:layout_width="match_parent"
+        android:layout_height="250dp"
+        android:orientation="horizontal"
+        android:background="#FFFFFF"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recyclercandidatesvertical"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:padding="0dp" />
+
+        <LinearLayout
+            android:layout_width="60dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:background="#F0F0F0"
+            android:padding="2dp">
+
+            <ImageButton
+                android:id="@+id/expandpanelclose"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:src="@drawable/ic_chevron_down"
+                android:rotation="180"
+                android:background="?android:attr/selectableItemBackground"
+                android:scaleType="centerInside"
+                android:contentDescription="关闭" />
+
+            <Button
+                android:id="@+id/expandpaneldel"
+                android:text="⌫"
+                style="@style/KeyButton"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:textSize="20sp"
+                android:backgroundTint="#F0F0F0" />
+
+            <Button
+                android:id="@+id/expandpanelreenter"
+                android:text="重输"
+                style="@style/KeyButton"
+                android:textSize="14sp"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:backgroundTint="#F0F0F0" />
+
+            <Button
+                android:id="@+id/expandpanelfilter"
+                android:text="全部/单字"
+                style="@style/KeyButton"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:backgroundTint="#F0F0F0" />
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

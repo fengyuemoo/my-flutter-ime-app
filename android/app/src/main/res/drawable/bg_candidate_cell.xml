@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FFFFFF" />
+    <!-- 灰色细边框 -->
+    <stroke
+        android:width="0.5dp"
+        android:color="#CCCCCC" />
+    <!-- 点击时的涟漪效果由代码控制，或者这里简化为纯背景 -->
+</shape>

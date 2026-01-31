@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 按下或选中时：深灰色 -->
+    <item android:state_pressed="true" android:drawable="@android:color/darker_gray" />
+    <item android:state_selected="true" android:drawable="@android:color/darker_gray" />
+    <!-- 默认：透明 -->
+    <item android:drawable="@android:color/transparent" />
+</selector>

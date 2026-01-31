@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/symbolscrollroot"
+    android:layout_width="match_parent"
+    android:layout_height="250dp"
+    android:background="#DDDDDD"
+    android:padding="5dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- 标点行 1 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="，" style="@style/KeyButton"/>
+            <Button android:text="。" style="@style/KeyButton"/>
+            <Button android:text="？" style="@style/KeyButton"/>
+            <Button android:text="！" style="@style/KeyButton"/>
+            <Button android:text="……" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- 标点行 2 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="：" style="@style/KeyButton"/>
+            <Button android:text="；" style="@style/KeyButton"/>
+            <Button android:text="“" style="@style/KeyButton"/>
+            <Button android:text="”" style="@style/KeyButton"/>
+            <Button android:text="、" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- 符号行 1 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="\\@" style="@style/KeyButton"/>
+            <Button android:text="#" style="@style/KeyButton"/>
+            <Button android:text="$" style="@style/KeyButton"/>
+            <Button android:text="%" style="@style/KeyButton"/>
+            <Button android:text="&amp;" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- 符号行 2 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="+" style="@style/KeyButton"/>
+            <Button android:text="-" style="@style/KeyButton"/>
+            <Button android:text="*" style="@style/KeyButton"/>
+            <Button android:text="=" style="@style/KeyButton"/>
+            <Button android:text="_" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- 返回按钮 -->
+        <Button
+            android:id="@+id/btnsymback"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="返回键盘"
+            android:backgroundTint="#AAAAAA"
+            android:textColor="#FFFFFF"
+            android:layout_marginTop="10dp"/>
+    </LinearLayout>
+</ScrollView>

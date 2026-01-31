@@ -1,0 +1,30 @@
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugin-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+pubspec.lock
+
+# Android
+android/app/build/
+android/.gradle/
+android/gradle/
+android/gradlew
+android/gradlew.bat
+android/local.properties
+*.apk
+*.db
+
+# IDE & System
+.idea/
+.vscode/
+.idx/
+*.iml
+*.DS_Store
+Thumbs.db
+
+# Logs
+firebase-debug.log
