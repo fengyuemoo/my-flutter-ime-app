@@ -102,7 +102,7 @@
 
         <Button
             android:text="SPACE"
-            style="@style/KeyButton"
+            style="@style/KeyButton.SmallText"
             android:layout_weight="2.5"/>
 
         <Button

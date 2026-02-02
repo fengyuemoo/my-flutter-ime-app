@@ -1,20 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- ★★★ 这里删除了 LaunchTheme，因为它引用了不存在的 launch_background ★★★ -->
 
-    <!-- 键盘按钮样式 -->
+    <!-- 键盘按钮样式：统一规格（颜色/字号从资源读取，支持 DayNight） -->
     <style name="KeyButton">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">match_parent</item>
         <item name="android:layout_weight">1</item>
         <item name="android:layout_margin">2dp</item>
-        <item name="android:backgroundTint">#FFFFFF</item>
-        <item name="android:textColor">#000000</item>
+
+        <item name="android:background">@drawable/ripple_ime_key</item>
+        <item name="android:textColor">@color/ime_key_text</item>
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:textStyle">normal</item>
-        <item name="android:textSize">18sp</item>
+        <item name="android:textSize">@dimen/ime_key_text_size</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:padding">0dp</item>
         <item name="android:includeFontPadding">false</item>
     </style>
+
+    <!-- 功能键（稍暗底色） -->
+    <style name="KeyButton.Func" parent="KeyButton">
+        <item name="android:background">@drawable/ripple_ime_key_func</item>
+        <item name="android:textColor">@color/ime_key_text_secondary</item>
+    </style>
+
+    <!-- 长文本小字号 -->
+    <style name="KeyButton.SmallText" parent="KeyButton">
+        <item name="android:textSize">@dimen/ime_key_text_size_small</item>
+    </style>
+
+    <style name="KeyButton.FuncSmallText" parent="KeyButton.Func">
+        <item name="android:textSize">@dimen/ime_key_text_size_small</item>
+    </style>
+
 </resources>

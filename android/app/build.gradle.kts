@@ -47,6 +47,7 @@ dependencies {
     // ★★★ 核心修改：添加 RecyclerView 依赖 ★★★
     // 只有添加了这一行，你的 CandidateAdapter 才能正常工作
     implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("com.google.android.flexbox:flexbox:3.0.0")
 }
 
 // === 自动生成词库指纹常量（构建时） ===

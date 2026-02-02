@@ -1,29 +1,26 @@
 package com.example.myapp
 
-import android.app.Activity
 import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import com.example.myapp.ime.prefs.KeyboardPrefs
 
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        applyThemeMode()
+
         super.onCreate(savedInstanceState)
+        setContentView(R.layout.activitymain)
 
-        // 如果你要“全无下划线版”，请把布局文件改名为：
-        // app/src/main/res/layout/activitymain.xml
-        // 否则这里就必须继续用 R.layout.activity_main。 [file:10]
-        setContentView(R.layout.activitymain) // [file:10]
-
-        // 这些 id 目前在你给我的 activity_main.xml 里就是无下划线版：
-        // btnlayoutqwerty, btnlayoutt9, btnthemelight, btnthemedark, tvstatus [file:10]
-        val btnQwerty = findViewById<Button>(R.id.btnlayoutqwerty) // [file:10]
-        val btnT9 = findViewById<Button>(R.id.btnlayoutt9) // [file:10]
-        val btnLight = findViewById<Button>(R.id.btnthemelight) // [file:10]
-        val btnDark = findViewById<Button>(R.id.btnthemedark) // [file:10]
-        val tvStatus = findViewById<TextView>(R.id.tvstatus) // [file:10]
+        val btnQwerty = findViewById<Button>(R.id.btnlayoutqwerty)
+        val btnT9 = findViewById<Button>(R.id.btnlayoutt9)
+        val btnLight = findViewById<Button>(R.id.btnthemelight)
+        val btnDark = findViewById<Button>(R.id.btnthemedark)
+        val tvStatus = findViewById<TextView>(R.id.tvstatus)
 
         fun refreshStatus() {
             val themeMode = KeyboardPrefs.loadThemeMode(this)
@@ -39,7 +36,6 @@ class MainActivity : Activity() {
 
         refreshStatus()
 
-        // 布局切换
         btnQwerty.setOnClickListener {
             KeyboardPrefs.saveUseT9Layout(this, false)
             refreshStatus()
@@ -52,15 +48,26 @@ class MainActivity : Activity() {
             Toast.makeText(this, "已切换为九宫格", Toast.LENGTH_SHORT).show()
         }
 
-        // 皮肤切换
         btnLight.setOnClickListener {
             KeyboardPrefs.saveThemeMode(this, KeyboardPrefs.THEME_LIGHT)
+            applyThemeMode()
             refreshStatus()
+            recreate()
         }
 
         btnDark.setOnClickListener {
             KeyboardPrefs.saveThemeMode(this, KeyboardPrefs.THEME_DARK)
+            applyThemeMode()
             refreshStatus()
+            recreate()
+        }
+    }
+
+    private fun applyThemeMode() {
+        when (KeyboardPrefs.loadThemeMode(this)) {
+            KeyboardPrefs.THEME_LIGHT -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+            KeyboardPrefs.THEME_DARK -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+            else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
         }
     }
 }

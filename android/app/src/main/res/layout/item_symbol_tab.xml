@@ -10,7 +10,7 @@
     android:minWidth="48dp"
     android:paddingStart="10dp"
     android:paddingEnd="10dp"
-    android:textSize="13sp"
+    android:textSize="@dimen/ime_key_text_size_small"
     android:textAllCaps="false"
     android:background="@drawable/bg_symbol_tab_normal"
-    android:textColor="#222222" />
+    android:textColor="@color/ime_key_text" />

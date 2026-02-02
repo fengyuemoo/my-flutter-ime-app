@@ -19,8 +19,7 @@
 
             <Button
                 android:text="%"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.Func" />
 
             <Button
                 android:text="1"
@@ -37,8 +36,7 @@
             <Button
                 android:id="@+id/t9numdel"
                 android:text="⌫"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.Func" />
         </LinearLayout>
 
         <LinearLayout
@@ -49,8 +47,7 @@
 
             <Button
                 android:text="/"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.Func" />
 
             <Button
                 android:text="4"
@@ -66,8 +63,7 @@
 
             <Button
                 android:text="."
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.Func" />
         </LinearLayout>
 
         <LinearLayout
@@ -78,8 +74,7 @@
 
             <Button
                 android:text="-"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.Func" />
 
             <Button
                 android:text="7"
@@ -95,8 +90,7 @@
 
             <Button
                 android:text="\\@"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.FuncSmallText" />
         </LinearLayout>
 
         <LinearLayout
@@ -107,14 +101,12 @@
 
             <Button
                 android:text="+"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.Func" />
 
             <Button
                 android:id="@+id/t9numback"
                 android:text="返回"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.FuncSmallText" />
 
             <Button
                 android:text="0"
@@ -122,13 +114,11 @@
 
             <Button
                 android:text="␣"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.SmallText" />
 
             <Button
                 android:text="⏎"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0" />
+                style="@style/KeyButton.Func" />
         </LinearLayout>
 
     </LinearLayout>

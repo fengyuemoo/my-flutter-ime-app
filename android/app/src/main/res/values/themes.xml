@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.JoyiIme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- 全局背景 -->
+        <item name="android:windowBackground">@color/ime_app_bg</item>
+
+        <!-- Material 颜色（给可能用到的控件） -->
+        <item name="colorPrimary">@color/ime_accent</item>
+        <item name="colorPrimaryVariant">@color/ime_accent</item>
+        <item name="colorOnPrimary">@color/ime_on_accent</item>
+
+        <item name="colorSecondary">@color/ime_accent</item>
+        <item name="colorOnSecondary">@color/ime_on_accent</item>
+    </style>
+
+</resources>

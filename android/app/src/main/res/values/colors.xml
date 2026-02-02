@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App / panel backgrounds -->
+    <color name="ime_app_bg">#F3F4F6</color>
+    <color name="ime_panel_bg">#E5E7EB</color>
+    <color name="ime_toolbar_bg">#ECEFF3</color>
+    <color name="ime_surface">#FFFFFF</color>
+
+    <!-- Key colors -->
+    <color name="ime_key_bg">#FFFFFF</color>
+    <color name="ime_key_bg_func">#E9ECF1</color>
+    <color name="ime_key_text">#111111</color>
+    <color name="ime_key_text_secondary">#333333</color>
+    <color name="ime_key_stroke">#E3E5E8</color>
+
+    <!-- Accent -->
+    <color name="ime_accent">#1A5DFF</color>
+    <color name="ime_on_accent">#FFFFFF</color>
+
+    <!-- Misc -->
+    <color name="ime_ripple">#22000000</color>
+    <color name="ime_hint_text">#666666</color>
+</resources>

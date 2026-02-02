@@ -1,6 +1,5 @@
 package com.example.myapp.ime.ui
 
-import android.graphics.Color
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
@@ -12,6 +11,7 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -34,6 +34,9 @@ class ImeUi {
     private lateinit var btnFilter: Button
     private lateinit var tvComposingPreview: TextView
 
+    private lateinit var btnToolLayout: Button
+    private lateinit var btnToolTheme: Button
+
     private lateinit var recyclerHorizontal: RecyclerView
     private lateinit var recyclerVertical: RecyclerView
     private lateinit var adapterHorizontal: CandidateAdapter
@@ -43,20 +46,21 @@ class ImeUi {
         inflater: LayoutInflater,
         onCandidateClick: (Candidate) -> Unit
     ): View {
-        // 注意：项目里实际使用的是 imecontainer（无下划线）[file:31]
-        rootView = inflater.inflate(R.layout.imecontainer, null) // [file:31]
+        rootView = inflater.inflate(R.layout.imecontainer, null)
 
-        // 注意：id 也全部是无下划线版本（与 ime_container.xml、ImeUiBinder.kt 保持一致）[file:31][file:32]
-        bodyFrame = rootView.findViewById(R.id.keyboardbodyframe) // [file:31]
-        toolbarContainer = rootView.findViewById(R.id.toolbarcontainer) // [file:31]
-        candidateStrip = rootView.findViewById(R.id.candidatestrip) // [file:31]
-        expandedPanel = rootView.findViewById(R.id.expandedcandidatespanel) // [file:31]
-        btnExpand = rootView.findViewById(R.id.btnexpandcandidates) // [file:31]
-        tvComposingPreview = rootView.findViewById(R.id.tvcomposingpreview) // [file:31]
-        btnFilter = rootView.findViewById(R.id.expandpanelfilter) // [file:31]
+        bodyFrame = rootView.findViewById(R.id.keyboardbodyframe)
+        toolbarContainer = rootView.findViewById(R.id.toolbarcontainer)
+        candidateStrip = rootView.findViewById(R.id.candidatestrip)
+        expandedPanel = rootView.findViewById(R.id.expandedcandidatespanel)
+        btnExpand = rootView.findViewById(R.id.btnexpandcandidates)
+        tvComposingPreview = rootView.findViewById(R.id.tvcomposingpreview)
+        btnFilter = rootView.findViewById(R.id.expandpanelfilter)
 
-        recyclerHorizontal = rootView.findViewById(R.id.recyclercandidateshorizontal) // [file:31]
-        recyclerVertical = rootView.findViewById(R.id.recyclercandidatesvertical) // [file:31]
+        btnToolLayout = rootView.findViewById(R.id.btntoollayout)
+        btnToolTheme = rootView.findViewById(R.id.btntooltheme)
+
+        recyclerHorizontal = rootView.findViewById(R.id.recyclercandidateshorizontal)
+        recyclerVertical = rootView.findViewById(R.id.recyclercandidatesvertical)
 
         recyclerHorizontal.layoutManager =
             LinearLayoutManager(rootView.context, LinearLayoutManager.HORIZONTAL, false)
@@ -75,8 +79,9 @@ class ImeUi {
     }
 
     fun getExpandButton(): ImageButton = btnExpand
-
     fun getFilterButton(): Button = btnFilter
+    fun getThemeButton(): Button = btnToolTheme
+    fun getLayoutButton(): Button = btnToolLayout
 
     fun showIdleState() {
         toolbarContainer.visibility = View.VISIBLE
@@ -127,36 +132,21 @@ class ImeUi {
         val text = "全部/单字"
         val spannable = SpannableString(text)
 
+        val activeColor = ContextCompat.getColor(rootView.context, R.color.ime_accent)
+        val inactiveColor = ContextCompat.getColor(rootView.context, R.color.ime_hint_text)
+
         if (!singleCharMode) {
-            spannable.setSpan(RelativeSizeSpan(1.2f), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(
-                ForegroundColorSpan(Color.BLACK),
-                0,
-                2,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-            spannable.setSpan(RelativeSizeSpan(0.8f), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(
-                ForegroundColorSpan(Color.GRAY),
-                3,
-                5,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
+            spannable.setSpan(RelativeSizeSpan(1.15f), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(ForegroundColorSpan(activeColor), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+            spannable.setSpan(RelativeSizeSpan(0.85f), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(ForegroundColorSpan(inactiveColor), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         } else {
-            spannable.setSpan(RelativeSizeSpan(0.8f), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(
-                ForegroundColorSpan(Color.GRAY),
-                0,
-                2,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-            spannable.setSpan(RelativeSizeSpan(1.2f), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(
-                ForegroundColorSpan(Color.BLACK),
-                3,
-                5,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
+            spannable.setSpan(RelativeSizeSpan(0.85f), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(ForegroundColorSpan(inactiveColor), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+            spannable.setSpan(RelativeSizeSpan(1.15f), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(ForegroundColorSpan(activeColor), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
 
         btnFilter.text = spannable
@@ -170,19 +160,18 @@ class ImeUi {
     }
 
     fun applyTheme(themeMode: Int) {
-        val bgLight = Color.parseColor("#DDDDDD")
-        val bgDark = Color.parseColor("#222222")
-        val panelLight = Color.parseColor("#EEEEEE")
-        val panelDark = Color.parseColor("#333333")
-        val textLight = Color.BLACK
-        val textDark = Color.WHITE
+        val bg = ContextCompat.getColor(rootView.context, R.color.ime_panel_bg)
+        val surface = ContextCompat.getColor(rootView.context, R.color.ime_surface)
+        val toolbarBg = ContextCompat.getColor(rootView.context, R.color.ime_toolbar_bg)
+        val accent = ContextCompat.getColor(rootView.context, R.color.ime_accent)
 
-        rootView.setBackgroundColor(if (themeMode == 1) bgDark else bgLight)
-        expandedPanel.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
-        toolbarContainer.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
-        tvComposingPreview.setBackgroundColor(
-            if (themeMode == 1) panelDark else Color.parseColor("#F5F5F5")
-        )
-        tvComposingPreview.setTextColor(if (themeMode == 1) textDark else textLight)
+        // 这些颜色让 night 目录接管，不再硬编码
+        rootView.setBackgroundColor(bg)
+        expandedPanel.setBackgroundColor(surface)
+        candidateStrip.setBackgroundColor(toolbarBg)
+        toolbarContainer.setBackgroundColor(toolbarBg)
+
+        tvComposingPreview.setBackgroundColor(surface)
+        tvComposingPreview.setTextColor(accent)
     }
 }

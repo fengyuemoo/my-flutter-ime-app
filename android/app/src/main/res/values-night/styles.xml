@@ -1,11 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 
-       修复：这里不再引用 @drawable/launch_background
-       为了安全，我们直接定义一个空的 LaunchTheme 或者干脆删掉它。
-       这里保留 KeyButton 样式以支持暗黑模式下的键盘显示。
-    -->
 
+    <!-- 旧的 LaunchTheme/NormalTheme 可以保留也可以删；不再依赖它们做暗色 -->
     <style name="LaunchTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
     </style>
@@ -13,21 +9,35 @@
     <style name="NormalTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
-    
-    <!-- 键盘按钮样式 (暗黑模式) -->
+
+    <!-- 夜间 KeyButton：同样引用资源（colors-night 会自动替换） -->
     <style name="KeyButton">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">match_parent</item>
         <item name="android:layout_weight">1</item>
         <item name="android:layout_margin">2dp</item>
-        <!-- 暗黑模式下按钮稍微灰一点 -->
-        <item name="android:backgroundTint">#444444</item>
-        <item name="android:textColor">#FFFFFF</item>
+
+        <item name="android:background">@drawable/ripple_ime_key</item>
+        <item name="android:textColor">@color/ime_key_text</item>
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:textStyle">normal</item>
-        <item name="android:textSize">18sp</item>
+        <item name="android:textSize">@dimen/ime_key_text_size</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:padding">0dp</item>
         <item name="android:includeFontPadding">false</item>
     </style>
+
+    <style name="KeyButton.Func" parent="KeyButton">
+        <item name="android:background">@drawable/ripple_ime_key_func</item>
+        <item name="android:textColor">@color/ime_key_text_secondary</item>
+    </style>
+
+    <style name="KeyButton.SmallText" parent="KeyButton">
+        <item name="android:textSize">@dimen/ime_key_text_size_small</item>
+    </style>
+
+    <style name="KeyButton.FuncSmallText" parent="KeyButton.Func">
+        <item name="android:textSize">@dimen/ime_key_text_size_small</item>
+    </style>
+
 </resources>

@@ -8,7 +8,7 @@
     <LinearLayout
         android:id="@+id/t9normalpad"
         android:layout_width="match_parent"
-        android:layout_height="200dp"
+        android:layout_height="@dimen/ime_t9_main_height"
         android:orientation="horizontal"
         android:paddingTop="2dp"
         android:baselineAligned="false">
@@ -17,15 +17,14 @@
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="0.9"
+            android:layout_weight="0.7"
             android:orientation="vertical">
 
-            <!-- Keep this RecyclerView id for compatibility; EN hides it anyway. -->
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/recyclert9pinyinsidebar"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:visibility="gone"/>
+                android:visibility="gone" />
 
             <LinearLayout
                 android:id="@+id/t9puncsidebar"
@@ -37,37 +36,33 @@
                     android:id="@+id/t9punccomma"
                     android:text=","
                     style="@style/KeyButton"
-                    android:textSize="20sp"
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
-                    android:layout_weight="1"/>
+                    android:layout_weight="1" />
 
                 <Button
                     android:id="@+id/t9puncperiod"
                     android:text="."
                     style="@style/KeyButton"
-                    android:textSize="20sp"
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
-                    android:layout_weight="1"/>
+                    android:layout_weight="1" />
 
                 <Button
                     android:id="@+id/t9puncquestion"
                     android:text="?"
                     style="@style/KeyButton"
-                    android:textSize="20sp"
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
-                    android:layout_weight="1"/>
+                    android:layout_weight="1" />
 
                 <Button
                     android:id="@+id/t9puncexclaim"
                     android:text="!"
                     style="@style/KeyButton"
-                    android:textSize="20sp"
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
-                    android:layout_weight="1"/>
+                    android:layout_weight="1" />
             </LinearLayout>
         </LinearLayout>
 
@@ -75,7 +70,7 @@
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="2.4"
+            android:layout_weight="3.6"
             android:orientation="vertical">
 
             <LinearLayout
@@ -149,37 +144,32 @@
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="0.9"
+            android:layout_weight="0.7"
             android:orientation="vertical">
 
             <Button
                 android:id="@+id/t9btndel"
                 android:text="⌫"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0"
+                style="@style/KeyButton.Func"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
-                android:layout_weight="1"/>
+                android:layout_weight="1" />
 
             <Button
                 android:id="@+id/t9btnreenter"
                 android:text="Clear"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0"
-                android:textSize="16sp"
+                style="@style/KeyButton.FuncSmallText"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
-                android:layout_weight="1"/>
+                android:layout_weight="1" />
 
             <Button
                 android:id="@+id/t9key0"
                 android:text="0"
-                style="@style/KeyButton"
-                android:backgroundTint="#E0E0E0"
-                android:textSize="20sp"
+                style="@style/KeyButton.Func"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
-                android:layout_weight="1"/>
+                android:layout_weight="1" />
         </LinearLayout>
     </LinearLayout>
 
@@ -187,45 +177,44 @@
     <LinearLayout
         android:id="@+id/t9bottomrow"
         android:layout_width="match_parent"
-        android:layout_height="50dp"
+        android:layout_height="@dimen/ime_row_height"
         android:orientation="horizontal"
         android:visibility="visible">
 
         <Button
             android:id="@+id/t9btnsym"
             android:text="Sym"
-            style="@style/KeyButton"
-            android:layout_weight="1"/>
+            style="@style/KeyButton.Func"
+            android:layout_weight="1" />
 
         <Button
             android:id="@+id/t9btn123"
             android:text="123"
-            style="@style/KeyButton"
-            android:layout_weight="1"/>
+            style="@style/KeyButton.Func"
+            android:layout_weight="1" />
 
         <Button
             android:id="@+id/t9btnengpredict"
             android:text="🄰"
-            style="@style/KeyButton"
+            style="@style/KeyButton.Func"
             android:layout_weight="1"
-            android:visibility="visible"/>
+            android:visibility="visible" />
 
         <Button
             android:id="@+id/t9space"
             android:text="␣"
-            style="@style/KeyButton"
-            android:layout_weight="2"
-            android:backgroundTint="#FFFFFF"/>
+            style="@style/KeyButton.SmallText"
+            android:layout_weight="2" />
 
         <Button
             android:id="@+id/t9btnlang"
             android:text="En"
-            style="@style/KeyButton"
-            android:layout_weight="1"/>
+            style="@style/KeyButton.Func"
+            android:layout_weight="1" />
 
         <Button
             android:text="⏎"
-            style="@style/KeyButton"
-            android:layout_weight="1"/>
+            style="@style/KeyButton.Func"
+            android:layout_weight="1" />
     </LinearLayout>
 </LinearLayout>
