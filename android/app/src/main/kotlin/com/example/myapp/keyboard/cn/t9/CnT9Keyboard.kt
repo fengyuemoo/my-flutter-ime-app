@@ -16,7 +16,7 @@ import com.example.myapp.keyboard.core.T9Mode
 class CnT9Keyboard(
     context: Context,
     ime: ImeActions
-) : BaseKeyboard(context, ime, R.layout.kbdt9), PinyinSidebarHost, T9Mode {
+) : BaseKeyboard(context, ime, R.layout.kbd_t9_cn), PinyinSidebarHost, T9Mode {
 
     private val recyclerSidebar: RecyclerView =
         rootView.findViewById(R.id.recyclert9pinyinsidebar)

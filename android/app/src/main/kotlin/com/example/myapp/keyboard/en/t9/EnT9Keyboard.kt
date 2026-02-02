@@ -13,7 +13,7 @@ import com.example.myapp.keyboard.core.T9Mode
 class EnT9Keyboard(
     context: Context,
     ime: ImeActions
-) : BaseKeyboard(context, ime, R.layout.kbdt9), T9Mode, EnglishPredictUi {
+) : BaseKeyboard(context, ime, R.layout.kbd_t9_en), T9Mode, EnglishPredictUi {
 
     // UI-only cache (NOT a source of truth).
     // The source of truth lives in EnT9ComposeStrategy. [file:32]
@@ -88,14 +88,6 @@ class EnT9Keyboard(
                 }
             }
         }
-
-        // Optional: If you want immediate visual feedback without waiting for push,
-        // you could re-render from IME here, but we intentionally avoid that to keep
-        // the boundary strict (keyboard view never reads predict state).
-        //
-        // if (id == R.id.t9btnengpredict) {
-        //     setEnglishPredictEnabled(ime.getEnglishPredictEnabled())
-        // }
     }
 
     private fun updateLangButton() {

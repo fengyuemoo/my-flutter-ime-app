@@ -78,7 +78,8 @@ class ImeGraph(
             // 5) Keyboard registry + controller（用位置参数，避免命名参数不匹配问题）
             val keyboardRegistry = DefaultKeyboardRegistry(
                 context,
-                dispatcher as ImeActions
+                dispatcher as ImeActions,
+                modeProvider = { modeHolder.mode }
             )
 
             val keyboardController = KeyboardController(

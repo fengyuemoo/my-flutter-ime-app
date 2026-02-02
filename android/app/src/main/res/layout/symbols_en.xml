@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/symbolscrollroot"
+    android:layout_width="match_parent"
+    android:layout_height="250dp"
+    android:background="#DDDDDD"
+    android:padding="5dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Punctuation -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="," style="@style/KeyButton"/>
+            <Button android:text="." style="@style/KeyButton"/>
+            <Button android:text="?" style="@style/KeyButton"/>
+            <Button android:text="!" style="@style/KeyButton"/>
+            <Button android:text="..." style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- Quotes / separators -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text=":" style="@style/KeyButton"/>
+            <Button android:text=";" style="@style/KeyButton"/>
+            <Button android:text="&quot;" style="@style/KeyButton"/>
+            <Button android:text="'" style="@style/KeyButton"/>
+            <Button android:text="/" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- Brackets -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="(" style="@style/KeyButton"/>
+            <Button android:text=")" style="@style/KeyButton"/>
+            <Button android:text="[" style="@style/KeyButton"/>
+            <Button android:text="]" style="@style/KeyButton"/>
+            <Button android:text="{" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- Brackets / compare -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="}" style="@style/KeyButton"/>
+            <Button android:text="&lt;" style="@style/KeyButton"/>
+            <Button android:text="&gt;" style="@style/KeyButton"/>
+            <Button android:text="|" style="@style/KeyButton"/>
+            <Button android:text="\" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- Math / common symbols -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="+" style="@style/KeyButton"/>
+            <Button android:text="-" style="@style/KeyButton"/>
+            <Button android:text="*" style="@style/KeyButton"/>
+            <Button android:text="=" style="@style/KeyButton"/>
+            <Button android:text="_" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- Web / email -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="@" style="@style/KeyButton"/>
+            <Button android:text="#" style="@style/KeyButton"/>
+            <Button android:text="$" style="@style/KeyButton"/>
+            <Button android:text="%" style="@style/KeyButton"/>
+            <Button android:text="&amp;" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <!-- Extras -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:orientation="horizontal">
+            <Button android:text="~" style="@style/KeyButton"/>
+            <Button android:text="^" style="@style/KeyButton"/>
+            <Button android:text=":" style="@style/KeyButton"/>
+            <Button android:text=";" style="@style/KeyButton"/>
+            <Button android:text="`" style="@style/KeyButton"/>
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnsymback"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Back"
+            android:backgroundTint="#AAAAAA"
+            android:textColor="#FFFFFF"
+            android:layout_marginTop="10dp"/>
+    </LinearLayout>
+</ScrollView>

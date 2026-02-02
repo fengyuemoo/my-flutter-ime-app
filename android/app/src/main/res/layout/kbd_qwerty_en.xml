@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/layoutqwerty"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <!-- Row 1 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:orientation="horizontal">
+
+        <Button android:text="q" style="@style/KeyButton"/>
+        <Button android:text="w" style="@style/KeyButton"/>
+        <Button android:text="e" style="@style/KeyButton"/>
+        <Button android:text="r" style="@style/KeyButton"/>
+        <Button android:text="t" style="@style/KeyButton"/>
+        <Button android:text="y" style="@style/KeyButton"/>
+        <Button android:text="u" style="@style/KeyButton"/>
+        <Button android:text="i" style="@style/KeyButton"/>
+        <Button android:text="o" style="@style/KeyButton"/>
+        <Button android:text="p" style="@style/KeyButton"/>
+    </LinearLayout>
+
+    <!-- Row 2 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:paddingStart="15dp"
+        android:paddingEnd="15dp"
+        android:orientation="horizontal">
+
+        <Button android:text="a" style="@style/KeyButton"/>
+        <Button android:text="s" style="@style/KeyButton"/>
+        <Button android:text="d" style="@style/KeyButton"/>
+        <Button android:text="f" style="@style/KeyButton"/>
+        <Button android:text="g" style="@style/KeyButton"/>
+        <Button android:text="h" style="@style/KeyButton"/>
+        <Button android:text="j" style="@style/KeyButton"/>
+        <Button android:text="k" style="@style/KeyButton"/>
+        <Button android:text="l" style="@style/KeyButton"/>
+    </LinearLayout>
+
+    <!-- Row 3 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnshift"
+            android:text="⇧"
+            style="@style/KeyButton"
+            android:layout_weight="1.5"/>
+
+        <Button android:text="z" style="@style/KeyButton"/>
+        <Button android:text="x" style="@style/KeyButton"/>
+        <Button android:text="c" style="@style/KeyButton"/>
+        <Button android:text="v" style="@style/KeyButton"/>
+        <Button android:text="b" style="@style/KeyButton"/>
+        <Button android:text="n" style="@style/KeyButton"/>
+        <Button android:text="m" style="@style/KeyButton"/>
+
+        <Button
+            android:id="@+id/btndelqwerty"
+            android:text="⌫"
+            style="@style/KeyButton"
+            android:layout_weight="1.5"/>
+    </LinearLayout>
+
+    <!-- Row 4 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnmodesym"
+            android:text="?#"
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+
+        <Button
+            android:id="@+id/btnmodenum"
+            android:text="123"
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+
+        <!-- English predict toggle (visible by default in EN) -->
+        <Button
+            android:id="@+id/btnengpredict"
+            android:text="🄰"
+            style="@style/KeyButton"
+            android:layout_weight="1"
+            android:visibility="visible"/>
+
+        <Button
+            android:id="@+id/btncomma"
+            android:text=","
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+
+        <Button
+            android:text="SPACE"
+            style="@style/KeyButton"
+            android:layout_weight="2.5"/>
+
+        <Button
+            android:id="@+id/btndot"
+            android:text="."
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+
+        <!-- Language button defaults to En (keyboard code will also enforce En) -->
+        <Button
+            android:id="@+id/btnlang"
+            android:text="En"
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+
+        <Button
+            android:text="⏎"
+            style="@style/KeyButton"
+            android:layout_weight="1.5"/>
+    </LinearLayout>
+
+</LinearLayout>

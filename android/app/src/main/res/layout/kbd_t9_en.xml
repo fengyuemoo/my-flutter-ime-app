@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/layoutt9"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:id="@+id/t9normalpad"
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:orientation="horizontal"
+        android:paddingTop="2dp"
+        android:baselineAligned="false">
+
+        <!-- Left sidebar: punctuation (EN) -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.9"
+            android:orientation="vertical">
+
+            <!-- Keep this RecyclerView id for compatibility; EN hides it anyway. -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recyclert9pinyinsidebar"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone"/>
+
+            <LinearLayout
+                android:id="@+id/t9puncsidebar"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical">
+
+                <Button
+                    android:id="@+id/t9punccomma"
+                    android:text=","
+                    style="@style/KeyButton"
+                    android:textSize="20sp"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"/>
+
+                <Button
+                    android:id="@+id/t9puncperiod"
+                    android:text="."
+                    style="@style/KeyButton"
+                    android:textSize="20sp"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"/>
+
+                <Button
+                    android:id="@+id/t9puncquestion"
+                    android:text="?"
+                    style="@style/KeyButton"
+                    android:textSize="20sp"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"/>
+
+                <Button
+                    android:id="@+id/t9puncexclaim"
+                    android:text="!"
+                    style="@style/KeyButton"
+                    android:textSize="20sp"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Center: T9 keypad -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="2.4"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/t9key1"
+                    android:text="1"
+                    style="@style/KeyButton" />
+
+                <Button
+                    android:id="@+id/t9key2"
+                    android:text="ABC&#10;2"
+                    style="@style/KeyButton" />
+
+                <Button
+                    android:id="@+id/t9key3"
+                    android:text="DEF&#10;3"
+                    style="@style/KeyButton" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/t9key4"
+                    android:text="GHI&#10;4"
+                    style="@style/KeyButton" />
+
+                <Button
+                    android:id="@+id/t9key5"
+                    android:text="JKL&#10;5"
+                    style="@style/KeyButton" />
+
+                <Button
+                    android:id="@+id/t9key6"
+                    android:text="MNO&#10;6"
+                    style="@style/KeyButton" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/t9key7"
+                    android:text="PQRS&#10;7"
+                    style="@style/KeyButton" />
+
+                <Button
+                    android:id="@+id/t9key8"
+                    android:text="TUV&#10;8"
+                    style="@style/KeyButton" />
+
+                <Button
+                    android:id="@+id/t9key9"
+                    android:text="WXYZ&#10;9"
+                    style="@style/KeyButton" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Right sidebar: function keys -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.9"
+            android:orientation="vertical">
+
+            <Button
+                android:id="@+id/t9btndel"
+                android:text="⌫"
+                style="@style/KeyButton"
+                android:backgroundTint="#E0E0E0"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"/>
+
+            <Button
+                android:id="@+id/t9btnreenter"
+                android:text="Clear"
+                style="@style/KeyButton"
+                android:backgroundTint="#E0E0E0"
+                android:textSize="16sp"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"/>
+
+            <Button
+                android:id="@+id/t9key0"
+                android:text="0"
+                style="@style/KeyButton"
+                android:backgroundTint="#E0E0E0"
+                android:textSize="20sp"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Bottom row -->
+    <LinearLayout
+        android:id="@+id/t9bottomrow"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:orientation="horizontal"
+        android:visibility="visible">
+
+        <Button
+            android:id="@+id/t9btnsym"
+            android:text="Sym"
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+
+        <Button
+            android:id="@+id/t9btn123"
+            android:text="123"
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+
+        <Button
+            android:id="@+id/t9btnengpredict"
+            android:text="🄰"
+            style="@style/KeyButton"
+            android:layout_weight="1"
+            android:visibility="visible"/>
+
+        <Button
+            android:id="@+id/t9space"
+            android:text="␣"
+            style="@style/KeyButton"
+            android:layout_weight="2"
+            android:backgroundTint="#FFFFFF"/>
+
+        <Button
+            android:id="@+id/t9btnlang"
+            android:text="En"
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+
+        <Button
+            android:text="⏎"
+            style="@style/KeyButton"
+            android:layout_weight="1"/>
+    </LinearLayout>
+</LinearLayout>

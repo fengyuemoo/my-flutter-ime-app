@@ -6,14 +6,20 @@ import android.view.View
 import android.widget.Button
 import com.example.myapp.R
 import com.example.myapp.ime.api.ImeActions
+import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.keyboard.core.BaseKeyboard
 import com.example.myapp.keyboard.core.PanelMode
 import com.example.myapp.keyboard.core.RawCommitMode
 
 class SymbolKeyboard(
     context: Context,
-    ime: ImeActions
-) : BaseKeyboard(context, ime, R.layout.kbdsymbols), PanelMode, RawCommitMode {
+    ime: ImeActions,
+    modeProvider: () -> KeyboardMode
+) : BaseKeyboard(
+    context,
+    ime,
+    if (modeProvider().isChinese) R.layout.symbols_cn else R.layout.symbols_en
+), PanelMode, RawCommitMode {
 
     override fun handleKeyPress(button: Button) {
         val id = button.id

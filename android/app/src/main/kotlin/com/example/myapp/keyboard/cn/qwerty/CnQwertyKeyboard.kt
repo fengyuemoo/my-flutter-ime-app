@@ -16,7 +16,7 @@ import com.example.myapp.keyboard.core.EnterCommitPolicy
 class CnQwertyKeyboard(
     context: Context,
     ime: ImeActions
-) : BaseKeyboard(context, ime, R.layout.kbdqwerty), EnterCommitPolicy {
+) : BaseKeyboard(context, ime, R.layout.kbd_qwerty_cn), EnterCommitPolicy {
 
     private val charLayout = "qwertyuiopasdfghjklzxcvbnm"
     private val numberLayout = "1234567890@#$%&-+()*\\\"':;!?"

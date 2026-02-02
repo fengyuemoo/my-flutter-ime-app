@@ -20,7 +20,7 @@ import com.example.myapp.keyboard.core.BaseKeyboard
 class EnQwertyKeyboard(
     context: Context,
     actions: ImeActions
-) : BaseKeyboard(context, actions, R.layout.kbdqwerty), EnglishPredictUi {
+) : BaseKeyboard(context, actions, R.layout.kbd_qwerty_en), EnglishPredictUi {
 
     private var isCaps = false
 
@@ -30,7 +30,7 @@ class EnQwertyKeyboard(
      * 数字/常用符号布局。
      * 使用原始字符串避免转义问题；并显式包含双引号 "。
      */
-    private val numberLayout = """1234567890@#$%&-+()*\\':;!?"\""""
+    private val numberLayout = """1234567890@#$%&-+()*\\':;!?""\""""
 
     /**
      * 另一套符号布局（你可以按喜好增删字符）。
