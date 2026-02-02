@@ -77,7 +77,7 @@
 
         <Button
             android:id="@+id/btnmodesym"
-            android:text="?#"
+            android:text="?/#"
             style="@style/KeyButton"
             android:layout_weight="1"/>
 
