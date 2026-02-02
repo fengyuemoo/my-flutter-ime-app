@@ -2,7 +2,6 @@ package com.example.myapp.keyboard
 
 import android.content.Context
 import com.example.myapp.ime.api.ImeActions
-import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.keyboard.cn.qwerty.CnQwertyKeyboard
 import com.example.myapp.keyboard.cn.t9.CnT9Keyboard
 import com.example.myapp.keyboard.core.IKeyboardMode
@@ -15,8 +14,7 @@ import com.example.myapp.keyboard.panel.SymbolKeyboard
 
 class DefaultKeyboardRegistry(
     context: Context,
-    ime: ImeActions,
-    modeProvider: () -> KeyboardMode
+    ime: ImeActions
 ) : KeyboardRegistry {
 
     private val map: Map<KeyboardType, IKeyboardMode> = mapOf(
@@ -25,7 +23,7 @@ class DefaultKeyboardRegistry(
         KeyboardType.CNT9 to CnT9Keyboard(context, ime),
         KeyboardType.ENT9 to EnT9Keyboard(context, ime),
         KeyboardType.NUMERIC to NumericKeyboard(context, ime),
-        KeyboardType.SYMBOL to SymbolKeyboard(context, ime, modeProvider)
+        KeyboardType.SYMBOL to SymbolKeyboard(context, ime)
     )
 
     override fun get(type: KeyboardType): IKeyboardMode =

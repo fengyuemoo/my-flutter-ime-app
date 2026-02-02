@@ -11,11 +11,11 @@ import com.example.myapp.ime.candidate.CandidateController
 import com.example.myapp.ime.compose.common.CandidateComposer
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.dict.DictionaryManager
-import com.example.myapp.ime.router.ImeActionDispatcher
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.keyboard.KeyboardHost
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.prefs.LayoutController
+import com.example.myapp.ime.router.ImeActionDispatcher
 import com.example.myapp.ime.theme.ThemeController
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.ime.ui.ImeUiBinder
@@ -75,11 +75,10 @@ class ImeGraph(
             // 4) Candidate composer（你当前项目是 dictManager.dictionary）
             val candidateComposer = CandidateComposer(dictManager.dictionary)
 
-            // 5) Keyboard registry + controller（用位置参数，避免命名参数不匹配问题）
+            // 5) Keyboard registry + controller（改回两参构造）
             val keyboardRegistry = DefaultKeyboardRegistry(
                 context,
-                dispatcher as ImeActions,
-                modeProvider = { modeHolder.mode }
+                dispatcher as ImeActions
             )
 
             val keyboardController = KeyboardController(
