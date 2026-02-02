@@ -1,6 +1,7 @@
 package com.example.myapp.ime.keyboard
 
 import android.widget.FrameLayout
+import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.keyboard.model.PanelState
 import com.example.myapp.ime.keyboard.ui.EnglishPredictUi
@@ -10,6 +11,19 @@ import com.example.myapp.keyboard.core.KeyboardRegistry
 import com.example.myapp.keyboard.core.KeyboardType
 import com.example.myapp.keyboard.core.PanelType
 import com.example.myapp.keyboard.core.RawCommitMode
+
+/**
+ * UI contract for the symbol panel keyboard.
+ * KeyboardController does NOT own symbol panel state; dispatcher does.
+ */
+interface SymbolPanelUi {
+    fun renderSymbolPanel(
+        category: ImeActions.SymbolCategory,
+        page: Int,
+        locked: Boolean,
+        isChineseMainMode: Boolean
+    )
+}
 
 class KeyboardController(
     bodyFrame: FrameLayout,
@@ -56,9 +70,7 @@ class KeyboardController(
     private val kbCnT9: IKeyboardMode = registry.get(KeyboardType.CNT9)
     private val kbEnT9: IKeyboardMode = registry.get(KeyboardType.ENT9)
 
-    /**
-     * UI-only: push English predict state to current keyboard UI if it supports EnglishPredictUi.
-     */
+    /** UI-only: push English predict state to current keyboard UI if it supports EnglishPredictUi. */
     fun updateEnglishPredictUi(enabled: Boolean) {
         val keyboard = currentKeyboard
         if (keyboard is EnglishPredictUi) {
@@ -66,23 +78,33 @@ class KeyboardController(
         }
     }
 
-    /**
-     * UI-only: pull predict state from provider (current strategy) and push to keyboard UI.
-     * If provider isn't injected, default to false.
-     */
+    /** UI-only: pull predict state from provider (current strategy) and push to keyboard UI. */
     fun refreshEnglishPredictUi() {
         val enabled = englishPredictEnabledProvider?.invoke() ?: false
         updateEnglishPredictUi(enabled)
     }
 
-    /**
-     * Router/dispatcher should use this: panel does not participate in compose strategy selection.
-     */
+    /** UI-only: push symbol panel state to current keyboard UI if it supports SymbolPanelUi. */
+    fun updateSymbolPanelUi(
+        category: ImeActions.SymbolCategory,
+        page: Int,
+        locked: Boolean
+    ) {
+        val keyboard = currentKeyboard
+        if (keyboard is SymbolPanelUi) {
+            keyboard.renderSymbolPanel(
+                category = category,
+                page = page,
+                locked = locked,
+                isChineseMainMode = _mode.isChinese
+            )
+        }
+    }
+
+    /** Router/dispatcher should use this: panel does not participate in compose strategy selection. */
     fun getMainMode(): KeyboardMode = _mode
 
-    /**
-     * Panel state (None / Open(type)).
-     */
+    /** Panel state (None / Open(type)). */
     fun getPanelState(): PanelState = _panelState
 
     fun isPanelOpen(): Boolean = getPanelState() is PanelState.Open

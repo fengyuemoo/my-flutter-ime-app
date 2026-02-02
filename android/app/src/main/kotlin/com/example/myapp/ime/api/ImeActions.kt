@@ -31,20 +31,26 @@ interface ImeActions {
     fun closeSymbolPanel()
     fun exitNumericMode()
 
+    /** Symbol panel (multi-page) */
+    enum class SymbolCategory { COMMON, CN, EN }
+
+    fun setSymbolCategory(category: SymbolCategory)
+    fun symbolPageUp()
+    fun symbolPageDown()
+    fun toggleSymbolLock()
+
     /**
-     * Returns the current English prediction state for the active English main mode.
-     * For non-English modes, implementations should normally return false.
+     * Commit a symbol from the symbol panel.
+     * Dispatcher will decide whether to close the panel based on lock state.
      */
+    fun commitSymbolFromPanel(symbol: String)
+
+    /** Returns the current English prediction state for the active English main mode. */
     fun getEnglishPredictEnabled(): Boolean
 
-    /**
-     * Sets the prediction state for the active English main mode (EnQwerty or EnT9).
-     */
+    /** Sets the prediction state for the active English main mode (EnQwerty or EnT9). */
     fun setEnglishPredict(enabled: Boolean)
 
-    /**
-     * Convenience action for the English predict button.
-     * Implementations should toggle the per-mode state (EnQwerty or EnT9), not a shared global.
-     */
+    /** Convenience action for the English predict button. */
     fun toggleEnglishPredict()
 }

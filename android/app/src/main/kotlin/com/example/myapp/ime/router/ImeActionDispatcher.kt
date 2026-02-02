@@ -16,6 +16,7 @@ import com.example.myapp.ime.compose.en.qwerty.EnQwertyComposeStrategy
 import com.example.myapp.ime.compose.en.t9.EnT9ComposeStrategy
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.keyboard.model.KeyboardMode
+import com.example.myapp.ime.keyboard.model.PanelState
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.keyboard.core.PanelType
 
@@ -27,6 +28,12 @@ class ImeActionDispatcher(
     private lateinit var ui: ImeUi
     private lateinit var keyboardController: KeyboardController
     private lateinit var candidateController: CandidateController
+
+    // ---------------- Symbol panel state (source of truth) ----------------
+
+    private var symbolCategory: ImeActions.SymbolCategory = ImeActions.SymbolCategory.COMMON
+    private var symbolPage: Int = 0
+    private var symbolLocked: Boolean = false
 
     // ---------------- Session access ----------------
 
@@ -92,8 +99,13 @@ class ImeActionDispatcher(
         @Suppress("UNUSED_PARAMETER")
         val ignored = onToolbarUpdate
 
-        keyboardController.onKeyboardChanged = { syncEnglishPredictUi() }
+        keyboardController.onKeyboardChanged = {
+            syncEnglishPredictUi()
+            syncSymbolPanelUi()
+        }
+
         syncEnglishPredictUi()
+        syncSymbolPanelUi()
     }
 
     private fun syncEnglishPredictUi() {
@@ -101,8 +113,19 @@ class ImeActionDispatcher(
         keyboardController.updateEnglishPredictUi(getEnglishPredictEnabled())
     }
 
+    private fun syncSymbolPanelUi() {
+        if (!::keyboardController.isInitialized) return
+        val panel = keyboardController.getPanelState()
+        if (panel is PanelState.Open && panel.type == PanelType.SYMBOL) {
+            keyboardController.updateSymbolPanelUi(
+                category = symbolCategory,
+                page = symbolPage,
+                locked = symbolLocked
+            )
+        }
+    }
+
     // NOTE: These are intentionally public because other wiring code calls them.
-    // (ImeGraph / ImeBootstrapper). [file:16]
     fun refreshComposingView() {
         if (!::ui.isInitialized) return
 
@@ -119,7 +142,6 @@ class ImeActionDispatcher(
         ic?.setComposingText(displayText, 1)
     }
 
-    // NOTE: This is intentionally public because other wiring code calls it. [file:16]
     fun refreshCandidates() {
         if (!::candidateController.isInitialized) return
         candidateController.updateCandidates()
@@ -251,8 +273,16 @@ class ImeActionDispatcher(
     override fun openSymbolPanel() {
         beforeModeSwitch()
         if (!::keyboardController.isInitialized) return
+
+        // Default as requested: Common + page 0.
+        symbolCategory = ImeActions.SymbolCategory.COMMON
+        symbolPage = 0
+        // Keep lock state as-is (user may want it persistent per session).
+        // If you want: symbolLocked = false
+
         keyboardController.openPanel(PanelType.SYMBOL)
         syncEnglishPredictUi()
+        syncSymbolPanelUi()
     }
 
     override fun closeSymbolPanel() {
@@ -264,6 +294,52 @@ class ImeActionDispatcher(
 
     override fun exitNumericMode() {
         closeSymbolPanel()
+    }
+
+    // ---------------- Symbol panel actions ----------------
+
+    override fun setSymbolCategory(category: ImeActions.SymbolCategory) {
+        symbolCategory = category
+        symbolPage = 0
+        syncSymbolPanelUi()
+    }
+
+    override fun symbolPageUp() {
+        symbolPage = maxOf(0, symbolPage - 1)
+        syncSymbolPanelUi()
+    }
+
+    override fun symbolPageDown() {
+        // Upper bound is enforced by UI (empty symbols show as blanks).
+        symbolPage += 1
+        syncSymbolPanelUi()
+    }
+
+    override fun toggleSymbolLock() {
+        symbolLocked = !symbolLocked
+        syncSymbolPanelUi()
+    }
+
+    override fun commitSymbolFromPanel(symbol: String) {
+        // Commit symbol directly.
+        inputConnection()?.commitText(symbol, 1)
+
+        // Keep composing clean when using raw panels.
+        session().clear()
+        if (::ui.isInitialized) ui.setComposingPreview(null)
+        inputConnection()?.setComposingText("", 0)
+
+        refreshCandidates()
+        syncEnglishPredictUi()
+
+        // Behavior per your spec:
+        // - unlocked: auto close and return to main keyboard
+        // - locked: stay on panel, keep page
+        if (!symbolLocked) {
+            closeSymbolPanel()
+        } else {
+            syncSymbolPanelUi()
+        }
     }
 
     // ---------------- English predict (per English main mode) ----------------
