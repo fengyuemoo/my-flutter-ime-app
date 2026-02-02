@@ -1,5 +1,6 @@
 package com.example.myapp.ime.router
 
+import android.content.Context
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
 import com.example.myapp.ime.api.ImeActions
@@ -17,10 +18,12 @@ import com.example.myapp.ime.compose.en.t9.EnT9ComposeStrategy
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.keyboard.model.PanelState
+import com.example.myapp.ime.prefs.SymbolPrefs
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.keyboard.core.PanelType
 
 class ImeActionDispatcher(
+    private val context: Context,
     private val sessions: ComposingSessionHub,
     private val inputConnectionProvider: () -> InputConnection?
 ) : ImeActions {
@@ -125,7 +128,6 @@ class ImeActionDispatcher(
         }
     }
 
-    // NOTE: These are intentionally public because other wiring code calls them.
     fun refreshComposingView() {
         if (!::ui.isInitialized) return
 
@@ -274,11 +276,9 @@ class ImeActionDispatcher(
         beforeModeSwitch()
         if (!::keyboardController.isInitialized) return
 
-        // Default as requested: Common + page 0.
+        // Default: Common + page 0.
         symbolCategory = ImeActions.SymbolCategory.COMMON
         symbolPage = 0
-        // Keep lock state as-is (user may want it persistent per session).
-        // If you want: symbolLocked = false
 
         keyboardController.openPanel(PanelType.SYMBOL)
         syncEnglishPredictUi()
@@ -310,7 +310,6 @@ class ImeActionDispatcher(
     }
 
     override fun symbolPageDown() {
-        // Upper bound is enforced by UI (empty symbols show as blanks).
         symbolPage += 1
         syncSymbolPanelUi()
     }
@@ -321,10 +320,12 @@ class ImeActionDispatcher(
     }
 
     override fun commitSymbolFromPanel(symbol: String) {
-        // Commit symbol directly.
+        // Learn: record MRU for Common.
+        SymbolPrefs.recordMruCommon(context, symbol)
+
+        // Commit
         inputConnection()?.commitText(symbol, 1)
 
-        // Keep composing clean when using raw panels.
         session().clear()
         if (::ui.isInitialized) ui.setComposingPreview(null)
         inputConnection()?.setComposingText("", 0)
@@ -332,9 +333,6 @@ class ImeActionDispatcher(
         refreshCandidates()
         syncEnglishPredictUi()
 
-        // Behavior per your spec:
-        // - unlocked: auto close and return to main keyboard
-        // - locked: stay on panel, keep page
         if (!symbolLocked) {
             closeSymbolPanel()
         } else {

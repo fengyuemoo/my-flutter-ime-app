@@ -12,6 +12,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.myapp.R
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.keyboard.SymbolPanelUi
+import com.example.myapp.ime.prefs.SymbolPrefs
 import com.example.myapp.keyboard.core.BaseKeyboard
 import com.example.myapp.keyboard.core.PanelMode
 import com.example.myapp.keyboard.core.RawCommitMode
@@ -23,39 +24,53 @@ class SymbolKeyboard(
 
     private val recycler: RecyclerView = rootView.findViewById(R.id.symbolRecycler)
 
+    // Bottom tabs
     private val tabCommon: Button = rootView.findViewById(R.id.tabCommon)
     private val tabCn: Button = rootView.findViewById(R.id.tabCn)
     private val tabEn: Button = rootView.findViewById(R.id.tabEn)
 
-    private val adapter = SymbolGridAdapter(
-        onSymbolClick = { symbol -> ime.commitSymbolFromPanel(symbol) },
-        onActionClick = { action ->
-            when (action) {
-                SymbolAction.Back -> ime.closeSymbolPanel()
-                SymbolAction.PageUp -> ime.symbolPageUp()
-                SymbolAction.PageDown -> ime.symbolPageDown()
-                SymbolAction.ToggleLock -> ime.toggleSymbolLock()
-            }
-        }
+    // Right fixed action column (from panel_symbols.xml)
+    private val btnBack: Button = rootView.findViewById(R.id.btnSymBack)
+    private val btnUp: Button = rootView.findViewById(R.id.btnSymUp)
+    private val btnDown: Button = rootView.findViewById(R.id.btnSymDown)
+    private val btnLock: Button = rootView.findViewById(R.id.btnSymLock)
+
+    private val adapter = SymbolListAdapter(
+        onSymbolClick = { symbol -> ime.commitSymbolFromPanel(symbol) }
     )
 
     init {
-        recycler.layoutManager = GridLayoutManager(context, 5)
+        // Left side: real scrollable grid, 4 columns
+        recycler.layoutManager = GridLayoutManager(context, 4)
         recycler.adapter = adapter
 
+        // Tabs
         tabCommon.setOnClickListener { ime.setSymbolCategory(ImeActions.SymbolCategory.COMMON) }
         tabCn.setOnClickListener { ime.setSymbolCategory(ImeActions.SymbolCategory.CN) }
         tabEn.setOnClickListener { ime.setSymbolCategory(ImeActions.SymbolCategory.EN) }
+
+        // Right column actions
+        btnBack.setOnClickListener { ime.closeSymbolPanel() }
+
+        // In real-scroll mode, Up/Down mean "scroll", not "page".
+        btnUp.setOnClickListener {
+            // Scroll to top is the most predictable.
+            recycler.smoothScrollToPosition(0)
+        }
+        btnDown.setOnClickListener {
+            // Scroll down by one viewport height.
+            recycler.smoothScrollBy(0, recycler.height)
+        }
+
+        btnLock.setOnClickListener { ime.toggleSymbolLock() }
     }
 
     override fun onActivate() {
-        // Do not render here by reading IME state.
-        // Dispatcher will push state via KeyboardController.updateSymbolPanelUi(...).
+        // Dispatcher will push state via KeyboardController.updateSymbolPanelUi(...)
     }
 
-    // We don't use BaseKeyboard's default button traversal here; RecyclerView handles clicks.
     override fun handleKeyPress(button: Button) {
-        // No-op
+        // No-op: RecyclerView + fixed column handle clicks
     }
 
     override fun renderSymbolPanel(
@@ -64,16 +79,22 @@ class SymbolKeyboard(
         locked: Boolean,
         isChineseMainMode: Boolean
     ) {
-        // Highlight tabs (simple UI; you can theme later)
+        // page is ignored in "real scroll" mode (we keep the interface for dispatcher compatibility).
         highlightTab(category)
 
-        val cells = buildPageCells(
-            category = category,
-            page = page,
-            locked = locked,
-            isChineseMainMode = isChineseMainMode
-        )
-        adapter.submit(cells)
+        // Back label varies by main language (your requirement)
+        btnBack.text = if (isChineseMainMode) "返回" else "🔙"
+
+        // Lock icon reflects current state
+        btnLock.text = if (locked) "🔒" else "🔓"
+
+        val symbols = when (category) {
+            ImeActions.SymbolCategory.COMMON -> buildCommonSymbols()
+            ImeActions.SymbolCategory.CN -> CN_SYMBOLS
+            ImeActions.SymbolCategory.EN -> EN_SYMBOLS
+        }
+
+        adapter.submit(symbols)
     }
 
     private fun highlightTab(category: ImeActions.SymbolCategory) {
@@ -85,69 +106,26 @@ class SymbolKeyboard(
         styleTab(tabEn, category == ImeActions.SymbolCategory.EN)
     }
 
-    private fun buildPageCells(
-        category: ImeActions.SymbolCategory,
-        page: Int,
-        locked: Boolean,
-        isChineseMainMode: Boolean
-    ): List<SymbolCell> {
-        val symbols = when (category) {
-            ImeActions.SymbolCategory.COMMON -> COMMON_SYMBOLS
-            ImeActions.SymbolCategory.CN -> CN_SYMBOLS
-            ImeActions.SymbolCategory.EN -> EN_SYMBOLS
-        }
+    private fun buildCommonSymbols(): List<String> {
+        // MRU first, then default list without duplicates.
+        val mru = SymbolPrefs.loadMruCommon(context)
 
-        // Left area: 4 cols * 4 rows = 16 symbols per page
-        val pageSize = 16
-        val from = page * pageSize
-        val to = minOf(from + pageSize, symbols.size)
-        val pageSymbols = if (from in 0..symbols.size && from < to) symbols.subList(from, to) else emptyList()
+        if (mru.isEmpty()) return DEFAULT_COMMON_SYMBOLS
 
-        // 4 rows * 5 cols = 20 cells
-        val result = ArrayList<SymbolCell>(20)
-
-        // Build 4 rows
-        var symIndex = 0
-        for (row in 0 until 4) {
-            // left 4 symbol cells
-            for (col in 0 until 4) {
-                val text = pageSymbols.getOrNull(symIndex)
-                result.add(
-                    if (text == null) SymbolCell.Empty else SymbolCell.Symbol(text)
-                )
-                symIndex++
-            }
-
-            // right function column
-            val actionCell: SymbolCell = when (row) {
-                0 -> {
-                    val backText = if (isChineseMainMode) "返回" else "🔙"
-                    SymbolCell.Action(SymbolAction.Back, backText)
-                }
-                1 -> SymbolCell.Action(SymbolAction.PageUp, "︿")
-                2 -> SymbolCell.Action(SymbolAction.PageDown, "﹀")
-                else -> {
-                    // lock
-                    val lockText = if (locked) "🔒" else "🔓"
-                    SymbolCell.Action(SymbolAction.ToggleLock, lockText)
-                }
-            }
-            result.add(actionCell)
-        }
-
-        return result
+        val set = LinkedHashSet<String>(mru.size + DEFAULT_COMMON_SYMBOLS.size)
+        for (s in mru) set.add(s)
+        for (s in DEFAULT_COMMON_SYMBOLS) set.add(s)
+        return set.toList()
     }
 
     companion object {
-
-        // Common: mix of CN/EN/web/programming frequent symbols (starter set).
-        // Later you can add MRU (recently used) ahead of this list.
-        private val COMMON_SYMBOLS = listOf(
-            ",", ".", "?", "!", "…", ":", ";", "，",
-            "。", "？", "！", "、", "“", "”", "\"", "'",
-            "(", ")", "[", "]", "{", "}", "<", ">",
-            "@", "#", "$", "%", "&", "+", "-", "*",
-            "/", "=", "_", "\\", "|", "~", "^", "`"
+        // Default Common: "Sogou-like" starter (mixed punctuation + web/email + brackets + programming)
+        private val DEFAULT_COMMON_SYMBOLS = listOf(
+            ",", ".", "?", "!", "…", ":", ";", "\"",
+            "'", "(", ")", "[", "]", "{", "}", "<",
+            ">", "@", "#", "$", "%", "&", "+", "-",
+            "*", "/", "=", "_", "\\", "|", "~", "^",
+            "`", "，", "。", "？", "！", "、", "“", "”"
         )
 
         private val CN_SYMBOLS = listOf(
@@ -167,22 +145,13 @@ class SymbolKeyboard(
     }
 }
 
-private sealed class SymbolCell {
-    data object Empty : SymbolCell()
-    data class Symbol(val text: String) : SymbolCell()
-    data class Action(val action: SymbolAction, val text: String) : SymbolCell()
-}
+private class SymbolListAdapter(
+    private val onSymbolClick: (String) -> Unit
+) : RecyclerView.Adapter<SymbolListAdapter.VH>() {
 
-private enum class SymbolAction { Back, PageUp, PageDown, ToggleLock }
+    private val items: MutableList<String> = ArrayList()
 
-private class SymbolGridAdapter(
-    private val onSymbolClick: (String) -> Unit,
-    private val onActionClick: (SymbolAction) -> Unit
-) : RecyclerView.Adapter<SymbolGridAdapter.VH>() {
-
-    private val items: MutableList<SymbolCell> = ArrayList()
-
-    fun submit(newItems: List<SymbolCell>) {
+    fun submit(newItems: List<String>) {
         items.clear()
         items.addAll(newItems)
         notifyDataSetChanged()
@@ -194,8 +163,8 @@ private class SymbolGridAdapter(
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
-        val cell = items[position]
-        holder.bind(cell, onSymbolClick, onActionClick)
+        val symbol = items[position]
+        holder.bind(symbol, onSymbolClick)
     }
 
     override fun getItemCount(): Int = items.size
@@ -203,30 +172,9 @@ private class SymbolGridAdapter(
     class VH(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val tv: TextView = itemView.findViewById(R.id.symbolCellText)
 
-        fun bind(
-            cell: SymbolCell,
-            onSymbolClick: (String) -> Unit,
-            onActionClick: (SymbolAction) -> Unit
-        ) {
-            itemView.isClickable = true
-            itemView.setOnClickListener(null)
-
-            when (cell) {
-                is SymbolCell.Empty -> {
-                    tv.text = ""
-                    itemView.isClickable = false
-                }
-
-                is SymbolCell.Symbol -> {
-                    tv.text = cell.text
-                    itemView.setOnClickListener { onSymbolClick(cell.text) }
-                }
-
-                is SymbolCell.Action -> {
-                    tv.text = cell.text
-                    itemView.setOnClickListener { onActionClick(cell.action) }
-                }
-            }
+        fun bind(symbol: String, onSymbolClick: (String) -> Unit) {
+            tv.text = symbol
+            itemView.setOnClickListener { onSymbolClick(symbol) }
         }
     }
 }

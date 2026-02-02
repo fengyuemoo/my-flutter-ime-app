@@ -62,6 +62,7 @@ class ImeGraph(
 
             // 2) Dispatcher：实现 ImeActions，供键盘/KeyboardController 使用
             val dispatcher = ImeActionDispatcher(
+                context = context,
                 sessions = sessions,
                 inputConnectionProvider = inputConnectionProvider
             )

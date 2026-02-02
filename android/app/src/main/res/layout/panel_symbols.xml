@@ -5,12 +5,62 @@
     android:layout_height="wrap_content"
     android:orientation="vertical">
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/symbolRecycler"
+    <!-- Body: left scrollable grid + right fixed action column -->
+    <LinearLayout
+        android:id="@+id/symbolBody"
         android:layout_width="match_parent"
         android:layout_height="200dp"
-        android:overScrollMode="never"
-        android:padding="4dp" />
+        android:orientation="horizontal">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/symbolRecycler"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="4"
+            android:overScrollMode="never"
+            android:padding="4dp" />
+
+        <LinearLayout
+            android:id="@+id/symbolActionColumn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:padding="4dp">
+
+            <Button
+                android:id="@+id/btnSymBack"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:text="返回"
+                style="@style/KeyButton" />
+
+            <Button
+                android:id="@+id/btnSymUp"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:text="︿"
+                style="@style/KeyButton" />
+
+            <Button
+                android:id="@+id/btnSymDown"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:text="﹀"
+                style="@style/KeyButton" />
+
+            <Button
+                android:id="@+id/btnSymLock"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:text="🔓"
+                style="@style/KeyButton" />
+        </LinearLayout>
+    </LinearLayout>
 
     <!-- Bottom tabs -->
     <LinearLayout
