@@ -18,7 +18,7 @@
             android:layout_height="match_parent"
             android:layout_weight="4"
             android:overScrollMode="never"
-            android:padding="4dp" />
+            android:padding="6dp" />
 
         <LinearLayout
             android:id="@+id/symbolActionColumn"
@@ -26,7 +26,7 @@
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
-            android:padding="4dp">
+            android:padding="6dp">
 
             <Button
                 android:id="@+id/btnSymBack"
@@ -62,35 +62,20 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Bottom tabs -->
-    <LinearLayout
-        android:id="@+id/symbolTabs"
+    <!-- Bottom tabs: horizontal scroll, no auto-centering -->
+    <HorizontalScrollView
+        android:id="@+id/symbolTabScroll"
         android:layout_width="match_parent"
         android:layout_height="50dp"
-        android:orientation="horizontal">
+        android:fillViewport="true"
+        android:scrollbars="none">
 
-        <Button
-            android:id="@+id/tabCommon"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:id="@+id/symbolTabContainer"
+            android:layout_width="wrap_content"
             android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:text="Common"
-            style="@style/KeyButton" />
-
-        <Button
-            android:id="@+id/tabCn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:text="中文"
-            style="@style/KeyButton" />
-
-        <Button
-            android:id="@+id/tabEn"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:text="English"
-            style="@style/KeyButton" />
-    </LinearLayout>
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp" />
+    </HorizontalScrollView>
 </LinearLayout>
