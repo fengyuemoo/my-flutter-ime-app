@@ -22,6 +22,7 @@ import com.google.android.flexbox.FlexDirection
 import com.google.android.flexbox.FlexWrap
 import com.google.android.flexbox.FlexboxLayoutManager
 import com.google.android.flexbox.JustifyContent
+import kotlin.math.min
 
 class SymbolKeyboard(
     context: Context,
@@ -80,8 +81,11 @@ class SymbolKeyboard(
         recycler.addItemDecoration(SimpleSpaceDecoration(dpToPx(6)))
 
         btnBack.setOnClickListener { ime.closeSymbolPanel() }
-        btnUp.setOnClickListener { recycler.smoothScrollToPosition(0) }
-        btnDown.setOnClickListener { recycler.smoothScrollBy(0, recycler.height) }
+
+        // ︿/﹀：改为翻页（由 dispatcher 维护 page 状态并回调 renderSymbolPanel）
+        btnUp.setOnClickListener { ime.symbolPageUp() }
+        btnDown.setOnClickListener { ime.symbolPageDown() }
+
         btnLock.setOnClickListener { ime.toggleSymbolLock() }
     }
 
@@ -98,10 +102,49 @@ class SymbolKeyboard(
         ensureTabsBuilt(isChineseMainMode)
         updateTabSelected(category)
 
-        btnBack.text = if (isChineseMainMode) "返回" else "🔙"
+        val full = symbolsFor(category)
+        val pageSize = pageSizeFor(category)
+
+        val totalPages = maxOf(1, (full.size + pageSize - 1) / pageSize)
+        val effectivePage = page.coerceIn(0, totalPages - 1)
+
+        val from = effectivePage * pageSize
+        val to = min(full.size, from + pageSize)
+        val pageList = if (from in 0..full.size && from < to) full.subList(from, to) else emptyList()
+
+        val suffix = if (totalPages > 1) " ${effectivePage + 1}/$totalPages" else ""
+        btnBack.text = if (isChineseMainMode) "返回$suffix" else "🔙$suffix"
         btnLock.text = if (locked) "🔒" else "🔓"
 
-        adapter.submit(symbolsFor(category))
+        val canUp = effectivePage > 0
+        val canDown = effectivePage < totalPages - 1
+        btnUp.isEnabled = canUp
+        btnDown.isEnabled = canDown
+        btnUp.alpha = if (canUp) 1.0f else 0.35f
+        btnDown.alpha = if (canDown) 1.0f else 0.35f
+
+        adapter.submit(pageList)
+        recycler.scrollToPosition(0)
+    }
+
+    private fun pageSizeFor(category: ImeActions.SymbolCategory): Int {
+        return when (category) {
+            ImeActions.SymbolCategory.WEB -> 72
+            ImeActions.SymbolCategory.EMAIL -> 72
+            ImeActions.SymbolCategory.KAOMOJI -> 60
+            ImeActions.SymbolCategory.MATH -> 72
+            ImeActions.SymbolCategory.SPECIAL -> 84
+            ImeActions.SymbolCategory.ARROWS -> 84
+            ImeActions.SymbolCategory.BOX -> 84
+            ImeActions.SymbolCategory.SERIAL -> 84
+            ImeActions.SymbolCategory.VERTICAL -> 84
+            ImeActions.SymbolCategory.RADICALS -> 84
+            ImeActions.SymbolCategory.SYLLABICS -> 84
+            ImeActions.SymbolCategory.TIBETAN -> 84
+            ImeActions.SymbolCategory.JAPANESE -> 72
+            ImeActions.SymbolCategory.IPA -> 84
+            else -> 60
+        }
     }
 
     private fun ensureTabsBuilt(isChineseMainMode: Boolean) {
@@ -142,121 +185,38 @@ class SymbolKeyboard(
         return when (category) {
             ImeActions.SymbolCategory.COMMON -> buildCommonSymbols()
 
-            ImeActions.SymbolCategory.CN -> CN_SYMBOLS
-            ImeActions.SymbolCategory.EN -> EN_SYMBOLS
+            ImeActions.SymbolCategory.CN -> CN_SYMBOLS_FULL
+            ImeActions.SymbolCategory.EN -> EN_SYMBOLS_FULL
 
-            ImeActions.SymbolCategory.WEB -> listOf(
-                "://", "www.", ".com", ".cn", ".net", ".org", ".io", ".dev",
-                "/", "?", "&", "=", "#", "%", "@", "~"
-            )
+            ImeActions.SymbolCategory.WEB -> WEB_SYMBOLS_FULL
+            ImeActions.SymbolCategory.EMAIL -> EMAIL_SYMBOLS_FULL
 
-            ImeActions.SymbolCategory.EMAIL -> listOf(
-                "@", ".", "_", "-", "+",
-                ".com", ".cn", ".net", ".org", ".edu",
-                "mailto:"
-            )
+            ImeActions.SymbolCategory.KAOMOJI -> KAOMOJI_COMMON
 
-            ImeActions.SymbolCategory.KAOMOJI -> listOf(
-                "(＾▽＾)", "(>_<)", "(T_T)", "(•̀ᴗ•́)و", "(｡•́︿•̀｡)",
-                "¯\\_(ツ)_/¯", "(╯°□°）╯︵ ┻━┻", "┬─┬ ノ( ゜-゜ノ)"
-            )
+            ImeActions.SymbolCategory.MATH -> MATH_SYMBOLS_FULL
+            ImeActions.SymbolCategory.SUPER -> SUPER_SUB_SYMBOLS_FULL
+            ImeActions.SymbolCategory.SERIAL -> SERIAL_SYMBOLS_FULL
 
-            ImeActions.SymbolCategory.MATH -> listOf(
-                "±", "×", "÷", "≈", "≠", "≤", "≥", "∞", "√",
-                "∑", "∏", "∫", "∂", "π",
-                "∈", "∉", "∩", "∪", "⊂", "⊃", "⊆", "⊇"
-            )
+            ImeActions.SymbolCategory.IPA -> IPA_SYMBOLS_FULL
+            ImeActions.SymbolCategory.JAPANESE -> JAPANESE_SYMBOLS_FULL
 
-            ImeActions.SymbolCategory.SUPER -> listOf(
-                "⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹",
-                "⁺", "⁻", "⁼", "⁽", "⁾",
-                "₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"
-            )
+            ImeActions.SymbolCategory.ARROWS -> ARROW_SYMBOLS_FULL
+            ImeActions.SymbolCategory.SPECIAL -> SPECIAL_SYMBOLS_FULL
 
-            ImeActions.SymbolCategory.SERIAL -> listOf(
-                "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
-                "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳",
-                "㈠", "㈡", "㈢", "㈣", "㈤", "㈥", "㈦", "㈧", "㈨", "㈩"
-            )
+            ImeActions.SymbolCategory.PINYIN -> PINYIN_SYMBOLS
+            ImeActions.SymbolCategory.ZHUYIN -> ZHUYIN_SYMBOLS_FULL
 
-            ImeActions.SymbolCategory.IPA -> IPA_SYMBOLS
-            ImeActions.SymbolCategory.JAPANESE -> JAPANESE_SYMBOLS
+            ImeActions.SymbolCategory.VERTICAL -> VERTICAL_PUNCT_FULL
 
-            ImeActions.SymbolCategory.ARROWS -> listOf(
-                "←", "→", "↑", "↓", "↔", "↕",
-                "⇐", "⇒", "⇑", "⇓", "⇔",
-                "⟵", "⟶", "⟷", "↩", "↪"
-            )
-
-            ImeActions.SymbolCategory.SPECIAL -> listOf(
-                "©", "®", "™", "✓", "✗", "★", "☆", "♪", "♬",
-                "☑", "☒", "☀", "☁", "☂", "☕", "☎", "✈"
-            )
-
-            ImeActions.SymbolCategory.PINYIN -> listOf(
-                "ā", "á", "ǎ", "à",
-                "ē", "é", "ě", "è",
-                "ī", "í", "ǐ", "ì",
-                "ō", "ó", "ǒ", "ò",
-                "ū", "ú", "ǔ", "ù",
-                "ǖ", "ǘ", "ǚ", "ǜ"
-            )
-
-            ImeActions.SymbolCategory.ZHUYIN -> listOf(
-                "ㄅ", "ㄆ", "ㄇ", "ㄈ", "ㄉ", "ㄊ", "ㄋ", "ㄌ",
-                "ㄍ", "ㄎ", "ㄏ",
-                "ㄐ", "ㄑ", "ㄒ",
-                "ㄓ", "ㄔ", "ㄕ", "ㄖ",
-                "ㄗ", "ㄘ", "ㄙ",
-                "ㄧ", "ㄨ", "ㄩ",
-                "ㄚ", "ㄛ", "ㄜ", "ㄝ",
-                "ㄞ", "ㄟ", "ㄠ", "ㄡ",
-                "ㄢ", "ㄣ", "ㄤ", "ㄥ", "ㄦ",
-                "ˉ", "ˊ", "ˇ", "ˋ", "˙"
-            )
-
-            ImeActions.SymbolCategory.VERTICAL -> listOf(
-                "︐", "︑", "︒", "︓", "︔", "︕", "︖",
-                "︗", "︘", "︙", "︰", "︱", "︲", "︳",
-                "︴", "︵", "︶", "︷", "︸", "︹", "︺",
-                "︽", "︾"
-            )
-
-            // 部首：按笔画数排序；主部首按表格笔画；附形部首按“自身笔画”手工标注
             ImeActions.SymbolCategory.RADICALS -> RADICALS_GF0011_ALL_BY_STROKES
 
-            ImeActions.SymbolCategory.RUSSIAN -> listOf(
-                "А", "Б", "В", "Г", "Д", "Е", "Ё", "Ж", "З", "И", "Й", "К", "Л", "М", "Н", "О", "П",
-                "Р", "С", "Т", "У", "Ф", "Х", "Ц", "Ч", "Ш", "Щ", "Ъ", "Ы", "Ь", "Э", "Ю", "Я"
-            )
+            ImeActions.SymbolCategory.RUSSIAN -> RUSSIAN_LETTERS
+            ImeActions.SymbolCategory.GREEK -> GREEK_LETTERS
+            ImeActions.SymbolCategory.LATIN -> LATIN_EXT_LETTERS
 
-            ImeActions.SymbolCategory.GREEK -> listOf(
-                "α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ρ",
-                "σ", "τ", "υ", "φ", "χ", "ψ", "ω"
-            )
-
-            ImeActions.SymbolCategory.LATIN -> listOf(
-                "À", "Á", "Â", "Ã", "Ä", "Å", "Æ", "Ç",
-                "È", "É", "Ê", "Ë",
-                "Ì", "Í", "Î", "Ï",
-                "Ñ",
-                "Ò", "Ó", "Ô", "Õ", "Ö", "Ø",
-                "Ù", "Ú", "Û", "Ü",
-                "Ý", "ß"
-            )
-
-            ImeActions.SymbolCategory.BOX -> listOf(
-                "┌", "┬", "┐", "├", "┼", "┤", "└", "┴", "┘",
-                "─", "│",
-                "═", "║", "╔", "╦", "╗", "╠", "╬", "╣", "╚", "╩", "╝"
-            )
-
-            ImeActions.SymbolCategory.SYLLABICS -> listOf("ᐁ", "ᐃ", "ᐅ", "ᐇ", "ᐉ", "ᐊ", "ᐋ", "ᐍ", "ᐏ", "ᐑ", "ᐓ", "ᐕ")
-
-            ImeActions.SymbolCategory.TIBETAN -> listOf(
-                "ཀ", "ཁ", "ག", "ང", "ཅ", "ཆ", "ཇ", "ཉ", "ཏ", "ཐ", "ད", "ན",
-                "པ", "ཕ", "བ", "མ", "ཙ", "ཚ", "ཛ", "ཝ", "ཞ", "ཟ", "འ", "ཡ", "ར", "ལ", "ཤ", "ས", "ཧ", "ཨ"
-            )
+            ImeActions.SymbolCategory.BOX -> BOX_DRAWING_FULL
+            ImeActions.SymbolCategory.SYLLABICS -> CANADIAN_SYLLABICS_FULL
+            ImeActions.SymbolCategory.TIBETAN -> TIBETAN_CHARS_FULL
         }
     }
 
@@ -282,6 +242,52 @@ class SymbolKeyboard(
     )
 
     companion object {
+
+        // ---------------- Helpers ----------------
+
+        private fun cpToString(cp: Int): String = String(Character.toChars(cp))
+
+        private fun rangeToList(
+            startInclusive: Int,
+            endInclusive: Int,
+            accept: (Int) -> Boolean = { true }
+        ): List<String> {
+            val out = ArrayList<String>(endInclusive - startInclusive + 1)
+            var cp = startInclusive
+            while (cp <= endInclusive) {
+                if (Character.isDefined(cp) && !Character.isISOControl(cp) && accept(cp)) {
+                    val t = Character.getType(cp)
+                    if (t != Character.SURROGATE.toInt() && t != Character.PRIVATE_USE.toInt()) {
+                        out.add(cpToString(cp))
+                    }
+                }
+                cp++
+            }
+            return out
+        }
+
+        private fun uniq(vararg lists: List<String>): List<String> {
+            val set = LinkedHashSet<String>()
+            for (lst in lists) {
+                for (s in lst) {
+                    val v = s.trim()
+                    if (v.isNotEmpty()) set.add(v)
+                }
+            }
+            return set.toList()
+        }
+
+        private fun isMathOrSymbol(cp: Int): Boolean {
+            val t = Character.getType(cp)
+            return t == Character.MATH_SYMBOL.toInt() ||
+                t == Character.OTHER_SYMBOL.toInt() ||
+                t == Character.MODIFIER_SYMBOL.toInt()
+        }
+
+        private fun isLetter(cp: Int): Boolean = Character.isLetter(cp)
+
+        // ---------------- Common / CN / EN ----------------
+
         private val DEFAULT_COMMON_SYMBOLS = listOf(
             ",", ".", "?", "!", "…", ":", ";", "\"",
             "'", "(", ")", "[", "]", "{", "}", "<",
@@ -290,22 +296,215 @@ class SymbolKeyboard(
             "`", "，", "。", "？", "！", "、", "“", "”"
         )
 
-        private val CN_SYMBOLS = listOf(
-            "，", "。", "？", "！", "……", "：", "；", "、",
-            "“", "”", "‘", "’", "（", "）", "《", "》",
-            "【", "】", "「", "」", "『", "』", "—", "·",
-            "～", "…", "￥", "％", "＆", "＠"
+        private val CN_SYMBOLS_FULL = uniq(
+            listOf(
+                "，", "。", "？", "！", "……", "：", "；", "、",
+                "“", "”", "‘", "’",
+                "（", "）", "《", "》", "〈", "〉",
+                "【", "】", "「", "」", "『", "』",
+                "—", "——", "·", "～", "…",
+                "￥", "％", "＆", "＠", "＃", "＊", "＋", "－", "＝", "／", "＼", "｜"
+            ),
+            // 常用中文序号/括号变体（让中文类更“足”）
+            listOf("（", "）", "［", "］", "｛", "｝", "〈", "〉", "《", "》", "「", "」", "『", "』")
         )
 
-        private val EN_SYMBOLS = listOf(
-            ",", ".", "?", "!", "...", ":", ";", "\"",
-            "'", "(", ")", "[", "]", "{", "}", "<",
-            ">", "@", "#", "$", "%", "&", "+", "-",
-            "*", "/", "=", "_", "\\", "|", "~", "^",
-            "`"
+        private val EN_SYMBOLS_FULL = uniq(
+            listOf(
+                ",", ".", "?", "!", "...", ":", ";", "\"", "'",
+                "(", ")", "[", "]", "{", "}", "<", ">",
+                "@", "#", "$", "%", "&", "+", "-", "*", "/", "=", "_",
+                "\\", "|", "~", "^", "`"
+            ),
+            listOf("—", "–", "…", "•", "·", "°", "‰", "§"),
+            listOf("“", "”", "‘", "’")
         )
 
-        private val JAPANESE_SYMBOLS = listOf(
+        // ---------------- Web (全面补齐：协议/域名/TLD/路径/查询/运算符) ----------------
+
+        private val WEB_TLDS_COMMON = listOf(
+            ".com", ".net", ".org", ".edu", ".gov", ".mil", ".info", ".biz",
+            ".io", ".ai", ".dev", ".app", ".cloud", ".site", ".online", ".store", ".shop",
+            ".top", ".xyz", ".link", ".live", ".pro", ".icu", ".me", ".cc", ".tv", ".co"
+        )
+
+        private val WEB_TLDS_COUNTRY = listOf(
+            ".cn", ".com.cn", ".net.cn", ".org.cn",
+            ".us", ".uk", ".jp", ".kr", ".de", ".fr", ".ru", ".in", ".br", ".au", ".ca",
+            ".es", ".it", ".nl", ".se", ".no", ".fi", ".dk", ".ch", ".at", ".pl", ".cz",
+            ".hk", ".tw", ".sg", ".my", ".id", ".th", ".vn"
+        )
+
+        private val WEB_SYMBOLS_FULL = uniq(
+            // 协议/常见前缀
+            listOf(
+                "http://", "https://", "ftp://", "ftps://", "ws://", "wss://",
+                "file://", "mailto:", "tel:", "sms:", "geo:",
+                "://", "www.", "m.", "api.", "cdn.", "static."
+            ),
+            // 常见 TLD
+            WEB_TLDS_COMMON,
+            WEB_TLDS_COUNTRY,
+            // URL 结构片段
+            listOf(
+                "/", "//", "/#", "#", "##",
+                "?", "&", "&&", "=", "==", "!=",
+                ":", ";", ".", "..", "...",
+                "-", "_", "+", "~",
+                "%", "%20", "%2F", "%3A", "%3F", "%26", "%3D", "%23",
+                "@", ":", ":80", ":443",
+                "()", "[]", "{}", "<>", "\"\"", "''"
+            ),
+            // 常见路径/锚点/参数名（覆盖 Web 实际输入常见）
+            listOf(
+                "/index.html", "/robots.txt", "/sitemap.xml", "/favicon.ico",
+                "/login", "/logout", "/signup", "/register",
+                "/api", "/v1", "/v2", "/docs", "/swagger", "/openapi.json",
+                "/search", "/q", "/id", "/user", "/users",
+                "utm_source=", "utm_medium=", "utm_campaign=", "utm_content=", "utm_term=",
+                "ref=", "source=", "lang=", "locale=", "redirect=", "callback=", "returnUrl=",
+                "page=", "size=", "limit=", "offset=", "sort=", "order=",
+                "token=", "access_token=", "refresh_token=", "code=", "state="
+            )
+        )
+
+        // ---------------- Email (全面补齐：常见域名/别名/头字段/符号) ----------------
+
+        private val EMAIL_DOMAINS_COMMON = listOf(
+            "@gmail.com", "@outlook.com", "@hotmail.com", "@live.com", "@msn.com",
+            "@icloud.com", "@me.com",
+            "@yahoo.com", "@yahoo.co.jp",
+            "@proton.me", "@protonmail.com",
+            "@yandex.com", "@yandex.ru",
+            "@aol.com",
+            "@qq.com", "@163.com", "@126.com", "@yeah.net", "@foxmail.com",
+            "@sina.com", "@sohu.com", "@aliyun.com"
+        )
+
+        private val EMAIL_SYMBOLS_FULL = uniq(
+            listOf(
+                "@", ".", "_", "-", "+",
+                "(", ")", "[", "]", "{", "}", "<", ">", "\"", "'",
+                "mailto:", "noreply@", "no-reply@", "support@", "admin@", "service@", "info@", "hr@", "jobs@",
+                "name+tag@", "user+tag@", "user.name@", "user_name@"
+            ),
+            // 顶级域（给自建域输入）
+            listOf(".com", ".cn", ".net", ".org", ".edu", ".gov", ".io", ".ai", ".dev", ".app", ".me", ".co", ".cc", ".tv"),
+            // 常见邮箱服务商
+            EMAIL_DOMAINS_COMMON,
+            // 邮件头字段（复制粘贴邮件/写 RFC 风格内容时常用）
+            listOf(
+                "To:", "Cc:", "Bcc:", "From:", "Reply-To:", "Subject:",
+                "Date:", "Message-ID:", "In-Reply-To:", "References:",
+                "Content-Type:", "MIME-Version:",
+                "text/plain", "text/html", "charset=utf-8", "boundary="
+            )
+        )
+
+        // ---------------- Kaomoji (A：通用精选，扩到更够用) ----------------
+
+        private val KAOMOJI_COMMON = listOf(
+            "(＾▽＾)", "(≧▽≦)", "(｡◕‿◕｡)", "(•‿•)", "(๑´ڡ`๑)", "(๑´ㅂ`๑)", "(•̀ᴗ•́)و", "(｡•̀ᴗ-)✧",
+            "(づ｡◕‿‿◕｡)づ", "(づ￣ ³￣)づ", "(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧", "(✿◕‿◕✿)", "(★ω★)", "(≖‿≖✿)",
+            "(〃▽〃)", "(⁄ ⁄•⁄ω⁄•⁄ ⁄)", "(*/ω＼*)", "(｡♥‿♥｡)", "(๑•́ ₃ •̀๑)",
+            "(°_°)", "(O_O)", "(⊙_⊙)", "(ಠ_ಠ)", "(・_・;)", "(；´Д｀)", "(；￣Д￣)", "(；ω；)", "(´；ω；`)",
+            "(╥﹏╥)", "(ಥ_ಥ)", "(T_T)", "(>_<)", "(｡•́︿•̀｡)", "(´・ω・`)", "(｀・ω・´)",
+            "¯\\_(ツ)_/¯", "(￣▽￣)", "(￣^￣)ゞ", "(￣︶￣)ゞ", "(¬_¬)", "(•_•)", "(•̀ᴗ•́)و✧",
+            "( ͡° ͜ʖ ͡°)", "(¬‿¬)", "(ง'̀-'́)ง", "(ง •̀_•́)ง", "(ง￣▽￣)ง",
+            "(╬ಠ益ಠ)", "(ノಠ益ಠ)ノ", "(╯°□°）╯︵ ┻━┻", "(ノ°Д°)ノ︵ ┻━┻",
+            "┬─┬ ノ( ゜-゜ノ)", "┬─┬ノ( º _ ºノ)",
+            "(☞ﾟヮﾟ)☞", "☜(ﾟヮﾟ☜)", "(ง⌐■_■)ง", "(⌐■_■)",
+            "♡", "❤", "♥", "ღ", "☆", "★", "♪"
+        )
+
+        // ---------------- Math / Super / Serial / Arrows / Special ----------------
+
+        private val MATH_SYMBOLS_FULL: List<String> by lazy {
+            val basic = listOf(
+                "±", "×", "÷", "≈", "≠", "≤", "≥", "∞", "√",
+                "∑", "∏", "∫", "∂", "π", "φ", "Ω", "μ",
+                "∈", "∉", "∩", "∪", "⊂", "⊃", "⊆", "⊇",
+                "⊕", "⊗", "⊥", "∥", "∠", "∴", "∵", "≡", "≅", "∝"
+            )
+            val ops = rangeToList(0x2200, 0x22FF) { isMathOrSymbol(it) }       // Mathematical Operators
+            val supplement = rangeToList(0x2A00, 0x2AFF) { isMathOrSymbol(it) } // Supplemental Mathematical Operators
+            val letterlike = rangeToList(0x2100, 0x214F) { isMathOrSymbol(it) } // Letterlike Symbols
+            val miscA = rangeToList(0x27C0, 0x27EF) { isMathOrSymbol(it) }      // Misc Mathematical Symbols-A
+            val miscB = rangeToList(0x2980, 0x29FF) { isMathOrSymbol(it) }      // Misc Mathematical Symbols-B
+            uniq(basic, ops, supplement, letterlike, miscA, miscB)
+        }
+
+        private val SUPER_SUB_SYMBOLS_FULL: List<String> by lazy {
+            val block = rangeToList(0x2070, 0x209F) { cp ->
+                val t = Character.getType(cp)
+                t != Character.FORMAT.toInt() && !Character.isWhitespace(cp)
+            }
+            uniq(
+                listOf("⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹", "⁺", "⁻", "⁼", "⁽", "⁾"),
+                listOf("₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉", "₊", "₋", "₌", "₍", "₎"),
+                block
+            )
+        }
+
+        private val SERIAL_SYMBOLS_FULL: List<String> by lazy {
+            val enclosed = rangeToList(0x2460, 0x24FF) { Character.isDefined(it) } // Enclosed Alphanumerics
+            val cjkEnclosed = rangeToList(0x3200, 0x32FF) { Character.isDefined(it) } // Enclosed CJK Letters and Months
+            val roman = rangeToList(0x2160, 0x2188) { Character.isDefined(it) } // Roman numerals
+            uniq(
+                listOf("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"),
+                enclosed,
+                cjkEnclosed,
+                roman
+            )
+        }
+
+        private val ARROW_SYMBOLS_FULL: List<String> by lazy {
+            val basic = rangeToList(0x2190, 0x21FF) { isMathOrSymbol(it) } // Arrows
+            val supplementA = rangeToList(0x27F0, 0x27FF) { isMathOrSymbol(it) } // Supplemental Arrows-A
+            val supplementB = rangeToList(0x2900, 0x297F) { isMathOrSymbol(it) } // Supplemental Arrows-B
+            val misc = rangeToList(0x2B00, 0x2BFF) { isMathOrSymbol(it) } // Misc Symbols and Arrows（包含很多箭头）
+            uniq(listOf("↩", "↪", "↺", "↻", "⬅", "➡", "⬆", "⬇"), basic, supplementA, supplementB, misc)
+        }
+
+        private val SPECIAL_SYMBOLS_FULL: List<String> by lazy {
+            val currency = rangeToList(0x20A0, 0x20CF) { isMathOrSymbol(it) } // Currency Symbols
+            val miscSymbols = rangeToList(0x2600, 0x26FF) { isMathOrSymbol(it) } // Misc Symbols
+            val dingbats = rangeToList(0x2700, 0x27BF) { isMathOrSymbol(it) } // Dingbats
+            val geom = rangeToList(0x25A0, 0x25FF) { isMathOrSymbol(it) } // Geometric Shapes
+            val miscTech = rangeToList(0x2300, 0x23FF) { isMathOrSymbol(it) } // Misc Technical
+            uniq(
+                listOf("©", "®", "™", "✓", "✗", "★", "☆", "♪", "♬", "•", "°", "‰", "§"),
+                currency,
+                miscSymbols,
+                dingbats,
+                geom,
+                miscTech
+            )
+        }
+
+        // ---------------- IPA / Japanese / Zhuyin / Vertical ----------------
+
+        private val IPA_SYMBOLS_BASE = listOf(
+            "i", "iː", "ɪ", "e", "eɪ", "ɛ", "æ", "ɑ", "ɑː", "ɒ", "ɔ", "ɔː", "oʊ", "ʊ", "u", "uː", "ʌ", "ə", "ɜː",
+            "p", "b", "t", "d", "k", "g", "f", "v", "θ", "ð", "s", "z", "ʃ", "ʒ", "h", "m", "n", "ŋ", "l", "r", "j", "w",
+            "tʃ", "dʒ",
+            "ˈ", "ˌ", "ː", "ˑ", "̆", "̃", "̩", "̯", "ʔ"
+        )
+
+        private val IPA_SYMBOLS_FULL: List<String> by lazy {
+            // IPA Extensions 0250–02AF + Spacing Modifier Letters 02B0–02FF（过滤掉组合附加符）
+            val ipaExt = rangeToList(0x0250, 0x02AF) { cp ->
+                val t = Character.getType(cp)
+                (t == Character.LOWERCASE_LETTER.toInt() || t == Character.MODIFIER_LETTER.toInt() || t == Character.OTHER_LETTER.toInt())
+            }
+            val modifiers = rangeToList(0x02B0, 0x02FF) { cp ->
+                val t = Character.getType(cp)
+                t == Character.MODIFIER_LETTER.toInt() || t == Character.MODIFIER_SYMBOL.toInt()
+            }
+            uniq(IPA_SYMBOLS_BASE, ipaExt, modifiers)
+        }
+
+        private val JAPANESE_SYMBOLS_BASE = listOf(
             "。", "、", "・", "ー", "「", "」", "『", "』", "（", "）", "！", "？", "～",
             "あ", "い", "う", "え", "お",
             "か", "き", "く", "け", "こ",
@@ -341,16 +540,100 @@ class SymbolKeyboard(
             "ァ", "ィ", "ゥ", "ェ", "ォ", "ャ", "ュ", "ョ", "ッ"
         )
 
-        private val IPA_SYMBOLS = listOf(
-            "i", "iː", "ɪ", "e", "eɪ", "ɛ", "æ", "ɑ", "ɑː", "ɒ", "ɔ", "ɔː", "oʊ", "ʊ", "u", "uː", "ʌ", "ə", "ɜː",
-            "p", "b", "t", "d", "k", "g", "f", "v", "θ", "ð", "s", "z", "ʃ", "ʒ", "h", "m", "n", "ŋ", "l", "r", "j", "w",
-            "tʃ", "dʒ",
-            "ˈ", "ˌ", "ː", "ˑ", "̆", "̃", "̩", "̯", "ʔ"
+        private val JAPANESE_SYMBOLS_FULL: List<String> by lazy {
+            // Halfwidth and Fullwidth Forms（含半角片假名与部分日文符号）
+            val halfwidthKana = rangeToList(0xFF61, 0xFF9F) { Character.isDefined(it) }
+            // CJK Symbols and Punctuation（含日文常见符号如「」等，补充一些）
+            val cjkPunct = rangeToList(0x3000, 0x303F) { Character.isDefined(it) }
+            uniq(JAPANESE_SYMBOLS_BASE, halfwidthKana, cjkPunct)
+        }
+
+        private val PINYIN_SYMBOLS = listOf(
+            "ā", "á", "ǎ", "à",
+            "ē", "é", "ě", "è",
+            "ī", "í", "ǐ", "ì",
+            "ō", "ó", "ǒ", "ò",
+            "ū", "ú", "ǔ", "ù",
+            "ǖ", "ǘ", "ǚ", "ǜ"
         )
+
+        private val ZHUYIN_SYMBOLS_BASE = listOf(
+            "ㄅ", "ㄆ", "ㄇ", "ㄈ", "ㄉ", "ㄊ", "ㄋ", "ㄌ",
+            "ㄍ", "ㄎ", "ㄏ",
+            "ㄐ", "ㄑ", "ㄒ",
+            "ㄓ", "ㄔ", "ㄕ", "ㄖ",
+            "ㄗ", "ㄘ", "ㄙ",
+            "ㄧ", "ㄨ", "ㄩ",
+            "ㄚ", "ㄛ", "ㄜ", "ㄝ",
+            "ㄞ", "ㄟ", "ㄠ", "ㄡ",
+            "ㄢ", "ㄣ", "ㄤ", "ㄥ", "ㄦ",
+            "ˉ", "ˊ", "ˇ", "ˋ", "˙"
+        )
+
+        private val ZHUYIN_SYMBOLS_FULL: List<String> by lazy {
+            val bopomofo = rangeToList(0x3100, 0x312F) { Character.isDefined(it) }
+            val bopomofoExt = rangeToList(0x31A0, 0x31BF) { Character.isDefined(it) } // Bopomofo Extended
+            uniq(ZHUYIN_SYMBOLS_BASE, bopomofo, bopomofoExt)
+        }
+
+        private val VERTICAL_PUNCT_FULL: List<String> by lazy {
+            // Vertical Forms FE10–FE1F + CJK Compatibility Forms FE30–FE4F
+            val verticalForms = rangeToList(0xFE10, 0xFE1F) { Character.isDefined(it) }
+            val cjkCompatForms = rangeToList(0xFE30, 0xFE4F) { Character.isDefined(it) }
+            uniq(verticalForms, cjkCompatForms)
+        }
+
+        // ---------------- Russian / Greek / Latin ----------------
+
+        private val RUSSIAN_LETTERS: List<String> by lazy {
+            val upper = rangeToList(0x0410, 0x042F) { isLetter(it) } // А..Я
+            val lower = rangeToList(0x0430, 0x044F) { isLetter(it) } // а..я
+            uniq(listOf("Ё", "ё"), upper, lower)
+        }
+
+        private val GREEK_LETTERS: List<String> by lazy {
+            val upper = rangeToList(0x0391, 0x03A9) { isLetter(it) }
+            val lower = rangeToList(0x03B1, 0x03C9) { isLetter(it) }
+            val extended = rangeToList(0x1F00, 0x1FFF) { isLetter(it) } // Greek Extended
+            uniq(upper, lower, listOf("ς"), extended)
+        }
+
+        private val LATIN_EXT_LETTERS: List<String> by lazy {
+            val latin1 = rangeToList(0x00C0, 0x00FF) { isLetter(it) } // Latin-1 Supplement letters
+            val extA = rangeToList(0x0100, 0x017F) { isLetter(it) } // Latin Extended-A
+            val extB = rangeToList(0x0180, 0x024F) { isLetter(it) } // Latin Extended-B
+            uniq(latin1, extA, extB, listOf("ß"))
+        }
+
+        // ---------------- Box / Syllabics / Tibetan ----------------
+
+        private val BOX_DRAWING_FULL: List<String> by lazy {
+            val box = rangeToList(0x2500, 0x257F) { isMathOrSymbol(it) } // Box Drawing
+            val block = rangeToList(0x2580, 0x259F) { isMathOrSymbol(it) } // Block Elements
+            val geom = rangeToList(0x25A0, 0x25FF) { isMathOrSymbol(it) } // Geometric Shapes（补充）
+            uniq(
+                listOf("┌", "┬", "┐", "├", "┼", "┤", "└", "┴", "┘", "─", "│", "═", "║", "╔", "╦", "╗", "╠", "╬", "╣", "╚", "╩", "╝"),
+                box, block, geom
+            )
+        }
+
+        private val CANADIAN_SYLLABICS_FULL: List<String> by lazy {
+            val base = rangeToList(0x1400, 0x167F) { isLetter(it) } // Canadian Aboriginal Syllabics
+            val ext = rangeToList(0x18B0, 0x18FF) { isLetter(it) } // Canadian Aboriginal Syllabics Extended
+            uniq(base, ext)
+        }
+
+        private val TIBETAN_CHARS_FULL: List<String> by lazy {
+            val letters = rangeToList(0x0F40, 0x0F6C) { isLetter(it) }
+            val digits = rangeToList(0x0F20, 0x0F29) { Character.isDigit(it) }
+            val punct = listOf("་", "།", "༄", "༅", "༔", "༴", "༺", "༻", "༼", "༽")
+            uniq(punct, digits, letters)
+        }
+
+        // ---------------- Radical list (keep your existing implementation) ----------------
 
         private data class StrokeGroup(val strokes: Int, val items: List<String>)
 
-        // 主部首：仍按表格标注的笔画分组（保持原顺序）
         private val MAIN_GROUPS: List<StrokeGroup> = listOf(
             StrokeGroup(1, listOf("一", "丨", "丿", "丶", "乛")),
             StrokeGroup(2, listOf("十", "厂", "匚", "卜", "冂", "八", "人", "勹", "儿", "匕", "几", "亠", "冫", "冖", "凵", "卩", "刀", "力", "又", "厶", "廴")),
@@ -368,12 +651,6 @@ class SymbolKeyboard(
             StrokeGroup(17, listOf("龠"))
         )
 
-        private val MAIN_STROKES: Map<String, Int> by lazy {
-            val m = HashMap<String, Int>(256)
-            for (g in MAIN_GROUPS) for (r in g.items) m[r] = g.strokes
-            m
-        }
-
         private val MAIN_ORDER: Map<String, Int> by lazy {
             val m = HashMap<String, Int>(256)
             var i = 0
@@ -384,132 +661,42 @@ class SymbolKeyboard(
             m
         }
 
-        // 附形部首：仓库当前表内可见的列表（83个）
-        // GF0011-2009 里还有“一”部 15 个附形未在表中列出；要补齐到99需另给出那15个字符形体
         private val VARIANTS_RAW: List<String> = listOf(
-            // 1画
             "亅",
-            // 2画
             "𠂆", "⺊", "⺆", "丷", "亻", "入", "𠘨", "㔾", "刂", "⺈",
-            // 3画
             "士", "艸", "兀", "尣", "⺌", "爿", "門", "辵", "⺕", "彑", "已", "巳", "飛", "馬",
-            // 4画
             "玉", "旡", "韋", "朩", "犭", "歺", "車", "攵", "⺜", "曰", "貝", "氵", "氺", "見", "牜", "扌", "龵", "镸",
             "長", "爫", "⺝", "風", "灬", "忄", "⺗", "母", "礻", "龍", "鳥", "𤴔",
-            // 6画
             "耂", "襾", "西", "頁", "虎", "𥫗", "𦥑", "齊", "衤", "⺶", "𦍌", "肀", "⺻", "纟", "糹",
-            // 7画
             "麥", "鹵", "𧾷", "⻏", "龜", "讠",
-            // 8画
             "齒", "黽", "⻖", "钅", "魚",
-            // 9画
             "饣", "飠"
         )
 
-        // 附形部首：按“自身笔画”手工标注（覆盖 VARIANTS_RAW 全部条目）
-        // 说明：
-        // - 这里的“自身笔画”按你提出的口径：犭=3、氵=3、⻏=2、讠=2、钅=5、纟=3、扌=3、忄=3、饣=3、⻖=2
-        // - 其它未特别提出的，当前先按表内所在笔画组（1/2/3/4/6/7/8/9）标注
-        //   （这样不会破坏你现有列表的大体分组，同时满足你关心的常见偏旁修正）
         private val VARIANT_SELF_STROKES: Map<String, Int> = linkedMapOf(
-            // 1画
             "亅" to 1,
 
-            // 2画
-            "𠂆" to 2,
-            "⺊" to 2,
-            "⺆" to 2,
-            "丷" to 2,
-            "亻" to 2,
-            "入" to 2,
-            "𠘨" to 2,
-            "㔾" to 2,
-            "刂" to 2,
-            "⺈" to 2,
+            "𠂆" to 2, "⺊" to 2, "⺆" to 2, "丷" to 2, "亻" to 2, "入" to 2, "𠘨" to 2, "㔾" to 2, "刂" to 2, "⺈" to 2,
 
-            // 3画（其中：扌/忄/纟/饣/氵/犭 按你口径修正为3）
-            "士" to 3,
-            "艸" to 3,
-            "兀" to 3,
-            "尣" to 3,
-            "⺌" to 3,
-            "爿" to 3,
-            "門" to 3,
-            "辵" to 3,
-            "⺕" to 3,
-            "彑" to 3,
-            "已" to 3,
-            "巳" to 3,
-            "飛" to 3,
-            "馬" to 3,
+            "士" to 3, "艸" to 3, "兀" to 3, "尣" to 3, "⺌" to 3, "爿" to 3, "門" to 3, "辵" to 3, "⺕" to 3, "彑" to 3,
+            "已" to 3, "巳" to 3, "飛" to 3, "馬" to 3,
 
-            // 4画（其中：犭/氵/扌/忄 修正为3，会在排序时提前；这里仍显式写3）
-            "玉" to 4,
-            "旡" to 4,
-            "韋" to 4,
-            "朩" to 4,
-            "犭" to 3,
-            "歺" to 4,
-            "車" to 4,
-            "攵" to 4,
-            "⺜" to 4,
-            "曰" to 4,
-            "貝" to 4,
-            "氵" to 3,
-            "氺" to 4,
-            "見" to 4,
-            "牜" to 4,
-            "扌" to 3,
-            "龵" to 4,
-            "镸" to 4,
-            "長" to 4,
-            "爫" to 4,
-            "⺝" to 4,
-            "風" to 4,
-            "灬" to 4,
-            "忄" to 3,
-            "⺗" to 4,
-            "母" to 4,
-            "礻" to 4,
-            "龍" to 4,
-            "鳥" to 4,
-            "𤴔" to 4,
+            "玉" to 4, "旡" to 4, "韋" to 4, "朩" to 4,
+            "犭" to 3, "歺" to 4, "車" to 4, "攵" to 4, "⺜" to 4, "曰" to 4, "貝" to 4,
+            "氵" to 3, "氺" to 4, "見" to 4, "牜" to 4, "扌" to 3, "龵" to 4, "镸" to 4,
+            "長" to 4, "爫" to 4, "⺝" to 4, "風" to 4, "灬" to 4, "忄" to 3, "⺗" to 4, "母" to 4,
+            "礻" to 4, "龍" to 4, "鳥" to 4, "𤴔" to 4,
 
-            // 6画（其中：纟 修正为3）
-            "耂" to 6,
-            "襾" to 6,
-            "西" to 6,
-            "頁" to 6,
-            "虎" to 6,
-            "𥫗" to 6,
-            "𦥑" to 6,
-            "齊" to 6,
-            "衤" to 6,
-            "⺶" to 6,
-            "𦍌" to 6,
-            "肀" to 6,
-            "⺻" to 6,
-            "纟" to 3,
-            "糹" to 6,
+            "耂" to 6, "襾" to 6, "西" to 6, "頁" to 6, "虎" to 6, "𥫗" to 6, "𦥑" to 6, "齊" to 6, "衤" to 6,
+            "⺶" to 6, "𦍌" to 6, "肀" to 6, "⺻" to 6,
+            "纟" to 3, "糹" to 6,
 
-            // 7画（其中：⻏/讠 修正为2）
-            "麥" to 7,
-            "鹵" to 7,
-            "𧾷" to 7,
-            "⻏" to 2,
-            "龜" to 7,
-            "讠" to 2,
+            "麥" to 7, "鹵" to 7, "𧾷" to 7,
+            "⻏" to 2, "龜" to 7, "讠" to 2,
 
-            // 8画（其中：⻖ 修正为2；钅 修正为5）
-            "齒" to 8,
-            "黽" to 8,
-            "⻖" to 2,
-            "钅" to 5,
-            "魚" to 8,
+            "齒" to 8, "黽" to 8, "⻖" to 2, "钅" to 5, "魚" to 8,
 
-            // 9画（其中：饣 修正为3）
-            "饣" to 3,
-            "飠" to 9
+            "饣" to 3, "飠" to 9
         )
 
         private val VARIANT_ORDER: Map<String, Int> by lazy {
@@ -532,18 +719,15 @@ class SymbolKeyboard(
             )
         }
 
-        // 最终：整体按 strokes 升序；同 strokes 内：主部首优先（typeRank=0），附形在后（typeRank=1）
         val RADICALS_GF0011_ALL_BY_STROKES: List<String> by lazy {
             val all = ArrayList<Pair<String, SortKey>>(201 + VARIANTS_RAW.size)
 
-            // 主部首：按表格笔画
             for (g in MAIN_GROUPS) {
                 for (r in g.items) {
                     all.add(r to SortKey(strokes = g.strokes, typeRank = 0, orderKey = MAIN_ORDER[r] ?: 0))
                 }
             }
 
-            // 附形部首：按自身笔画
             for (r in VARIANTS_BY_SELF_STROKES) {
                 val s = VARIANT_SELF_STROKES[r] ?: Int.MAX_VALUE
                 all.add(r to SortKey(strokes = s, typeRank = 1, orderKey = VARIANT_ORDER[r] ?: 0))
