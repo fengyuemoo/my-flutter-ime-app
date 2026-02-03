@@ -124,6 +124,9 @@ class ImeGraph(
                 keyboardControllerProvider = { keyboardController }
             )
 
+            // IMPORTANT: let KeyboardController auto-apply current theme whenever keyboard view changes
+            keyboardController.themeModeProvider = { themeController.themeMode }
+
             val layoutController = LayoutController(
                 context = context,
                 keyboardControllerProvider = { keyboardController }

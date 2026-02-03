@@ -44,6 +44,12 @@ class KeyboardController(
     var onKeyboardChanged: (() -> Unit)? = null
 
     /**
+     * Theme mode provider: used to apply theme automatically whenever keyboard view is switched/rebuilt.
+     * 0 = light, 1 = dark (matches KeyboardPrefs / ThemeController).
+     */
+    var themeModeProvider: (() -> Int)? = null
+
+    /**
      * English predict state provider: injected by router/dispatcher.
      *
      * KeyboardController does NOT own predict state; it only pushes it into current keyboard UI
@@ -214,6 +220,11 @@ class KeyboardController(
         bodyFrame.removeAllViews()
         bodyFrame.addView(target.getView())
         target.onActivate()
+
+        // IMPORTANT: apply current theme to the newly shown keyboard immediately
+        val themeMode = themeModeProvider?.invoke() ?: 0
+        target.applyTheme(themeMode)
+
         host.onToolbarUpdate()
         onKeyboardChanged?.invoke()
 

@@ -52,23 +52,19 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
 
         bindToolbarButtons()
 
-        // 初始应用一次主题（让候选条/面板颜色立即正确）
-        val themeMode = KeyboardPrefs.loadThemeMode(this)
-        applyThemeGlobally(themeMode)
+        // 初始同步一次主题：候选条/面板/键盘本体都立即正确
+        graph.themeController.load()
+        graph.themeController.apply()
 
         return mainView
     }
 
     private fun bindToolbarButtons() {
-        // 🎨 Theme button
+        // 🎨 Theme button：切一次主题就全局生效（当前键盘立即 apply；未来切到的新键盘也会自动 apply）
         ui.getThemeButton().setOnClickListener {
-            val cur = KeyboardPrefs.loadThemeMode(this)
-            val next =
-                if (cur == KeyboardPrefs.THEME_DARK) KeyboardPrefs.THEME_LIGHT else KeyboardPrefs.THEME_DARK
-            KeyboardPrefs.saveThemeMode(this, next)
-
-            // Apply theme immediately to all UI components
-            applyThemeGlobally(next)
+            if (this::graph.isInitialized) {
+                graph.themeController.toggle()
+            }
         }
 
         // ⌨️ Layout button (Qwerty ↔ T9)
@@ -79,21 +75,11 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
 
             // 真正重建 keyboard body：让 KeyboardController 切换主键盘并重建 bodyFrame 内容
             if (this::graph.isInitialized) {
-                graph.keyboardController.setLayout(next)  // 或 graph.keyboardController.toggleLayout()
+                graph.keyboardController.setLayout(next)
             } else {
                 onToolbarUpdate()
             }
         }
-    }
-
-    /**
-     * Apply theme to all UI components: ImeUi + CandidateAdapter
-     *
-     * 注意：不要调用 graph.toolbarController.applyTheme(...)，因为 toolbarController 目前没有这个方法，会导致编译失败。
-     */
-    private fun applyThemeGlobally(themeMode: Int) {
-        ui.applyTheme(themeMode)
-        ui.setThemeMode(themeMode)
     }
 
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
@@ -104,7 +90,8 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         bootstrapper.resetUiForNewInput()
         bootstrapper.reloadPrefsAndEnsureDict()
 
-        val themeMode = KeyboardPrefs.loadThemeMode(this)
-        applyThemeGlobally(themeMode)
+        // 每次显示输入法视图时再同步一次主题，确保与 prefs 一致
+        graph.themeController.load()
+        graph.themeController.apply()
     }
 }
