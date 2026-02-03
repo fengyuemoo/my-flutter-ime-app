@@ -1,12 +1,12 @@
 package com.example.myapp
 
+import android.graphics.Color
 import android.graphics.Typeface
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myapp.dict.model.Candidate
 
@@ -35,8 +35,8 @@ class CandidateAdapter(
             if (!isGrid) minWidth = dp(60)
             setPadding(dp(12), 0, dp(12), 0)
 
-            // 关键：用可随 DayNight 的背景，而不是写死白底 drawable
-            setBackgroundResource(R.drawable.ripple_ime_key)
+            // The background will be set in onBindViewHolder
+            // setBackgroundResource(R.drawable.ripple_ime_key)
 
             typeface = Typeface.SANS_SERIF
             includeFontPadding = false
@@ -51,7 +51,9 @@ class CandidateAdapter(
         val tv = holder.itemView as TextView
         tv.text = candidate.word
 
-        tv.setTextColor(ContextCompat.getColor(tv.context, R.color.ime_key_text))
+        val isDark = themeMode == 1
+        tv.setTextColor(if (isDark) Color.WHITE else Color.BLACK)
+        tv.setBackgroundColor(if (isDark) Color.parseColor("#333333") else Color.parseColor("#FFFFFF"))
 
         tv.setOnClickListener { onItemClick(candidate) }
     }

@@ -1,5 +1,6 @@
 package com.example.myapp.ime.ui
 
+import android.graphics.Color
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
@@ -165,11 +166,14 @@ class ImeUi {
         val toolbarBg = ContextCompat.getColor(rootView.context, R.color.ime_toolbar_bg)
         val accent = ContextCompat.getColor(rootView.context, R.color.ime_accent)
 
-        // 这些颜色让 night 目录接管，不再硬编码
+        val panelLight = Color.parseColor("#F0F0F0")
+        val panelDark = Color.parseColor("#2A2A2A")
+
         rootView.setBackgroundColor(bg)
         expandedPanel.setBackgroundColor(surface)
-        candidateStrip.setBackgroundColor(toolbarBg)
         toolbarContainer.setBackgroundColor(toolbarBg)
+
+        candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
 
         tvComposingPreview.setBackgroundColor(surface)
         tvComposingPreview.setTextColor(accent)
