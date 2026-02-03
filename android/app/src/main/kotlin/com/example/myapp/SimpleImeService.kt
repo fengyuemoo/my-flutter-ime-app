@@ -63,7 +63,8 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         // 🎨 Theme button
         ui.getThemeButton().setOnClickListener {
             val cur = KeyboardPrefs.loadThemeMode(this)
-            val next = if (cur == KeyboardPrefs.THEME_DARK) KeyboardPrefs.THEME_LIGHT else KeyboardPrefs.THEME_DARK
+            val next =
+                if (cur == KeyboardPrefs.THEME_DARK) KeyboardPrefs.THEME_LIGHT else KeyboardPrefs.THEME_DARK
             KeyboardPrefs.saveThemeMode(this, next)
 
             // Apply theme immediately to all UI components
@@ -74,24 +75,20 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         ui.getLayoutButton().setOnClickListener {
             val cur = KeyboardPrefs.loadUseT9Layout(this)
             KeyboardPrefs.saveUseT9Layout(this, !cur)
-            
-            // Rebuild keyboard body immediately
+
+            // Rebuild keyboard body immediately（当前先沿用 refresh；后续我们再把它改成真正重建 Qwerty/T9）
             onToolbarUpdate()
         }
     }
 
     /**
-     * Apply theme to all UI components: ImeUi + CandidateAdapter + current active keyboard
+     * Apply theme to all UI components: ImeUi + CandidateAdapter
+     *
+     * 注意：不要调用 graph.toolbarController.applyTheme(...)，因为 toolbarController 目前没有这个方法，会导致编译失败。
      */
     private fun applyThemeGlobally(themeMode: Int) {
-        // 1) Apply to ImeUi (toolbar, candidate strip, expanded panel, etc.)
         ui.applyTheme(themeMode)
         ui.setThemeMode(themeMode)
-
-        // 2) Apply to current keyboard (if ToolbarController has applyTheme, call it)
-        if (this::graph.isInitialized) {
-            graph.toolbarController.applyTheme(themeMode)
-        }
     }
 
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {

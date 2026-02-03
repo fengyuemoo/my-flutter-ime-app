@@ -182,10 +182,10 @@ class ImeUi {
         rootView.setBackgroundColor(if (themeMode == 1) bgDark else bgLight)
         expandedPanel.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
         toolbarContainer.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
-        
-        // NEW: Also apply to candidateStrip container
+
+        // Also apply to candidateStrip container
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
-        
+
         tvComposingPreview.setBackgroundColor(
             if (themeMode == 1) panelDark else Color.parseColor("#F5F5F5")
         )
