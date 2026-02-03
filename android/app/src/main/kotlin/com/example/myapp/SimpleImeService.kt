@@ -52,28 +52,45 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
 
         bindToolbarButtons()
 
-        // 初始应用一次（让候选条/面板颜色立即正确）
-        ui.applyTheme(KeyboardPrefs.loadThemeMode(this))
-        ui.setThemeMode(KeyboardPrefs.loadThemeMode(this))
+        // 初始应用一次主题（让候选条/面板颜色立即正确）
+        val themeMode = KeyboardPrefs.loadThemeMode(this)
+        applyThemeGlobally(themeMode)
 
         return mainView
     }
 
     private fun bindToolbarButtons() {
+        // 🎨 Theme button
         ui.getThemeButton().setOnClickListener {
             val cur = KeyboardPrefs.loadThemeMode(this)
             val next = if (cur == KeyboardPrefs.THEME_DARK) KeyboardPrefs.THEME_LIGHT else KeyboardPrefs.THEME_DARK
             KeyboardPrefs.saveThemeMode(this, next)
 
-            // 重新创建输入视图，保证资源夜间目录/颜色立即生效
-            setInputView(onCreateInputView())
+            // Apply theme immediately to all UI components
+            applyThemeGlobally(next)
         }
 
+        // ⌨️ Layout button (Qwerty ↔ T9)
         ui.getLayoutButton().setOnClickListener {
             val cur = KeyboardPrefs.loadUseT9Layout(this)
             KeyboardPrefs.saveUseT9Layout(this, !cur)
-            // 让键盘控制器刷新布局（你已有 refresh）
+            
+            // Rebuild keyboard body immediately
             onToolbarUpdate()
+        }
+    }
+
+    /**
+     * Apply theme to all UI components: ImeUi + CandidateAdapter + current active keyboard
+     */
+    private fun applyThemeGlobally(themeMode: Int) {
+        // 1) Apply to ImeUi (toolbar, candidate strip, expanded panel, etc.)
+        ui.applyTheme(themeMode)
+        ui.setThemeMode(themeMode)
+
+        // 2) Apply to current keyboard (if ToolbarController has applyTheme, call it)
+        if (this::graph.isInitialized) {
+            graph.toolbarController.applyTheme(themeMode)
         }
     }
 
@@ -85,7 +102,7 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         bootstrapper.resetUiForNewInput()
         bootstrapper.reloadPrefsAndEnsureDict()
 
-        ui.applyTheme(KeyboardPrefs.loadThemeMode(this))
-        ui.setThemeMode(KeyboardPrefs.loadThemeMode(this))
+        val themeMode = KeyboardPrefs.loadThemeMode(this)
+        applyThemeGlobally(themeMode)
     }
 }
