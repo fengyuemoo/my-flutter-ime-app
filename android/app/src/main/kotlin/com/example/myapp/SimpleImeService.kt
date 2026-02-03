@@ -74,10 +74,15 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         // ⌨️ Layout button (Qwerty ↔ T9)
         ui.getLayoutButton().setOnClickListener {
             val cur = KeyboardPrefs.loadUseT9Layout(this)
-            KeyboardPrefs.saveUseT9Layout(this, !cur)
+            val next = !cur
+            KeyboardPrefs.saveUseT9Layout(this, next)
 
-            // Rebuild keyboard body immediately（当前先沿用 refresh；后续我们再把它改成真正重建 Qwerty/T9）
-            onToolbarUpdate()
+            // 真正重建 keyboard body：让 KeyboardController 切换主键盘并重建 bodyFrame 内容
+            if (this::graph.isInitialized) {
+                graph.keyboardController.setLayout(next)  // 或 graph.keyboardController.toggleLayout()
+            } else {
+                onToolbarUpdate()
+            }
         }
     }
 
