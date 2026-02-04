@@ -95,6 +95,16 @@ class CandidateController(
         }
     }
 
+    /**
+     * 给 Enter 用：提交当前候选第 1 个（如果有）。
+     * 返回 true 表示已消费 Enter（已提交并清空 composing）；false 表示没有候选可提交。
+     */
+    fun commitFirstCandidateOnEnter(): Boolean {
+        if (currentCandidates.isEmpty()) return false
+        commitCandidate(currentCandidates[0])
+        return true
+    }
+
     fun commitCandidate(cand: Candidate) {
         // 数字/符号等面板模式：候选点击应直接提交 raw，不走 composing pick 逻辑
         if (keyboardController.isRawCommitMode()) {

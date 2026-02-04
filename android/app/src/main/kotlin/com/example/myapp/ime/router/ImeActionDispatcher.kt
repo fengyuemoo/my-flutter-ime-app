@@ -235,7 +235,31 @@ class ImeActionDispatcher(
 
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\\n")
         if (isEnter) {
+            val mode = mainMode()
+
+            // 1) 中文全键盘：composing 时 Enter 提交小写字母（不换行），并清空 composing
+            if (mode.isChinese && !mode.useT9Layout && session().isComposing()) {
+                val s = session()
+                val textToCommit = (s.committedPrefix + s.qwertyInput.lowercase())
+                if (textToCommit.isNotEmpty()) {
+                    commitText(textToCommit)
+                    // commitText 内部会清空 session + 预览 + composingText 并刷新候选
+                    return
+                }
+            }
+
+            // 2) 中文 T9：composing 且有候选时，Enter 提交候选第 1 个（不换行），并清空本次序列
+            if (mode.isChinese && mode.useT9Layout && session().isComposing()) {
+                if (::candidateController.isInitialized && candidateController.commitFirstCandidateOnEnter()) {
+                    // commitCandidate 会按现有排序提交第 1 候选，并清空 composing
+                    return
+                }
+            }
+
+            // 3) 其他模式：交给策略（如果策略消费了则直接返回）
             if (currentStrategy().onEnter(inputConnection())) return
+
+            // 4) 默认行为：发送系统 Enter（你的需求场景会在上面被拦截掉）
             val ic = inputConnection() ?: return
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
@@ -321,7 +345,7 @@ class ImeActionDispatcher(
 
     override fun commitSymbolFromPanel(symbol: String) {
         // Learn: record MRU for Common.
-        SymbolPrefs.recordMruCommon(context, symbol)
+        com.example.myapp.ime.prefs.SymbolPrefs.recordMruCommon(context, symbol)
 
         // Commit
         inputConnection()?.commitText(symbol, 1)
