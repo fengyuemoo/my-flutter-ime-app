@@ -183,7 +183,7 @@
 
         <Button
             android:id="@+id/t9btnsym"
-            android:text="Sym"
+            android:text="?/#"
             style="@style/KeyButton.Func"
             android:layout_weight="1" />
 

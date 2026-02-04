@@ -22,7 +22,6 @@ import com.google.android.flexbox.FlexDirection
 import com.google.android.flexbox.FlexWrap
 import com.google.android.flexbox.FlexboxLayoutManager
 import com.google.android.flexbox.JustifyContent
-import kotlin.math.min
 
 class SymbolKeyboard(
     context: Context,
@@ -82,9 +81,9 @@ class SymbolKeyboard(
 
         btnBack.setOnClickListener { ime.closeSymbolPanel() }
 
-        // ︿/﹀：改为翻页（由 dispatcher 维护 page 状态并回调 renderSymbolPanel）
-        btnUp.setOnClickListener { ime.symbolPageUp() }
-        btnDown.setOnClickListener { ime.symbolPageDown() }
+        // ︿/﹀：滚动快捷键（不分页）
+        btnUp.setOnClickListener { recycler.smoothScrollToPosition(0) }
+        btnDown.setOnClickListener { recycler.smoothScrollBy(0, recycler.height) }
 
         btnLock.setOnClickListener { ime.toggleSymbolLock() }
     }
@@ -99,52 +98,14 @@ class SymbolKeyboard(
         locked: Boolean,
         isChineseMainMode: Boolean
     ) {
+        // page 参数不用于分页：一个类目不分页（满足“不要真的翻页”）
         ensureTabsBuilt(isChineseMainMode)
         updateTabSelected(category)
 
-        val full = symbolsFor(category)
-        val pageSize = pageSizeFor(category)
-
-        val totalPages = maxOf(1, (full.size + pageSize - 1) / pageSize)
-        val effectivePage = page.coerceIn(0, totalPages - 1)
-
-        val from = effectivePage * pageSize
-        val to = min(full.size, from + pageSize)
-        val pageList = if (from in 0..full.size && from < to) full.subList(from, to) else emptyList()
-
-        val suffix = if (totalPages > 1) " ${effectivePage + 1}/$totalPages" else ""
-        btnBack.text = if (isChineseMainMode) "返回$suffix" else "🔙$suffix"
+        btnBack.text = if (isChineseMainMode) "返回" else "🔙"
         btnLock.text = if (locked) "🔒" else "🔓"
 
-        val canUp = effectivePage > 0
-        val canDown = effectivePage < totalPages - 1
-        btnUp.isEnabled = canUp
-        btnDown.isEnabled = canDown
-        btnUp.alpha = if (canUp) 1.0f else 0.35f
-        btnDown.alpha = if (canDown) 1.0f else 0.35f
-
-        adapter.submit(pageList)
-        recycler.scrollToPosition(0)
-    }
-
-    private fun pageSizeFor(category: ImeActions.SymbolCategory): Int {
-        return when (category) {
-            ImeActions.SymbolCategory.WEB -> 72
-            ImeActions.SymbolCategory.EMAIL -> 72
-            ImeActions.SymbolCategory.KAOMOJI -> 60
-            ImeActions.SymbolCategory.MATH -> 72
-            ImeActions.SymbolCategory.SPECIAL -> 84
-            ImeActions.SymbolCategory.ARROWS -> 84
-            ImeActions.SymbolCategory.BOX -> 84
-            ImeActions.SymbolCategory.SERIAL -> 84
-            ImeActions.SymbolCategory.VERTICAL -> 84
-            ImeActions.SymbolCategory.RADICALS -> 84
-            ImeActions.SymbolCategory.SYLLABICS -> 84
-            ImeActions.SymbolCategory.TIBETAN -> 84
-            ImeActions.SymbolCategory.JAPANESE -> 72
-            ImeActions.SymbolCategory.IPA -> 84
-            else -> 60
-        }
+        adapter.submit(symbolsFor(category))
     }
 
     private fun ensureTabsBuilt(isChineseMainMode: Boolean) {
@@ -304,9 +265,7 @@ class SymbolKeyboard(
                 "【", "】", "「", "」", "『", "』",
                 "—", "——", "·", "～", "…",
                 "￥", "％", "＆", "＠", "＃", "＊", "＋", "－", "＝", "／", "＼", "｜"
-            ),
-            // 常用中文序号/括号变体（让中文类更“足”）
-            listOf("（", "）", "［", "］", "｛", "｝", "〈", "〉", "《", "》", "「", "」", "『", "』")
+            )
         )
 
         private val EN_SYMBOLS_FULL = uniq(
@@ -320,7 +279,7 @@ class SymbolKeyboard(
             listOf("“", "”", "‘", "’")
         )
 
-        // ---------------- Web (全面补齐：协议/域名/TLD/路径/查询/运算符) ----------------
+        // ---------------- Web ----------------
 
         private val WEB_TLDS_COMMON = listOf(
             ".com", ".net", ".org", ".edu", ".gov", ".mil", ".info", ".biz",
@@ -336,26 +295,22 @@ class SymbolKeyboard(
         )
 
         private val WEB_SYMBOLS_FULL = uniq(
-            // 协议/常见前缀
             listOf(
                 "http://", "https://", "ftp://", "ftps://", "ws://", "wss://",
                 "file://", "mailto:", "tel:", "sms:", "geo:",
                 "://", "www.", "m.", "api.", "cdn.", "static."
             ),
-            // 常见 TLD
             WEB_TLDS_COMMON,
             WEB_TLDS_COUNTRY,
-            // URL 结构片段
             listOf(
                 "/", "//", "/#", "#", "##",
                 "?", "&", "&&", "=", "==", "!=",
                 ":", ";", ".", "..", "...",
                 "-", "_", "+", "~",
                 "%", "%20", "%2F", "%3A", "%3F", "%26", "%3D", "%23",
-                "@", ":", ":80", ":443",
+                "@", ":80", ":443",
                 "()", "[]", "{}", "<>", "\"\"", "''"
             ),
-            // 常见路径/锚点/参数名（覆盖 Web 实际输入常见）
             listOf(
                 "/index.html", "/robots.txt", "/sitemap.xml", "/favicon.ico",
                 "/login", "/logout", "/signup", "/register",
@@ -368,7 +323,7 @@ class SymbolKeyboard(
             )
         )
 
-        // ---------------- Email (全面补齐：常见域名/别名/头字段/符号) ----------------
+        // ---------------- Email（常见域名置顶） ----------------
 
         private val EMAIL_DOMAINS_COMMON = listOf(
             "@gmail.com", "@outlook.com", "@hotmail.com", "@live.com", "@msn.com",
@@ -382,17 +337,21 @@ class SymbolKeyboard(
         )
 
         private val EMAIL_SYMBOLS_FULL = uniq(
+            // 1) 置顶：你指定的常见域名
+            EMAIL_DOMAINS_COMMON,
+
+            // 2) 常见符号与别名写法
             listOf(
                 "@", ".", "_", "-", "+",
                 "(", ")", "[", "]", "{", "}", "<", ">", "\"", "'",
                 "mailto:", "noreply@", "no-reply@", "support@", "admin@", "service@", "info@", "hr@", "jobs@",
                 "name+tag@", "user+tag@", "user.name@", "user_name@"
             ),
-            // 顶级域（给自建域输入）
+
+            // 3) 顶级域（自建域/学校/单位常用）
             listOf(".com", ".cn", ".net", ".org", ".edu", ".gov", ".io", ".ai", ".dev", ".app", ".me", ".co", ".cc", ".tv"),
-            // 常见邮箱服务商
-            EMAIL_DOMAINS_COMMON,
-            // 邮件头字段（复制粘贴邮件/写 RFC 风格内容时常用）
+
+            // 4) 邮件头字段（写邮件内容/粘贴 header 时常用）
             listOf(
                 "To:", "Cc:", "Bcc:", "From:", "Reply-To:", "Subject:",
                 "Date:", "Message-ID:", "In-Reply-To:", "References:",
@@ -401,7 +360,7 @@ class SymbolKeyboard(
             )
         )
 
-        // ---------------- Kaomoji (A：通用精选，扩到更够用) ----------------
+        // ---------------- Kaomoji ----------------
 
         private val KAOMOJI_COMMON = listOf(
             "(＾▽＾)", "(≧▽≦)", "(｡◕‿◕｡)", "(•‿•)", "(๑´ڡ`๑)", "(๑´ㅂ`๑)", "(•̀ᴗ•́)و", "(｡•̀ᴗ-)✧",
@@ -410,7 +369,7 @@ class SymbolKeyboard(
             "(°_°)", "(O_O)", "(⊙_⊙)", "(ಠ_ಠ)", "(・_・;)", "(；´Д｀)", "(；￣Д￣)", "(；ω；)", "(´；ω；`)",
             "(╥﹏╥)", "(ಥ_ಥ)", "(T_T)", "(>_<)", "(｡•́︿•̀｡)", "(´・ω・`)", "(｀・ω・´)",
             "¯\\_(ツ)_/¯", "(￣▽￣)", "(￣^￣)ゞ", "(￣︶￣)ゞ", "(¬_¬)", "(•_•)", "(•̀ᴗ•́)و✧",
-            "( ͡° ͜ʖ ͡°)", "(¬‿¬)", "(ง'̀-'́)ง", "(ง •̀_•́)ง", "(ง￣▽￣)ง",
+            "( ͡° ͜ʖ ͡°)", "(¬‿¬)", "(ง'̀-'́)ง", "(ง •̀_•́)ง",
             "(╬ಠ益ಠ)", "(ノಠ益ಠ)ノ", "(╯°□°）╯︵ ┻━┻", "(ノ°Д°)ノ︵ ┻━┻",
             "┬─┬ ノ( ゜-゜ノ)", "┬─┬ノ( º _ ºノ)",
             "(☞ﾟヮﾟ)☞", "☜(ﾟヮﾟ☜)", "(ง⌐■_■)ง", "(⌐■_■)",
@@ -426,11 +385,11 @@ class SymbolKeyboard(
                 "∈", "∉", "∩", "∪", "⊂", "⊃", "⊆", "⊇",
                 "⊕", "⊗", "⊥", "∥", "∠", "∴", "∵", "≡", "≅", "∝"
             )
-            val ops = rangeToList(0x2200, 0x22FF) { isMathOrSymbol(it) }       // Mathematical Operators
-            val supplement = rangeToList(0x2A00, 0x2AFF) { isMathOrSymbol(it) } // Supplemental Mathematical Operators
-            val letterlike = rangeToList(0x2100, 0x214F) { isMathOrSymbol(it) } // Letterlike Symbols
-            val miscA = rangeToList(0x27C0, 0x27EF) { isMathOrSymbol(it) }      // Misc Mathematical Symbols-A
-            val miscB = rangeToList(0x2980, 0x29FF) { isMathOrSymbol(it) }      // Misc Mathematical Symbols-B
+            val ops = rangeToList(0x2200, 0x22FF) { isMathOrSymbol(it) }
+            val supplement = rangeToList(0x2A00, 0x2AFF) { isMathOrSymbol(it) }
+            val letterlike = rangeToList(0x2100, 0x214F) { isMathOrSymbol(it) }
+            val miscA = rangeToList(0x27C0, 0x27EF) { isMathOrSymbol(it) }
+            val miscB = rangeToList(0x2980, 0x29FF) { isMathOrSymbol(it) }
             uniq(basic, ops, supplement, letterlike, miscA, miscB)
         }
 
@@ -447,38 +406,32 @@ class SymbolKeyboard(
         }
 
         private val SERIAL_SYMBOLS_FULL: List<String> by lazy {
-            val enclosed = rangeToList(0x2460, 0x24FF) { Character.isDefined(it) } // Enclosed Alphanumerics
-            val cjkEnclosed = rangeToList(0x3200, 0x32FF) { Character.isDefined(it) } // Enclosed CJK Letters and Months
-            val roman = rangeToList(0x2160, 0x2188) { Character.isDefined(it) } // Roman numerals
+            val enclosed = rangeToList(0x2460, 0x24FF) { Character.isDefined(it) }
+            val cjkEnclosed = rangeToList(0x3200, 0x32FF) { Character.isDefined(it) }
+            val roman = rangeToList(0x2160, 0x2188) { Character.isDefined(it) }
             uniq(
                 listOf("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"),
-                enclosed,
-                cjkEnclosed,
-                roman
+                enclosed, cjkEnclosed, roman
             )
         }
 
         private val ARROW_SYMBOLS_FULL: List<String> by lazy {
-            val basic = rangeToList(0x2190, 0x21FF) { isMathOrSymbol(it) } // Arrows
-            val supplementA = rangeToList(0x27F0, 0x27FF) { isMathOrSymbol(it) } // Supplemental Arrows-A
-            val supplementB = rangeToList(0x2900, 0x297F) { isMathOrSymbol(it) } // Supplemental Arrows-B
-            val misc = rangeToList(0x2B00, 0x2BFF) { isMathOrSymbol(it) } // Misc Symbols and Arrows（包含很多箭头）
+            val basic = rangeToList(0x2190, 0x21FF) { isMathOrSymbol(it) }
+            val supplementA = rangeToList(0x27F0, 0x27FF) { isMathOrSymbol(it) }
+            val supplementB = rangeToList(0x2900, 0x297F) { isMathOrSymbol(it) }
+            val misc = rangeToList(0x2B00, 0x2BFF) { isMathOrSymbol(it) }
             uniq(listOf("↩", "↪", "↺", "↻", "⬅", "➡", "⬆", "⬇"), basic, supplementA, supplementB, misc)
         }
 
         private val SPECIAL_SYMBOLS_FULL: List<String> by lazy {
-            val currency = rangeToList(0x20A0, 0x20CF) { isMathOrSymbol(it) } // Currency Symbols
-            val miscSymbols = rangeToList(0x2600, 0x26FF) { isMathOrSymbol(it) } // Misc Symbols
-            val dingbats = rangeToList(0x2700, 0x27BF) { isMathOrSymbol(it) } // Dingbats
-            val geom = rangeToList(0x25A0, 0x25FF) { isMathOrSymbol(it) } // Geometric Shapes
-            val miscTech = rangeToList(0x2300, 0x23FF) { isMathOrSymbol(it) } // Misc Technical
+            val currency = rangeToList(0x20A0, 0x20CF) { isMathOrSymbol(it) }
+            val miscSymbols = rangeToList(0x2600, 0x26FF) { isMathOrSymbol(it) }
+            val dingbats = rangeToList(0x2700, 0x27BF) { isMathOrSymbol(it) }
+            val geom = rangeToList(0x25A0, 0x25FF) { isMathOrSymbol(it) }
+            val miscTech = rangeToList(0x2300, 0x23FF) { isMathOrSymbol(it) }
             uniq(
                 listOf("©", "®", "™", "✓", "✗", "★", "☆", "♪", "♬", "•", "°", "‰", "§"),
-                currency,
-                miscSymbols,
-                dingbats,
-                geom,
-                miscTech
+                currency, miscSymbols, dingbats, geom, miscTech
             )
         }
 
@@ -492,7 +445,6 @@ class SymbolKeyboard(
         )
 
         private val IPA_SYMBOLS_FULL: List<String> by lazy {
-            // IPA Extensions 0250–02AF + Spacing Modifier Letters 02B0–02FF（过滤掉组合附加符）
             val ipaExt = rangeToList(0x0250, 0x02AF) { cp ->
                 val t = Character.getType(cp)
                 (t == Character.LOWERCASE_LETTER.toInt() || t == Character.MODIFIER_LETTER.toInt() || t == Character.OTHER_LETTER.toInt())
@@ -541,9 +493,7 @@ class SymbolKeyboard(
         )
 
         private val JAPANESE_SYMBOLS_FULL: List<String> by lazy {
-            // Halfwidth and Fullwidth Forms（含半角片假名与部分日文符号）
             val halfwidthKana = rangeToList(0xFF61, 0xFF9F) { Character.isDefined(it) }
-            // CJK Symbols and Punctuation（含日文常见符号如「」等，补充一些）
             val cjkPunct = rangeToList(0x3000, 0x303F) { Character.isDefined(it) }
             uniq(JAPANESE_SYMBOLS_BASE, halfwidthKana, cjkPunct)
         }
@@ -572,12 +522,11 @@ class SymbolKeyboard(
 
         private val ZHUYIN_SYMBOLS_FULL: List<String> by lazy {
             val bopomofo = rangeToList(0x3100, 0x312F) { Character.isDefined(it) }
-            val bopomofoExt = rangeToList(0x31A0, 0x31BF) { Character.isDefined(it) } // Bopomofo Extended
+            val bopomofoExt = rangeToList(0x31A0, 0x31BF) { Character.isDefined(it) }
             uniq(ZHUYIN_SYMBOLS_BASE, bopomofo, bopomofoExt)
         }
 
         private val VERTICAL_PUNCT_FULL: List<String> by lazy {
-            // Vertical Forms FE10–FE1F + CJK Compatibility Forms FE30–FE4F
             val verticalForms = rangeToList(0xFE10, 0xFE1F) { Character.isDefined(it) }
             val cjkCompatForms = rangeToList(0xFE30, 0xFE4F) { Character.isDefined(it) }
             uniq(verticalForms, cjkCompatForms)
@@ -586,31 +535,31 @@ class SymbolKeyboard(
         // ---------------- Russian / Greek / Latin ----------------
 
         private val RUSSIAN_LETTERS: List<String> by lazy {
-            val upper = rangeToList(0x0410, 0x042F) { isLetter(it) } // А..Я
-            val lower = rangeToList(0x0430, 0x044F) { isLetter(it) } // а..я
+            val upper = rangeToList(0x0410, 0x042F) { isLetter(it) }
+            val lower = rangeToList(0x0430, 0x044F) { isLetter(it) }
             uniq(listOf("Ё", "ё"), upper, lower)
         }
 
         private val GREEK_LETTERS: List<String> by lazy {
             val upper = rangeToList(0x0391, 0x03A9) { isLetter(it) }
             val lower = rangeToList(0x03B1, 0x03C9) { isLetter(it) }
-            val extended = rangeToList(0x1F00, 0x1FFF) { isLetter(it) } // Greek Extended
+            val extended = rangeToList(0x1F00, 0x1FFF) { isLetter(it) }
             uniq(upper, lower, listOf("ς"), extended)
         }
 
         private val LATIN_EXT_LETTERS: List<String> by lazy {
-            val latin1 = rangeToList(0x00C0, 0x00FF) { isLetter(it) } // Latin-1 Supplement letters
-            val extA = rangeToList(0x0100, 0x017F) { isLetter(it) } // Latin Extended-A
-            val extB = rangeToList(0x0180, 0x024F) { isLetter(it) } // Latin Extended-B
+            val latin1 = rangeToList(0x00C0, 0x00FF) { isLetter(it) }
+            val extA = rangeToList(0x0100, 0x017F) { isLetter(it) }
+            val extB = rangeToList(0x0180, 0x024F) { isLetter(it) }
             uniq(latin1, extA, extB, listOf("ß"))
         }
 
         // ---------------- Box / Syllabics / Tibetan ----------------
 
         private val BOX_DRAWING_FULL: List<String> by lazy {
-            val box = rangeToList(0x2500, 0x257F) { isMathOrSymbol(it) } // Box Drawing
-            val block = rangeToList(0x2580, 0x259F) { isMathOrSymbol(it) } // Block Elements
-            val geom = rangeToList(0x25A0, 0x25FF) { isMathOrSymbol(it) } // Geometric Shapes（补充）
+            val box = rangeToList(0x2500, 0x257F) { isMathOrSymbol(it) }
+            val block = rangeToList(0x2580, 0x259F) { isMathOrSymbol(it) }
+            val geom = rangeToList(0x25A0, 0x25FF) { isMathOrSymbol(it) }
             uniq(
                 listOf("┌", "┬", "┐", "├", "┼", "┤", "└", "┴", "┘", "─", "│", "═", "║", "╔", "╦", "╗", "╠", "╬", "╣", "╚", "╩", "╝"),
                 box, block, geom
@@ -618,8 +567,8 @@ class SymbolKeyboard(
         }
 
         private val CANADIAN_SYLLABICS_FULL: List<String> by lazy {
-            val base = rangeToList(0x1400, 0x167F) { isLetter(it) } // Canadian Aboriginal Syllabics
-            val ext = rangeToList(0x18B0, 0x18FF) { isLetter(it) } // Canadian Aboriginal Syllabics Extended
+            val base = rangeToList(0x1400, 0x167F) { isLetter(it) }
+            val ext = rangeToList(0x18B0, 0x18FF) { isLetter(it) }
             uniq(base, ext)
         }
 
@@ -630,7 +579,7 @@ class SymbolKeyboard(
             uniq(punct, digits, letters)
         }
 
-        // ---------------- Radical list (keep your existing implementation) ----------------
+        // ---------------- Radical list (保持你仓库现有逻辑) ----------------
 
         private data class StrokeGroup(val strokes: Int, val items: List<String>)
 

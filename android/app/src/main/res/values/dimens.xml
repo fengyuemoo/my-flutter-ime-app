@@ -17,4 +17,7 @@
     <dimen name="ime_row_height">46dp</dimen>
     <dimen name="ime_t9_main_height">180dp</dimen>
     <dimen name="ime_toolbar_height">46dp</dimen>
+
+    <!-- New: keyboard body total height (main + bottom row) -->
+    <dimen name="ime_keyboard_body_height">226dp</dimen>
 </resources>
