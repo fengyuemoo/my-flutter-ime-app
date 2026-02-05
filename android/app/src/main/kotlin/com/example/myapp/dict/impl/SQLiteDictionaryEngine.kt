@@ -51,7 +51,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             val currentStack = pinyinStack.subList(0, i)
             val pinyinStr = currentStack.joinToString("").lowercase()
 
-            // 这里保持“严格等值匹配”，避免 hancheng -> hanchenglu 这种长词联想
             val res = queryDb(
                 db = db,
                 input = pinyinStr,
@@ -65,9 +64,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             )
 
             for (c in res) {
-                // 回退到单音节时，只给单字，避免“han”出现一堆多字词组
                 if (i == 1 && c.word.length != 1) continue
-
                 if (seenWords.add(c.word)) {
                     resultList.add(c.copy(pinyinCount = i))
                 }
@@ -84,7 +81,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val db = dbHelper.readableDatabase
         val limit = 300
 
-        // 对字母输入统一用小写去查库（键盘输入是大写时也能命中 year/yg/...）
         val norm = if (!isT9) input.lowercase() else input
 
         if (isChineseMode && !isT9 && norm.contains("'")) {
@@ -115,7 +111,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             }
         }
 
-        // 0) 中文模式仍保留：完整英文词 + 少量可控变体（s / es）
+        // 0) 中文模式：完整英文词 + 少量可控变体（s / es）
         val exactEn = queryExactEnglish(db, norm, isT9)
         addUnique(exactEn)
 
@@ -125,7 +121,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             addUnique(queryExactEnglish(db, "${norm}es", false))
         }
 
-        // 1) 中文 T9：整串 digits + 单字回退（保持你已实现的“无长词联想”）
+        // 1) 中文 T9：整串 digits + 单字回退
         if (isT9) {
             val exactDigits = queryDb(
                 db = db,
@@ -150,12 +146,11 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 2) 中文 QWERTY：判断是否“完整拼音音节串”
+        // 2) 中文 QWERTY：完整拼音音节串 -> 严格等值 + 音节回退
         val syllables = splitConcatPinyinToSyllables(norm)
         val isCompletePinyin = syllables.isNotEmpty() && syllables.joinToString("") == norm
 
         if (isCompletePinyin) {
-            // 2.1 全长严格等值匹配（禁止出现 hanchenglu 这类更长词）
             addUnique(
                 queryDb(
                     db = db,
@@ -170,7 +165,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 )
             )
 
-            // 2.2 按音节回退（hancheng -> han）
             for (k in (syllables.size - 1) downTo 1) {
                 if (resultList.size >= limit) break
 
@@ -204,15 +198,12 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 3) 非完整拼音：分两种情况处理，避免“hanc/year”又冒出长词联想
-
-        // 3.A) “部分拼音 + 下一音节首字母”：例如 hanc / hanch / hanche
+        // 3) 非完整拼音：避免长词联想，同时保留缩写词组（yg/ygr/hy/py）
         val partial = splitPartialPinyinPrefix(norm)
         if (partial != null) {
             val fullSyllablePrefix = partial.fullSyllables.joinToString("")
             val desiredWordLen = partial.fullSyllables.size + 1
 
-            // 只给“2字词”（或 3 字、取决于 desiredWordLen）——直接砍掉 韩村河/汉城路/汉初三杰 等长词
             addUnique(
                 queryChinesePrefixWithWordLenEq(
                     db = db,
@@ -222,7 +213,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 )
             )
 
-            // 再追加：回退到“已完成的最后一个整音节”的单字（han -> 韩/喊/汗/汉...），以及更短前缀单字（ha/h）
             if (fullSyllablePrefix.isNotEmpty()) {
                 addUnique(querySingleCharByInputExact(db, fullSyllablePrefix, limit = 220))
                 var len = fullSyllablePrefix.length - 1
@@ -236,8 +226,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 3.B) 命中“完整英文词”（例如 year）：英文放前排后，中文只给单字回退，避免出现联想长词
-        if (exactEn.isNotEmpty() && isAsciiLetters) {
+        // 3.B) 只有“较长英文词”（例如 year）才启用清爽模式；2~3 字母缩写(yg/hy/py)不要走这里
+        if (exactEn.isNotEmpty() && isAsciiLetters && norm.length >= 4) {
             val first = norm.take(1)
             if (first.isNotEmpty()) {
                 addUnique(querySingleCharByInputPrefix(db, first).take(200))
@@ -245,15 +235,15 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 3.C) 其他缩写/前缀（yg 等）：允许 2 字缩写词组，但仍限制最长词长，避免长词刷屏
+        // 3.C) 缩写词组：按“输入长度 = 词长”匹配（yg->2字，ygr->3字）
         if (isAsciiLetters && norm.length >= 2) {
-            addUnique(queryAcronymPrefixByWordLenEq(db, prefix = norm, wordLen = 2, limit = 100))
+            addUnique(queryAcronymPrefixByWordLenEq(db, prefix = norm, wordLen = norm.length, limit = 160))
         }
 
-        // 再给少量“前缀匹配”的中文词，但限制 word_len <= 2（避免韩村河/汉初三杰等长词）
+        // 控制噪声：最多只补充 2 字以内的前缀中文词
         addUnique(queryChinesePrefixWithMaxWordLen(db, prefix = norm, maxWordLen = 2, limit = 120))
 
-        // 最后补单字（按首字母/前缀）
+        // 单字回退（按首字母）
         addUnique(querySingleCharByInputPrefix(db, norm.take(1)).take(200))
 
         return resultList
@@ -264,15 +254,10 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val remainder: String
     )
 
-    /**
-     * 在无法完整切分时，尝试找到“最长的可切分前缀”。
-     * 例：hanc -> fullSyllables=[han], remainder="c"
-     */
     private fun splitPartialPinyinPrefix(rawLower: String): PartialPinyinPrefix? {
         if (rawLower.isEmpty()) return null
         if (!rawLower.all { it in 'a'..'z' }) return null
 
-        // 从长到短找一个能完整切分的前缀（且必须留下 remainder）
         for (cut in (rawLower.length - 1) downTo 1) {
             val prefix = rawLower.substring(0, cut)
             val syl = splitConcatPinyinToSyllables(prefix)
@@ -285,8 +270,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         }
         return null
     }
-
-    // -------- 拼音切分：hancheng -> [han, cheng]；无法完全切分则返回 empty --------
 
     private fun splitConcatPinyinToSyllables(rawLower: String): List<String> {
         if (rawLower.isEmpty()) return emptyList()
@@ -314,8 +297,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         }
         return out
     }
-
-    // ---------------- 撇号模式（保持不变） ----------------
 
     private fun getSuggestionsWithApostrophe(db: SQLiteDatabase, rawInput: String): List<Candidate> {
         val parts = rawInput.split("'").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
@@ -533,7 +514,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
 
             if (exactMatch) {
                 if (lang == 0) {
-                    // 中文：严格等值匹配（用于“完整拼音/完整 digits”场景，杜绝长词联想）
                     if (!isT9) {
                         selection =
                             "($colToQuery = ? OR ${DictionaryDbHelper.COL_ACRONYM} = ?) AND ${DictionaryDbHelper.COL_LANG} = ?"
