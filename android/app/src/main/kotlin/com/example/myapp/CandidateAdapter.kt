@@ -1,6 +1,5 @@
 package com.example.myapp
 
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.text.TextUtils
 import android.util.TypedValue
@@ -28,35 +27,28 @@ class CandidateAdapter(
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val ctx = parent.context
-
         fun Int.dp(): Int = (this * ctx.resources.displayMetrics.density).roundToInt()
 
         val tv = TextView(ctx).apply {
             val width = if (isGrid) ViewGroup.LayoutParams.MATCH_PARENT else ViewGroup.LayoutParams.WRAP_CONTENT
-            layoutParams = ViewGroup.MarginLayoutParams(width, if (isGrid) 44.dp() else 40.dp()).apply {
-                if (!isGrid) setMargins(4.dp(), 0, 4.dp(), 0) else setMargins(0, 0, 0, 0)
+            layoutParams = ViewGroup.MarginLayoutParams(width, if (isGrid) 42.dp() else 40.dp()).apply {
+                if (!isGrid) setMargins(3.dp(), 0, 3.dp(), 0) else setMargins(0, 0, 0, 0)
             }
 
             gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
 
-            // 更紧凑一点，争取一屏显示更多候选（单字目标 7 个）
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-
-            // 横向模式：减少 padding + 降低 minWidth（原来 minWidth=100px、padding=30px 更占宽）[旧逻辑见原文件]
             if (!isGrid) {
-                minWidth = 44.dp()
-                setPadding(10.dp(), 0, 10.dp(), 0)
+                minWidth = 38.dp()
+                setPadding(6.dp(), 0, 6.dp(), 0)
             } else {
-                setPadding(12.dp(), 0, 12.dp(), 0)
+                setPadding(10.dp(), 0, 10.dp(), 0)
             }
 
-            // 统一单行显示，长词组省略号（避免撑爆宽度）
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
 
-            // 使用 drawable 做圆角/描边，后面用 tint 适配深浅色
             setBackgroundResource(R.drawable.bg_candidate_cell)
-
             typeface = android.graphics.Typeface.SANS_SERIF
         }
 
@@ -71,14 +63,11 @@ class CandidateAdapter(
         val isDark = themeMode == 1
         tv.setTextColor(if (isDark) Color.WHITE else Color.BLACK)
 
-        // 不要 setBackgroundColor（会覆盖 bg_candidate_cell）
+        // 关键：不要 setBackgroundColor（会覆盖 bg_candidate_cell 的圆角/描边等效果）
         val bg = tv.background
         if (bg != null) {
-            val tintColor = if (isDark) Color.parseColor("#2F2F2F") else Color.parseColor("#FFFFFF")
+            val tintColor = if (isDark) Color.parseColor("#2B2B2B") else Color.parseColor("#FFFFFF")
             bg.mutate().setTint(tintColor)
-        } else {
-            // 极端兜底
-            tv.backgroundTintList = ColorStateList.valueOf(if (isDark) Color.parseColor("#2F2F2F") else Color.WHITE)
         }
 
         tv.setOnClickListener { onItemClick(candidate) }
