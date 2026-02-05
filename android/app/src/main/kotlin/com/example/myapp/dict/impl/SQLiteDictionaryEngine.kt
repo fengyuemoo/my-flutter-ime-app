@@ -21,9 +21,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
     private val pinyinSet: Set<String> = allPinyins.toHashSet()
     private val maxPinyinLen: Int = allPinyins.maxOfOrNull { it.length } ?: 0
 
-    /**
-     * 由 DictionaryInstaller 安装完 dictionary.db 后调用。
-     */
     override fun setReady(ready: Boolean, info: String?) {
         isLoaded = ready
         if (info != null) debugInfo = info
@@ -43,10 +40,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return possiblePinyins.toList()
     }
 
-    /**
-     * 中文 T9（有 pinyinStack 时）：只做“整音节精准匹配”，并按音节数回退。
-     * 关键点：不允许出现超过当前拼音串的候选（例如 hancheng 不应出现 hanchenglu）。
-     */
     override fun getSuggestionsFromPinyinStack(pinyinStack: List<String>, rawDigits: String): List<Candidate> {
         if (!isLoaded) return emptyList()
         val db = dbHelper.readableDatabase
@@ -56,8 +49,9 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
 
         for (i in pinyinStack.size downTo 1) {
             val currentStack = pinyinStack.subList(0, i)
-            val pinyinStr = currentStack.joinToString("")
+            val pinyinStr = currentStack.joinToString("").lowercase()
 
+            // 这里保持“严格等值匹配”，避免 hancheng -> hanchenglu 这种长词联想
             val res = queryDb(
                 db = db,
                 input = pinyinStr,
@@ -66,12 +60,12 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 limit = if (i == pinyinStack.size) 80 else 50,
                 offset = 0,
                 matchedLen = pinyinStr.length,
-                exactMatch = true,          // 改为严格等值匹配（见 queryDb）
+                exactMatch = true,
                 pinyinFilter = null
             )
 
             for (c in res) {
-                // i==1 时（回退到单字拼音），只允许单字，避免“han”出来一堆多字词组
+                // 回退到单音节时，只给单字，避免“han”出现一堆多字词组
                 if (i == 1 && c.word.length != 1) continue
 
                 if (seenWords.add(c.word)) {
@@ -84,39 +78,32 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return resultList
     }
 
-    /**
-     * 候选规则（你这次的需求）：
-     * - 中文 QWERTY：只给“输入串完全等值”的词组候选；然后按“整音节”回退；最后才给单字的前缀回退（ha/h）。
-     * - 中文 T9 digits：只给“digits 完全等值”的候选；然后只给单字的 digits 前缀回退（避免长词联想）。
-     * - 中文模式仍保留：完整英文单词（以及极少量可控变体）可以在前排（你之前那条需求），这里继续提供 queryExactEnglish 供上层排序层使用。
-     */
     override fun getSuggestions(input: String, isT9: Boolean, isChineseMode: Boolean): List<Candidate> {
         if (!isLoaded) return emptyList()
 
         val db = dbHelper.readableDatabase
         val limit = 300
 
-        // 你已有的撇号分词逻辑保持不变（它本身是一个“特殊输入模式”）
-        if (isChineseMode && !isT9 && input.contains("'")) {
-            return getSuggestionsWithApostrophe(db, input)
+        // 对字母输入统一用小写去查库（键盘输入是大写时也能命中 year/yg/...）
+        val norm = if (!isT9) input.lowercase() else input
+
+        if (isChineseMode && !isT9 && norm.contains("'")) {
+            return getSuggestionsWithApostrophe(db, norm)
         }
 
-        // 英文模式：保持原逻辑
         if (!isChineseMode) {
             return queryDb(
                 db = db,
-                input = input,
+                input = norm,
                 isT9 = isT9,
                 lang = 1,
                 limit = limit,
                 offset = 0,
-                matchedLen = input.length,
+                matchedLen = norm.length,
                 exactMatch = false,
                 pinyinFilter = null
             )
         }
-
-        // ---------------- 中文模式：严格匹配 + 回退（无联想长词） ----------------
 
         val resultList = ArrayList<Candidate>()
         val seenWords = HashSet<String>()
@@ -128,100 +115,125 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             }
         }
 
-        // 0) 先把“完整英文单词（少量）”放进结果（上层会再做中文优先/英文精确词置顶策略）
-        addUnique(queryExactEnglish(db, input, isT9))
+        // 0) 中文模式仍保留：完整英文词 + 少量可控变体（s / es）
+        addUnique(queryExactEnglish(db, norm, isT9))
+        if (!isT9 && norm.all { it in 'a'..'z' } && norm.length in 2..32) {
+            addUnique(queryExactEnglish(db, "${norm}s", false))
+            addUnique(queryExactEnglish(db, "${norm}es", false))
+        }
 
-        // 1) 中文 T9（raw digits）：只做 digits 等值匹配，禁止更长 digits 的联想词
+        // 1) 中文 T9：先尝试“整串 digits 等值匹配”（用于 42624364 这种）
         if (isT9) {
-            addUnique(
-                queryDb(
-                    db = db,
-                    input = input,
-                    isT9 = true,
-                    lang = 0,
-                    limit = 120,
-                    offset = 0,
-                    matchedLen = input.length,
-                    exactMatch = true,       // digits 等值匹配（见 queryDb）
-                    pinyinFilter = null
-                )
+            val exactDigits = queryDb(
+                db = db,
+                input = norm,
+                isT9 = true,
+                lang = 0,
+                limit = 120,
+                offset = 0,
+                matchedLen = norm.length,
+                exactMatch = true,
+                pinyinFilter = null
             )
+            addUnique(exactDigits)
 
-            // digits 的回退：只给单字（word_len=1），按 digits 前缀逐步缩短
-            var cutLen = input.length - 1
+            // 无论是否有整串精确词，都追加“单字前缀回退”（只查 word_len=1，不会出现好成绩/汉城路之类长词）
+            var cutLen = norm.length
             while (cutLen >= 1 && resultList.size < limit) {
-                val prefix = input.substring(0, cutLen)
-                addUnique(querySingleCharByT9Prefix(db, prefix, limit = 60))
+                val prefix = norm.substring(0, cutLen)
+                addUnique(querySingleCharByT9Prefix(db, prefix, limit = if (cutLen == norm.length) 200 else 80))
                 cutLen--
             }
 
             return resultList
         }
 
-        // 2) 中文 QWERTY（拼音串）：按整音节切分，做“整音节回退”
-        val lower = input.lowercase()
-        val syllables = splitConcatPinyinToSyllables(lower)
+        // 2) 中文 QWERTY：判断是否“完整拼音音节串”
+        val syllables = splitConcatPinyinToSyllables(norm)
+        val isCompletePinyin = syllables.isNotEmpty() && syllables.joinToString("") == norm
 
-        if (syllables.isEmpty()) {
-            // 不能切分成合法拼音音节（用户可能输入未完成）：只给单字前缀回退，避免长词联想
-            addUnique(querySingleCharByInputPrefix(db, lower).take(120))
+        if (isCompletePinyin) {
+            // 2.1 全长严格等值匹配（禁止出现 hanchenglu 这类更长词）
+            addUnique(
+                queryDb(
+                    db = db,
+                    input = norm,
+                    isT9 = false,
+                    lang = 0,
+                    limit = 120,
+                    offset = 0,
+                    matchedLen = norm.length,
+                    exactMatch = true,
+                    pinyinFilter = null
+                )
+            )
+
+            // 2.2 按音节回退（hancheng -> han）
+            for (k in (syllables.size - 1) downTo 1) {
+                if (resultList.size >= limit) break
+
+                val prefix = syllables.take(k).joinToString("")
+                if (k >= 2) {
+                    addUnique(
+                        queryDb(
+                            db = db,
+                            input = prefix,
+                            isT9 = false,
+                            lang = 0,
+                            limit = 80,
+                            offset = 0,
+                            matchedLen = prefix.length,
+                            exactMatch = true,
+                            pinyinFilter = null
+                        )
+                    )
+                } else {
+                    // 单音节：只给单字精确匹配（han -> 韩/喊/汗/汉...）
+                    addUnique(querySingleCharByInputExact(db, prefix, limit = 220))
+
+                    // 单音节之后再回退到更短前缀单字（ha / h）
+                    var len = prefix.length - 1
+                    while (len >= 1 && resultList.size < limit) {
+                        val p = prefix.substring(0, len)
+                        addUnique(querySingleCharByInputPrefix(db, p).take(150))
+                        len--
+                    }
+                }
+            }
+
             return resultList
         }
 
-        // 2.1 全长精准匹配：input 等值
-        addUnique(
-            queryDb(
-                db = db,
-                input = syllables.joinToString(""),
-                isT9 = false,
-                lang = 0,
-                limit = 120,
-                offset = 0,
-                matchedLen = lower.length,
-                exactMatch = true,          // 改为严格等值匹配（见 queryDb）
-                pinyinFilter = null
-            )
-        )
+        // 3) 非完整拼音（yg / yig / hanc / year ...）：走“前缀/缩写”模式，恢复旧体验
+        // 3.1 优先给“首字母缩写 + 音节数等于输入长度”的词组（yg -> 一个/应该）
+        if (norm.all { it in 'a'..'z' } && norm.isNotEmpty()) {
+            addUnique(queryAcronymPrefixByWordLenEq(db, prefix = norm, wordLen = norm.length, limit = 80))
+        }
 
-        // 2.2 逐字（逐音节）回退：hancheng -> han；三音节就回退到前两音节，再到前一音节
-        for (k in (syllables.size - 1) downTo 1) {
-            if (resultList.size >= limit) break
-
-            val prefix = syllables.take(k).joinToString("")
-
-            if (k >= 2) {
-                // 多音节：只给“词组精准匹配”（等值）
-                addUnique(
-                    queryDb(
-                        db = db,
-                        input = prefix,
-                        isT9 = false,
-                        lang = 0,
-                        limit = 80,
-                        offset = 0,
-                        matchedLen = prefix.length,
-                        exactMatch = true,
-                        pinyinFilter = null
-                    )
+        // 3.2 再给“拼音前缀 / 缩写前缀”候选，并按长度从短到长（不会只剩一个大写原文）
+        var currentLen = norm.length
+        while (currentLen >= 1 && resultList.size < limit) {
+            val sub = norm.substring(0, currentLen)
+            addUnique(
+                queryDb(
+                    db = db,
+                    input = sub,
+                    isT9 = false,
+                    lang = 0,
+                    limit = if (currentLen == norm.length) 70 else 40,
+                    offset = 0,
+                    matchedLen = currentLen,
+                    exactMatch = false, // prefix
+                    pinyinFilter = null
                 )
-            } else {
-                // 单音节：只给单字精准匹配（han 只给“韩/喊/汗/汉...”这类，不给“汉城路”）
-                addUnique(querySingleCharByInputExact(db, prefix, limit = 200))
-
-                // 单音节匹配完后：才允许更短前缀单字回退（ha/h）
-                var len = prefix.length - 1
-                while (len >= 1 && resultList.size < limit) {
-                    val p = prefix.substring(0, len)
-                    addUnique(querySingleCharByInputPrefix(db, p).take(120))
-                    len--
-                }
-            }
+            )
+            currentLen--
         }
 
         return resultList
     }
 
-    // ---------------- 拼音切分：把 "hancheng" 切成 ["han","cheng"] ----------------
+    // -------- 拼音切分：hancheng -> [han, cheng]；无法完全切分则返回 empty --------
 
     private fun splitConcatPinyinToSyllables(rawLower: String): List<String> {
         if (rawLower.isEmpty()) return emptyList()
@@ -250,7 +262,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return out
     }
 
-    // ---------------- 原有撇号模式逻辑（不改） ----------------
+    // ---------------- 撇号模式（保持不变） ----------------
 
     private fun getSuggestionsWithApostrophe(db: SQLiteDatabase, rawInput: String): List<Candidate> {
         val parts = rawInput.split("'").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
@@ -294,6 +306,31 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+        return list
+    }
+
+    private fun queryAcronymPrefixByWordLenEq(db: SQLiteDatabase, prefix: String, wordLen: Int, limit: Int): List<Candidate> {
+        val list = ArrayList<Candidate>()
+        try {
+            val sql = """
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}
+                FROM ${DictionaryDbHelper.TABLE_NAME}
+                WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
+                  AND ${DictionaryDbHelper.COL_LANG} = 0
+                  AND ${DictionaryDbHelper.COL_WORD_LEN} = ?
+                ORDER BY ${DictionaryDbHelper.COL_FREQ} DESC
+                LIMIT ?
+            """.trimIndent()
+
+            db.rawQuery(sql, arrayOf("${prefix}%", wordLen.toString(), limit.toString())).use {
+                while (it.moveToNext()) {
+                    val word = it.getString(0)
+                    val freq = it.getInt(1)
+                    list.add(Candidate(word, prefix, freq, matchedLength = prefix.length, pinyinCount = 0))
+                }
+            }
+        } catch (_: Exception) {
         }
         return list
     }
@@ -373,8 +410,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    // ---------------- queryDb：把“exactMatch=true”的中文从 LIKE 改成严格等值 ----------------
-
     private fun queryDb(
         db: SQLiteDatabase,
         input: String,
@@ -395,7 +430,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
 
             if (exactMatch) {
                 if (lang == 0) {
-                    // 中文：严格等值匹配，禁止 input% 造成的“更长联想词”
+                    // 中文：严格等值匹配（用于“完整拼音/完整 digits”场景，杜绝长词联想）
                     if (!isT9) {
                         selection =
                             "($colToQuery = ? OR ${DictionaryDbHelper.COL_ACRONYM} = ?) AND ${DictionaryDbHelper.COL_LANG} = ?"
@@ -460,17 +495,16 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    // ---------------- 英文完整词（少量）保持原逻辑 ----------------
-
     private fun queryExactEnglish(db: SQLiteDatabase, input: String, isT9: Boolean): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
             val col = if (isT9) DictionaryDbHelper.COL_T9 else DictionaryDbHelper.COL_INPUT
+            // 用 lower(...) 做大小写无关匹配，避免 YEAR 查不到 year
             db.query(
                 DictionaryDbHelper.TABLE_NAME,
                 arrayOf(DictionaryDbHelper.COL_WORD, DictionaryDbHelper.COL_FREQ),
-                "$col = ? AND ${DictionaryDbHelper.COL_LANG} = 1",
-                arrayOf(input),
+                "lower($col) = ? AND ${DictionaryDbHelper.COL_LANG} = 1",
+                arrayOf(input.lowercase()),
                 null,
                 null,
                 "${DictionaryDbHelper.COL_FREQ} DESC",
