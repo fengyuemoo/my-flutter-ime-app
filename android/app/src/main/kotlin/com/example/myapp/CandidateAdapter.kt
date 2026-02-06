@@ -1,6 +1,12 @@
 package com.example.myapp
 
+import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.os.Build
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -29,6 +35,7 @@ class CandidateAdapter(
         val ctx = parent.context
         fun Int.dp(): Int = (this * ctx.resources.displayMetrics.density).roundToInt()
 
+        // 保留你已经调好的“7个刚好”的参数（高度/字号/minWidth/padding/margin）
         val tv = TextView(ctx).apply {
             val width = if (isGrid) ViewGroup.LayoutParams.MATCH_PARENT else ViewGroup.LayoutParams.WRAP_CONTENT
             layoutParams = ViewGroup.MarginLayoutParams(width, if (isGrid) 42.dp() else 40.dp()).apply {
@@ -48,7 +55,10 @@ class CandidateAdapter(
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
 
-            setBackgroundResource(R.drawable.bg_candidate_cell)
+            // 让 ripple 生效
+            isClickable = true
+            isFocusable = true
+
             typeface = android.graphics.Typeface.SANS_SERIF
         }
 
@@ -63,17 +73,46 @@ class CandidateAdapter(
         val isDark = themeMode == 1
         tv.setTextColor(if (isDark) Color.WHITE else Color.BLACK)
 
-        // 关键：不要 setBackgroundColor（会覆盖 bg_candidate_cell 的圆角/描边等效果）
-        val bg = tv.background
-        if (bg != null) {
-            val tintColor = if (isDark) Color.parseColor("#2B2B2B") else Color.parseColor("#FFFFFF")
-            bg.mutate().setTint(tintColor)
-        }
+        // 轻微强调第一个候选（通常是最可能的那个），让候选栏更“有层次”
+        val isPrimary = position == 0 && !isGrid
+
+        tv.background = buildCandidateChipBackground(tv.context, isDark, isPrimary)
 
         tv.setOnClickListener { onItemClick(candidate) }
     }
 
     override fun getItemCount(): Int = items.size
+
+    private fun buildCandidateChipBackground(ctx: Context, isDark: Boolean, isPrimary: Boolean): Drawable {
+        fun Int.dp(): Float = this * ctx.resources.displayMetrics.density
+
+        val radius = 11.dp()
+        val strokeW = 1.dp().roundToInt()
+
+        val fill = if (isDark) Color.parseColor("#262626") else Color.parseColor("#FFFFFF")
+        val fillTop = if (isDark) Color.parseColor("#2C2C2C") else Color.parseColor("#FFFFFF")
+
+        val stroke = if (isDark) Color.parseColor("#33FFFFFF") else Color.parseColor("#1A000000")
+        val primaryStroke = if (isDark) Color.parseColor("#66FFFFFF") else Color.parseColor("#33000000")
+
+        val content = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(fillTop, fill)).apply {
+            cornerRadius = radius
+            setStroke(strokeW, if (isPrimary) primaryStroke else stroke)
+        }
+
+        val rippleColor = if (isDark) Color.parseColor("#33FFFFFF") else Color.parseColor("#14000000")
+        val mask = GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(Color.WHITE)
+        }
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            RippleDrawable(ColorStateList.valueOf(rippleColor), content, mask)
+        } else {
+            // 旧系统兜底（没有 ripple）
+            content
+        }
+    }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view)
 }
