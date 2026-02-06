@@ -12,17 +12,13 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myapp.CandidatePanelAdapter
 import com.example.myapp.CandidateStripAdapter
 import com.example.myapp.R
 import com.example.myapp.dict.model.Candidate
-import com.google.android.flexbox.AlignItems
-import com.google.android.flexbox.FlexDirection
-import com.google.android.flexbox.FlexWrap
-import com.google.android.flexbox.FlexboxLayoutManager
-import com.google.android.flexbox.JustifyContent
 
 class ImeUi {
 
@@ -67,23 +63,26 @@ class ImeUi {
         recyclerHorizontal.layoutManager =
             LinearLayoutManager(rootView.context, LinearLayoutManager.HORIZONTAL, false)
 
-        // 展开面板：从 Grid 改为 Flexbox，实现“连续延展，满行再换行”
-        recyclerVertical.layoutManager = FlexboxLayoutManager(rootView.context).apply {
-            flexDirection = FlexDirection.ROW
-            flexWrap = FlexWrap.WRAP
-            justifyContent = JustifyContent.FLEX_START
-            alignItems = AlignItems.CENTER
+        // 展开面板：默认等分 4 列，但允许 item 动态占用 1~4 列
+        val spanCount = 4
+        val gridLm = GridLayoutManager(rootView.context, spanCount).apply {
+            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(position: Int): Int {
+                    val totalWidthPx =
+                        recyclerVertical.width - recyclerVertical.paddingLeft - recyclerVertical.paddingRight
+                    return adapterVertical.getSpanSize(
+                        position = position,
+                        spanCount = spanCount,
+                        totalWidthPx = totalWidthPx,
+                        context = recyclerVertical.context
+                    )
+                }
+            }
         }
+        recyclerVertical.layoutManager = gridLm
 
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
-
-        // 初次布局完成后同步一次可用宽度，避免 adapter 内计算时 width=0
-        recyclerVertical.post {
-            val w = recyclerVertical.width - recyclerVertical.paddingLeft - recyclerVertical.paddingRight
-            adapterVertical.setAvailableWidthPx(w)
-            adapterVertical.notifyDataSetChanged()
-        }
 
         setComposingPreview(null)
         showIdleState()
@@ -125,11 +124,8 @@ class ImeUi {
         adapterVertical.submitList(list)
         recyclerHorizontal.scrollToPosition(0)
 
-        // 候选变化/面板尺寸变化时，也更新可用宽度（更稳）
-        recyclerVertical.post {
-            val w = recyclerVertical.width - recyclerVertical.paddingLeft - recyclerVertical.paddingRight
-            adapterVertical.setAvailableWidthPx(w)
-        }
+        // 候选变化时，触发一次重算 span（避免 span 缓存/宽度未就绪导致布局不更新）
+        recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
     }
 
     fun setExpanded(expanded: Boolean, isComposing: Boolean) {
@@ -137,12 +133,8 @@ class ImeUi {
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
 
-            // 展开后再刷新一次，确保“超长候选占满整行 + 多行显示”立即生效
-            recyclerVertical.post {
-                val w = recyclerVertical.width - recyclerVertical.paddingLeft - recyclerVertical.paddingRight
-                adapterVertical.setAvailableWidthPx(w)
-                adapterVertical.notifyDataSetChanged()
-            }
+            // 展开后宽度才稳定，用 post 强制重算 span
+            recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()
             expandedPanel.visibility = View.GONE

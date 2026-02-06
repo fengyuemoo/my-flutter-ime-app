@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.text.Layout
+import android.text.TextPaint
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -16,7 +17,8 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myapp.dict.model.Candidate
-import com.google.android.flexbox.FlexboxLayoutManager
+import kotlin.math.ceil
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 class CandidatePanelAdapter(
@@ -26,19 +28,14 @@ class CandidatePanelAdapter(
     private val items = ArrayList<Candidate>()
     var themeMode = 0
 
-    private var availableWidthPx: Int = 0
-
-    // UI 常量（保持与视觉一致，测量才准）
+    // UI 参数：要和 TextView 实际一致，测量才准
     private val panelTextSp = 15f
-    private val panelMaxLinesLong = 12 // 想更完整就调大；接受撑高就可以更大
     private val paddingHdp = 10f
     private val paddingVdp = 8f
     private val marginHdp = 4f
     private val marginVdp = 4f
 
-    fun setAvailableWidthPx(px: Int) {
-        availableWidthPx = px
-    }
+    private val fullRowMaxLines = 12
 
     fun submitList(newItems: List<Candidate>) {
         items.clear()
@@ -46,27 +43,63 @@ class CandidatePanelAdapter(
         notifyDataSetChanged()
     }
 
+    /**
+     * 默认每行 4 等分（span=1），只有放不下才升到 2/3/4。
+     * 规则是按像素测量：能放进 1 列就 1，能放进 2 列就 2……否则 4（整行）。
+     */
+    fun getSpanSize(
+        position: Int,
+        spanCount: Int,
+        totalWidthPx: Int,
+        context: Context
+    ): Int {
+        val word = items.getOrNull(position)?.word?.trim().orEmpty()
+        if (word.isEmpty()) return 1
+
+        if (totalWidthPx <= 0) return 1
+
+        val metrics = context.resources.displayMetrics
+        val textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, panelTextSp, metrics)
+
+        val paddingHPx = (paddingHdp * metrics.density * 2f).roundToInt()
+        val marginHPx = (marginHdp * metrics.density * 2f).roundToInt()
+        val extraPx = paddingHPx + marginHPx
+
+        val paint = TextPaint().apply {
+            isAntiAlias = true
+            textSize = textPx
+            typeface = android.graphics.Typeface.SANS_SERIF
+        }
+
+        val textWidth = paint.measureText(word)
+        val needPx = textWidth + extraPx
+
+        val colWidth = totalWidthPx.toFloat() / spanCount.toFloat()
+        val spans = ceil(needPx / colWidth).toInt().coerceIn(1, spanCount)
+
+        return spans
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val ctx = parent.context
         fun Float.dp(): Int = (this * ctx.resources.displayMetrics.density).roundToInt()
 
         val tv = TextView(ctx).apply {
-            layoutParams = FlexboxLayoutManager.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
+            // GridLayoutManager 会根据 span 分配宽度，这里 MATCH_PARENT 就是“填满本格/跨格宽度”
+            layoutParams = ViewGroup.MarginLayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(marginHdp.dp(), marginVdp.dp(), marginHdp.dp(), marginVdp.dp())
-                flexGrow = 0f
-                flexShrink = 1f
-                isWrapBefore = false
             }
 
             gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, panelTextSp)
             setPadding(paddingHdp.dp(), paddingVdp.dp(), paddingHdp.dp(), paddingVdp.dp())
 
-            // 默认：短词单行 chip
+            // 默认按“普通格子”：单行，避免在窄格子里变成 2 字一行
             isSingleLine = true
+            maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -85,64 +118,34 @@ class CandidatePanelAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val candidate = items[position]
         val tv = holder.itemView as TextView
-        val word = candidate.word ?: ""
-        tv.text = word
+        tv.text = candidate.word
 
         val isDark = themeMode == 1
         tv.setTextColor(if (isDark) Color.WHITE else Color.BLACK)
         tv.background = buildPanelChipBackground(tv.context, isDark)
 
-        val lp = tv.layoutParams as FlexboxLayoutManager.LayoutParams
+        // 当它“占满整行”（span=4）时，允许它自身多行，并保持整行宽度显示
+        // 注意：这里用 parent 宽度判断不方便，因此用 LayoutParams.width==MATCH_PARENT + maxLines 切换即可，
+        // 实际是否 span=4 由 SpanSizeLookup 决定；我们用“字符测量是否远超 1 格”的启发式来开启多行。
+        val parentRv = tv.parent
+        val totalWidthPx = (parentRv as? RecyclerView)?.let { it.width - it.paddingLeft - it.paddingRight } ?: 0
 
-        // 计算“这一行的最大可用宽度”（扣掉左右 margin）
-        val metrics = tv.context.resources.displayMetrics
-        val marginHPx = (marginHdp * metrics.density * 2f).roundToInt()
-        val fullRowWidth = (availableWidthPx - marginHPx).coerceAtLeast(1)
+        if (totalWidthPx > 0) {
+            val spanCount = 4
+            val spans = getSpanSize(position, spanCount, totalWidthPx, tv.context)
+            val isFullRow = spans >= spanCount
 
-        if (availableWidthPx > 0) {
-            // 这部分用来判断“是否超长到需要整行多行显示”
-            val textWidth = tv.paint.measureText(word)
-            val paddingHPx = (paddingHdp * metrics.density * 2f).roundToInt()
-            val singleLineNeed = (textWidth + paddingHPx).toInt()
-
-            val isTooLongForOneRow = singleLineNeed > fullRowWidth
-
-            if (isTooLongForOneRow) {
-                // 超长：强制占满整行，并且自身允许多行
-                lp.isWrapBefore = true
-                lp.width = fullRowWidth
-                lp.flexGrow = 0f
-                lp.flexShrink = 0f
-                tv.layoutParams = lp
-
-                tv.maxWidth = fullRowWidth
+            if (isFullRow) {
                 tv.isSingleLine = false
-                tv.maxLines = panelMaxLinesLong
+                tv.maxLines = fullRowMaxLines
                 tv.ellipsize = TextUtils.TruncateAt.END
+                tv.gravity = Gravity.START or Gravity.CENTER_VERTICAL
             } else {
-                // 正常：连续延展的 chip（单行，宽度随内容）
-                lp.isWrapBefore = false
-                lp.width = ViewGroup.LayoutParams.WRAP_CONTENT
-                lp.flexGrow = 0f
-                lp.flexShrink = 1f
-                tv.layoutParams = lp
-
-                tv.maxWidth = fullRowWidth
                 tv.isSingleLine = true
                 tv.maxLines = 1
                 tv.ellipsize = TextUtils.TruncateAt.END
+                tv.gravity = Gravity.CENTER
             }
-        } else {
-            // 宽度未知：先按普通 chip 渲染
-            lp.isWrapBefore = false
-            lp.width = ViewGroup.LayoutParams.WRAP_CONTENT
-            lp.flexGrow = 0f
-            lp.flexShrink = 1f
-            tv.layoutParams = lp
-
-            tv.isSingleLine = true
-            tv.maxLines = 1
-            tv.ellipsize = TextUtils.TruncateAt.END
         }
 
         tv.setOnClickListener { onItemClick(candidate) }
