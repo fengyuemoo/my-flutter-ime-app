@@ -8,7 +8,6 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.text.Layout
-import android.text.TextPaint
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -17,8 +16,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myapp.dict.model.Candidate
-import kotlin.math.ceil
-import kotlin.math.max
+import com.google.android.flexbox.FlexboxLayoutManager
 import kotlin.math.roundToInt
 
 class CandidatePanelAdapter(
@@ -28,17 +26,19 @@ class CandidatePanelAdapter(
     private val items = ArrayList<Candidate>()
     var themeMode = 0
 
-    // 与 item 视觉参数保持一致，span 估算才会更准
+    private var availableWidthPx: Int = 0
+
+    // UI 常量（保持与视觉一致，测量才准）
     private val panelTextSp = 15f
-
-    // 展开面板：允许多行兜底，但我们会优先通过“占更多格”来避免换行/省略号
-    private val panelMaxLines = 3
-
-    // 与 onCreateViewHolder 一致：padding(10dp,8dp,10dp,8dp), margin=4dp
-    private val paddingHdp = 10f  // left/right each
-    private val paddingVdp = 8f   // top/bottom each
-    private val marginHdp = 4f    // left/right each
+    private val panelMaxLinesLong = 12 // 想更完整就调大；接受撑高就可以更大
+    private val paddingHdp = 10f
+    private val paddingVdp = 8f
+    private val marginHdp = 4f
     private val marginVdp = 4f
+
+    fun setAvailableWidthPx(px: Int) {
+        availableWidthPx = px
+    }
 
     fun submitList(newItems: List<Candidate>) {
         items.clear()
@@ -46,96 +46,27 @@ class CandidatePanelAdapter(
         notifyDataSetChanged()
     }
 
-    /**
-     * 像素宽度估算 + 偏向“不换行/不省略号”的保守策略：
-     * - 短词（尤其中文 2~4 字）优先当成“1 行”来算，需要就升到 2 格
-     * - 一旦估算到 3 格，直接升到 4 格整行
-     */
-    fun getSpanSize(
-        position: Int,
-        spanCount: Int,
-        totalWidthPx: Int,
-        context: Context
-    ): Int {
-        val word = items.getOrNull(position)?.word?.trim().orEmpty()
-        if (word.isEmpty()) return 1
-
-        // 宽度还没 layout 出来时，先给保底（偏保守，避免一上来就很窄导致换行）
-        if (totalWidthPx <= 0) {
-            val len = word.length
-            val basic = when {
-                len <= 2 -> 1
-                len <= 4 -> minOf(2, spanCount)
-                len <= 6 -> minOf(2, spanCount)
-                else -> spanCount
-            }
-            return if (basic >= spanCount - 1) spanCount else basic
-        }
-
-        val metrics = context.resources.displayMetrics
-        val textPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, panelTextSp, metrics)
-
-        val paddingHPx = (paddingHdp * metrics.density * 2f).roundToInt()
-        val marginHPx = (marginHdp * metrics.density * 2f).roundToInt()
-        val extraPx = paddingHPx + marginHPx
-
-        val colWidthPx = totalWidthPx.toFloat() / spanCount.toFloat()
-
-        val paint = TextPaint().apply {
-            isAntiAlias = true
-            textSize = textPx
-            typeface = android.graphics.Typeface.SANS_SERIF
-        }
-
-        val totalTextWidth = paint.measureText(word)
-
-        // 英文/数字长串不易换行：用最长 token 宽度做下限
-        val hasWhitespace = word.any { it.isWhitespace() }
-        val maxTokenWidth = if (hasWhitespace) {
-            val tokens = word.split(Regex("\\s+")).filter { it.isNotEmpty() }
-            var m = 0f
-            for (t in tokens) m = max(m, paint.measureText(t))
-            m
-        } else {
-            0f
-        }
-
-        // “更像你要的效果”的关键：短中文优先按 1 行计算（这样会更倾向占 2 格而不是换行）
-        val preferredLines = when {
-            word.length <= 4 -> 1
-            word.length <= 8 -> 2
-            else -> panelMaxLines
-        }
-
-        val requiredLineWidth = max(maxTokenWidth, totalTextWidth / preferredLines.toFloat())
-        val requiredWidth = requiredLineWidth + extraPx
-
-        var spans = ceil(requiredWidth / colWidthPx).toInt().coerceIn(1, spanCount)
-
-        // 保守：只要算到 3 格，就整行（4 格）
-        if (spans >= spanCount - 1) spans = spanCount
-
-        return spans
-    }
-
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val ctx = parent.context
         fun Float.dp(): Int = (this * ctx.resources.displayMetrics.density).roundToInt()
 
         val tv = TextView(ctx).apply {
-            layoutParams = ViewGroup.MarginLayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+            layoutParams = FlexboxLayoutManager.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(marginHdp.dp(), marginVdp.dp(), marginHdp.dp(), marginVdp.dp())
+                flexGrow = 0f
+                flexShrink = 1f
+                isWrapBefore = false
             }
 
             gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, panelTextSp)
             setPadding(paddingHdp.dp(), paddingVdp.dp(), paddingHdp.dp(), paddingVdp.dp())
 
-            isSingleLine = false
-            maxLines = panelMaxLines
+            // 默认：短词单行 chip
+            isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -154,12 +85,65 @@ class CandidatePanelAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val candidate = items[position]
         val tv = holder.itemView as TextView
-        tv.text = candidate.word
+        val word = candidate.word ?: ""
+        tv.text = word
 
         val isDark = themeMode == 1
         tv.setTextColor(if (isDark) Color.WHITE else Color.BLACK)
-
         tv.background = buildPanelChipBackground(tv.context, isDark)
+
+        val lp = tv.layoutParams as FlexboxLayoutManager.LayoutParams
+
+        // 计算“这一行的最大可用宽度”（扣掉左右 margin）
+        val metrics = tv.context.resources.displayMetrics
+        val marginHPx = (marginHdp * metrics.density * 2f).roundToInt()
+        val fullRowWidth = (availableWidthPx - marginHPx).coerceAtLeast(1)
+
+        if (availableWidthPx > 0) {
+            // 这部分用来判断“是否超长到需要整行多行显示”
+            val textWidth = tv.paint.measureText(word)
+            val paddingHPx = (paddingHdp * metrics.density * 2f).roundToInt()
+            val singleLineNeed = (textWidth + paddingHPx).toInt()
+
+            val isTooLongForOneRow = singleLineNeed > fullRowWidth
+
+            if (isTooLongForOneRow) {
+                // 超长：强制占满整行，并且自身允许多行
+                lp.isWrapBefore = true
+                lp.width = fullRowWidth
+                lp.flexGrow = 0f
+                lp.flexShrink = 0f
+                tv.layoutParams = lp
+
+                tv.maxWidth = fullRowWidth
+                tv.isSingleLine = false
+                tv.maxLines = panelMaxLinesLong
+                tv.ellipsize = TextUtils.TruncateAt.END
+            } else {
+                // 正常：连续延展的 chip（单行，宽度随内容）
+                lp.isWrapBefore = false
+                lp.width = ViewGroup.LayoutParams.WRAP_CONTENT
+                lp.flexGrow = 0f
+                lp.flexShrink = 1f
+                tv.layoutParams = lp
+
+                tv.maxWidth = fullRowWidth
+                tv.isSingleLine = true
+                tv.maxLines = 1
+                tv.ellipsize = TextUtils.TruncateAt.END
+            }
+        } else {
+            // 宽度未知：先按普通 chip 渲染
+            lp.isWrapBefore = false
+            lp.width = ViewGroup.LayoutParams.WRAP_CONTENT
+            lp.flexGrow = 0f
+            lp.flexShrink = 1f
+            tv.layoutParams = lp
+
+            tv.isSingleLine = true
+            tv.maxLines = 1
+            tv.ellipsize = TextUtils.TruncateAt.END
+        }
 
         tv.setOnClickListener { onItemClick(candidate) }
     }
