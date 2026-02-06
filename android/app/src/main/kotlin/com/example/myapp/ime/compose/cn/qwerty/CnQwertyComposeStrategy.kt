@@ -15,8 +15,8 @@ class CnQwertyComposeStrategy(
     override fun onComposingInput(text: String): StrategyResult {
         if (text.isEmpty()) return StrategyResult.Noop
 
-        // Chinese QWERTY: Always append to session
-        session().appendQwerty(text)
+        // Chinese QWERTY: Always append to session（统一小写）
+        session().appendQwerty(text.lowercase())
         return StrategyResult.SessionMutated
     }
 
@@ -26,17 +26,12 @@ class CnQwertyComposeStrategy(
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
-        // In a real implementation, this might involve more complex logic,
-        // such as clearing the existing composing text and starting a new session.
         session().clear()
-        session().appendQwerty(pinyin)
+        session().appendQwerty(pinyin.lowercase())
     }
 
     override fun onEnter(ic: InputConnection?): Boolean {
         if (session().isComposing()) {
-            // If there's composing text, commit the first candidate or the composing text itself.
-            // This part would interact with the candidate view to get the selection.
-            // For simplicity, we'll just clear composing here.
             clearComposing()
             return true // Consumed
         }

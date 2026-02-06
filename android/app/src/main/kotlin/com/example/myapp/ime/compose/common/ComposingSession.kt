@@ -46,7 +46,8 @@ class ComposingSession {
     }
 
     fun appendQwerty(text: String) {
-        _qwertyInput += text
+        // 中文全键盘：统一保存为小写，避免 UI/候选出现大写
+        _qwertyInput += text.lowercase()
     }
 
     fun appendT9Digit(digit: String) {
@@ -57,25 +58,104 @@ class ComposingSession {
      * @param t9Code 由外部 convertToT9(pinyin) 计算好再传入（session 本身不依赖键盘映射表）
      */
     fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
-        _pinyinStack.add(pinyin)
-        _rawT9Digits = if (_rawT9Digits.length >= t9Code.length) _rawT9Digits.substring(t9Code.length) else ""
+        _pinyinStack.add(pinyin.lowercase())
+        _rawT9Digits =
+            if (_rawT9Digits.length >= t9Code.length) _rawT9Digits.substring(t9Code.length) else ""
+    }
+
+    private fun isVowel(ch: Char): Boolean {
+        return ch == 'a' || ch == 'e' || ch == 'i' || ch == 'o' || ch == 'u' || ch == 'v' || ch == 'ü'
+    }
+
+    private fun splitPinyinForDisplay(raw: String): List<String> {
+        val s = raw.trim().lowercase()
+        if (s.isEmpty()) return emptyList()
+
+        // 如果用户/上层已经带了 `'`，直接按它作为音节边界（再清理空段）
+        if (s.contains("'")) {
+            return s.split("'")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+        }
+
+        // 简单启发式：当“当前段已经出现过元音”且“后面出现一个可作为声母开头”的位置，就切分
+        // 目的：仅用于 UI 展示的音节分隔，不改变内部 qwertyInput（避免影响候选检索/消耗逻辑）
+        val initials = arrayOf(
+            "zh", "ch", "sh",
+            "b", "p", "m", "f",
+            "d", "t", "n", "l",
+            "g", "k", "h",
+            "j", "q", "x",
+            "r",
+            "z", "c", "s",
+            "y", "w"
+        )
+
+        fun matchInitialAt(str: String, index: Int): Int {
+            for (ini in initials) {
+                if (index + ini.length <= str.length && str.regionMatches(index, ini, 0, ini.length)) {
+                    return ini.length
+                }
+            }
+            return 0
+        }
+
+        val result = ArrayList<String>()
+        var start = 0
+        var hasVowel = false
+        var i = 0
+
+        while (i < s.length) {
+            val ch = s[i]
+            if (isVowel(ch)) hasVowel = true
+
+            val next = i + 1
+            if (hasVowel && next < s.length) {
+                val initLen = matchInitialAt(s, next)
+                if (initLen > 0) {
+                    val part = s.substring(start, next).trim()
+                    if (part.isNotEmpty()) result.add(part)
+                    start = next
+                    hasVowel = false
+                    i = start
+                    continue
+                }
+            }
+            i++
+        }
+
+        val tail = s.substring(start).trim()
+        if (tail.isNotEmpty()) result.add(tail)
+        return result
     }
 
     fun displayText(useT9Layout: Boolean): String? {
         if (!isComposing()) return null
 
-        val displayText = if (!useT9Layout) {
-            _committedPrefix + _qwertyInput
-        } else {
-            val sb = StringBuilder()
-            sb.append(_committedPrefix)
-            for (p in _pinyinStack) sb.append(p).append("'")
-            sb.append(_rawT9Digits)
-            if (sb.endsWith("'") && _rawT9Digits.isEmpty()) sb.setLength(sb.length - 1)
-            sb.toString()
+        // committedPrefix 是已选中但未最终上屏的汉字前缀（仍保持显示）
+        if (!useT9Layout) {
+            val syllables = splitPinyinForDisplay(_qwertyInput)
+            val pinyinUi = syllables.joinToString("'")
+            return _committedPrefix + pinyinUi
         }
 
-        return displayText
+        // 中文 T9：不再把 rawT9Digits 直接显示为数字；只显示已确认的拼音栈
+        // 若仍有未消耗 digits（用户还在按），用“…”提示仍在输入中（避免显示数字）
+        val stackUi = _pinyinStack.joinToString("'") { it.lowercase() }
+
+        val sb = StringBuilder()
+        sb.append(_committedPrefix)
+
+        if (stackUi.isNotEmpty()) {
+            sb.append(stackUi)
+        }
+
+        if (_rawT9Digits.isNotEmpty()) {
+            if (stackUi.isNotEmpty()) sb.append("'")
+            sb.append("…")
+        }
+
+        return sb.toString()
     }
 
     /**
@@ -199,6 +279,7 @@ class ComposingSession {
                     .filter { it.isNotEmpty() }
                 _qwertyInput = (last.consumedParts + remainParts).joinToString("'")
             }
+
             is PickRecord.T9 -> _pinyinStack.addAll(0, last.consumedPinyins)
             is PickRecord.T9Digits -> _rawT9Digits = last.consumedDigits + _rawT9Digits
         }

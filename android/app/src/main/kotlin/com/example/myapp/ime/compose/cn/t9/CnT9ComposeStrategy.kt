@@ -21,9 +21,33 @@ class CnT9ComposeStrategy(
         return StrategyResult.SessionMutated
     }
 
+    private fun pinyinToT9Code(pinyin: String): String {
+        // 标准电话键盘映射：abc=2, def=3, ghi=4, jkl=5, mno=6, pqrs=7, tuv=8, wxyz=9
+        // v/ü 作为 ü 的常见占位，按 u 归到 8
+        val s = pinyin.lowercase()
+        val sb = StringBuilder()
+        for (ch in s) {
+            val d = when (ch) {
+                'a', 'b', 'c' -> '2'
+                'd', 'e', 'f' -> '3'
+                'g', 'h', 'i' -> '4'
+                'j', 'k', 'l' -> '5'
+                'm', 'n', 'o' -> '6'
+                'p', 'q', 'r', 's' -> '7'
+                't', 'u', 'v', 'ü' -> '8'
+                'w', 'x', 'y', 'z' -> '9'
+                else -> null
+            }
+            if (d != null) sb.append(d)
+        }
+        return sb.toString()
+    }
+
     override fun onPinyinSidebarClick(pinyin: String) {
-        session().clear()
-        session().appendQwerty(pinyin)
+        // 关键修复：侧栏点击应进入 pinyinStack，并消耗对应的 digits
+        // 不能清空 session，否则会导致 composing 丢失与显示异常
+        val code = pinyinToT9Code(pinyin)
+        session().onPinyinSidebarClick(pinyin.lowercase(), code)
     }
 
     override fun onEnter(ic: InputConnection?): Boolean {
