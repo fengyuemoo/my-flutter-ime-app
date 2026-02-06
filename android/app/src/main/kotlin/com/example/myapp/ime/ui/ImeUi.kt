@@ -67,7 +67,15 @@ class ImeUi {
         val gridLm = GridLayoutManager(rootView.context, spanCount).apply {
             spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
                 override fun getSpanSize(position: Int): Int {
-                    return adapterVertical.getSpanSize(position, spanCount)
+                    val totalWidthPx =
+                        recyclerVertical.width - recyclerVertical.paddingLeft - recyclerVertical.paddingRight
+
+                    return adapterVertical.getSpanSize(
+                        position = position,
+                        spanCount = spanCount,
+                        totalWidthPx = totalWidthPx,
+                        context = recyclerVertical.context
+                    )
                 }
             }
         }
@@ -121,7 +129,9 @@ class ImeUi {
         if (expanded) {
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
-            adapterVertical.notifyDataSetChanged()
+
+            // 首次展开时，recyclerVertical 可能还没拿到 width，用 post 强制重算 span
+            recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()
             expandedPanel.visibility = View.GONE
