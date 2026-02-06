@@ -110,19 +110,18 @@ class ImeUi {
     }
 
     fun showComposingState(isExpanded: Boolean) {
-        if (isExpanded) {
-            // 关键：展开面板时，彻底移除 topBarFrame 占位，让 expanded panel 顶到最上面
-            topBarFrame.visibility = View.GONE
+        // topBarFrame 绝不 GONE：总高度要稳定
+        topBarFrame.visibility = View.VISIBLE
 
+        if (isExpanded) {
+            // 展开时：顶部内容不显示（但高度保留，expandedPanel 覆盖整个区域）
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.GONE
-            // tvComposingPreview 不在 topBarFrame 里了，是 overlay 浮层；不需要在这里处理
         } else {
-            topBarFrame.visibility = View.VISIBLE
-
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.VISIBLE
         }
+        // tvComposingPreview 为上浮区悬浮框：由 setComposingPreview 控制，不在这里强制隐藏
     }
 
     fun setComposingPreview(text: String?) {
@@ -144,17 +143,19 @@ class ImeUi {
     }
 
     fun setExpanded(expanded: Boolean, isComposing: Boolean) {
+        // topBarFrame 绝不 GONE：总高度要稳定
+        topBarFrame.visibility = View.VISIBLE
+
         if (expanded) {
-            // 关键：展开时 topBarFrame 直接 GONE，避免“候选面板被顶下去”
-            topBarFrame.visibility = View.GONE
+            // 只隐藏顶部栏内部内容，expandedPanel 作为 overlay 覆盖顶部栏+键盘主体
+            toolbarContainer.visibility = View.GONE
+            candidateStrip.visibility = View.GONE
 
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
 
             recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
-            topBarFrame.visibility = View.VISIBLE
-
             btnExpand.animate().rotation(0f).setDuration(200).start()
             expandedPanel.visibility = View.GONE
 

@@ -18,12 +18,18 @@
     <dimen name="ime_t9_main_height">180dp</dimen>
     <dimen name="ime_toolbar_height">46dp</dimen>
 
-    <!-- New: keyboard body total height (main + bottom row) -->
+    <!-- Keyboard body total height (main + bottom row) -->
     <dimen name="ime_keyboard_body_height">226dp</dimen>
 
-    <!-- New: top bar height (toolbar/candidate strip container) -->
+    <!-- Top bar height (toolbar/candidate strip container) -->
     <dimen name="ime_topbar_height">50dp</dimen>
 
-    <!-- New: total IME view height = top bar + keyboard body -->
+    <!-- Total IME keyboard area height = top bar + keyboard body -->
     <dimen name="ime_keyboard_total_height">276dp</dimen>
+
+    <!-- New: floating space above keyboard area for preedit (occupies a bit of app input area) -->
+    <dimen name="ime_preedit_float_height">30dp</dimen>
+
+    <!-- New: total IME window height = floating space + keyboard area -->
+    <dimen name="ime_ime_window_height">306dp</dimen>
 </resources>
