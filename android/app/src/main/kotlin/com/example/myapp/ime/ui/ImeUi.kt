@@ -42,6 +42,13 @@ class ImeUi {
     private lateinit var adapterHorizontal: CandidateStripAdapter
     private lateinit var adapterVertical: CandidatePanelAdapter
 
+    // NEW: pass composing preview to an external sink (InputMethodService candidates view).
+    private var composingPreviewBridge: ((String?) -> Unit)? = null
+
+    fun setComposingPreviewBridge(bridge: ((String?) -> Unit)?) {
+        composingPreviewBridge = bridge
+    }
+
     fun inflate(
         inflater: LayoutInflater,
         onCandidateClick: (Candidate) -> Unit
@@ -89,7 +96,11 @@ class ImeUi {
 
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
-        setComposingPreview(null)
+        // IMPORTANT: we no longer display composing preview inside imecontainer,
+        // to avoid covering the first candidate.
+        tvComposingPreview.visibility = View.GONE
+        tvComposingPreview.text = ""
+
         showIdleState()
 
         return rootView
@@ -110,28 +121,23 @@ class ImeUi {
     }
 
     fun showComposingState(isExpanded: Boolean) {
-        // topBarFrame 绝不 GONE：总高度要稳定
-        topBarFrame.visibility = View.VISIBLE
-
         if (isExpanded) {
-            // 展开时：顶部内容不显示（但高度保留，expandedPanel 覆盖整个区域）
+            // keep your current behavior here (you said height issue is already fixed on your side)
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.GONE
         } else {
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.VISIBLE
         }
-        // tvComposingPreview 为上浮区悬浮框：由 setComposingPreview 控制，不在这里强制隐藏
     }
 
     fun setComposingPreview(text: String?) {
-        if (text.isNullOrEmpty()) {
-            tvComposingPreview.text = ""
-            tvComposingPreview.visibility = View.GONE
-        } else {
-            tvComposingPreview.visibility = View.VISIBLE
-            tvComposingPreview.text = text
-        }
+        // Do not show inside keyboard UI (prevents遮挡首候选).
+        tvComposingPreview.text = ""
+        tvComposingPreview.visibility = View.GONE
+
+        // Forward to external candidates-view preedit.
+        composingPreviewBridge?.invoke(text)
     }
 
     fun setCandidates(list: List<Candidate>) {
@@ -143,17 +149,9 @@ class ImeUi {
     }
 
     fun setExpanded(expanded: Boolean, isComposing: Boolean) {
-        // topBarFrame 绝不 GONE：总高度要稳定
-        topBarFrame.visibility = View.VISIBLE
-
         if (expanded) {
-            // 只隐藏顶部栏内部内容，expandedPanel 作为 overlay 覆盖顶部栏+键盘主体
-            toolbarContainer.visibility = View.GONE
-            candidateStrip.visibility = View.GONE
-
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
-
             recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()
@@ -220,17 +218,13 @@ class ImeUi {
         val bgDark = Color.parseColor("#222222")
         val panelLight = Color.parseColor("#EEEEEE")
         val panelDark = Color.parseColor("#333333")
-        val textLight = Color.BLACK
-        val textDark = Color.WHITE
 
         rootView.setBackgroundColor(if (themeMode == 1) bgDark else bgLight)
         expandedPanel.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
         toolbarContainer.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
 
-        tvComposingPreview.setBackgroundColor(
-            if (themeMode == 1) panelDark else Color.parseColor("#F5F5F5")
-        )
-        tvComposingPreview.setTextColor(if (themeMode == 1) textDark else textLight)
+        // tvComposingPreview is not used for display anymore.
+        tvComposingPreview.visibility = View.GONE
     }
 }
