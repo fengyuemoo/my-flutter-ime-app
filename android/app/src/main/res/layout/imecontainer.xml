@@ -7,7 +7,6 @@
     android:clipChildren="false"
     android:clipToPadding="false">
 
-    <!-- 固定高度的“键盘区域堆叠容器”：始终贴底，展开面板覆盖顶部栏但不改变总高度 -->
     <FrameLayout
         android:id="@+id/imeareastack"
         android:layout_width="match_parent"
@@ -16,7 +15,6 @@
         android:clipChildren="false"
         android:clipToPadding="false">
 
-        <!-- 基础内容：顶部栏 + 键盘主体 -->
         <LinearLayout
             android:id="@+id/contentcolumn"
             android:layout_width="match_parent"
@@ -106,7 +104,6 @@
 
         </LinearLayout>
 
-        <!-- overlay：展开候选面板覆盖顶部栏 + 键盘主体，但 imeareastack 高度固定所以整体不变 -->
         <LinearLayout
             android:id="@+id/expandedcandidatespanel"
             android:layout_width="match_parent"
@@ -171,16 +168,19 @@
 
     </FrameLayout>
 
-    <!-- 悬浮 preedit：放在“上浮区”里，避免遮挡首候选；也可以占用一点 app 输入框区域 -->
+    <!-- 悬浮 preedit：在“上浮区”里；通过增大 ime_preedit_float_height 让它完全不碰候选条 -->
     <TextView
         android:id="@+id/tvcomposingpreview"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="start|top"
         android:layout_marginStart="8dp"
-        android:layout_marginTop="6dp"
+        android:layout_marginTop="4dp"
         android:background="@color/ime_surface"
-        android:padding="6dp"
+        android:paddingLeft="6dp"
+        android:paddingRight="6dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
         android:textColor="@color/ime_accent"
         android:textSize="@dimen/ime_composing_text_size"
         android:textStyle="bold"

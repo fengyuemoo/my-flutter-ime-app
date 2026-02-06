@@ -27,9 +27,9 @@
     <!-- Total IME keyboard area height = top bar + keyboard body -->
     <dimen name="ime_keyboard_total_height">276dp</dimen>
 
-    <!-- New: floating space above keyboard area for preedit (occupies a bit of app input area) -->
-    <dimen name="ime_preedit_float_height">30dp</dimen>
+    <!-- Floating space above keyboard area for preedit -->
+    <dimen name="ime_preedit_float_height">52dp</dimen>
 
-    <!-- New: total IME window height = floating space + keyboard area -->
-    <dimen name="ime_ime_window_height">306dp</dimen>
+    <!-- Total IME window height = floating space + keyboard area -->
+    <dimen name="ime_ime_window_height">328dp</dimen>
 </resources>
