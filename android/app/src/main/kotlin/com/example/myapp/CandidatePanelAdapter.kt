@@ -30,7 +30,9 @@ class CandidatePanelAdapter(
 
     // 与 item 视觉参数保持一致，span 估算才会更准
     private val panelTextSp = 15f
-    private val panelMaxLines = 4
+
+    // 展开面板：允许多行兜底，但我们会优先通过“占更多格”来避免换行/省略号
+    private val panelMaxLines = 3
 
     // 与 onCreateViewHolder 一致：padding(10dp,8dp,10dp,8dp), margin=4dp
     private val paddingHdp = 10f  // left/right each
@@ -45,9 +47,9 @@ class CandidatePanelAdapter(
     }
 
     /**
-     * 像素宽度估算 + 更保守策略：
-     * - 先按测量估算需要 1..spanCount 列
-     * - 如果估算到 3 列（或更大），直接升级为整行（4 列），尽量避免省略号
+     * 像素宽度估算 + 偏向“不换行/不省略号”的保守策略：
+     * - 短词（尤其中文 2~4 字）优先当成“1 行”来算，需要就升到 2 格
+     * - 一旦估算到 3 格，直接升到 4 格整行
      */
     fun getSpanSize(
         position: Int,
@@ -58,16 +60,16 @@ class CandidatePanelAdapter(
         val word = items.getOrNull(position)?.word?.trim().orEmpty()
         if (word.isEmpty()) return 1
 
-        // 宽度还没 layout 出来时，先用简单保底规则
+        // 宽度还没 layout 出来时，先给保底（偏保守，避免一上来就很窄导致换行）
         if (totalWidthPx <= 0) {
             val len = word.length
             val basic = when {
-                len >= 6 -> spanCount
-                len >= 4 -> minOf(2, spanCount)
-                else -> 1
+                len <= 2 -> 1
+                len <= 4 -> minOf(2, spanCount)
+                len <= 6 -> minOf(2, spanCount)
+                else -> spanCount
             }
-            // 保守：只要达到 3，就整行（这里 basic 不会到 3，但保持一致性）
-            return if (basic >= 3) spanCount else basic
+            return if (basic >= spanCount - 1) spanCount else basic
         }
 
         val metrics = context.resources.displayMetrics
@@ -85,38 +87,35 @@ class CandidatePanelAdapter(
             typeface = android.graphics.Typeface.SANS_SERIF
         }
 
-        // 总文本宽度（单行情况下）
         val totalTextWidth = paint.measureText(word)
 
-        // 估算“不可拆分的最小宽度”：
-        // - 有空格：按最长 token（英文长串不会被低估）
-        // - 无空格：按最大单字符宽度（CJK 可逐字换行，避免太保守）
+        // 英文/数字长串不易换行：用最长 token 宽度做下限
         val hasWhitespace = word.any { it.isWhitespace() }
-        val unbreakableMinWidth = if (hasWhitespace) {
+        val maxTokenWidth = if (hasWhitespace) {
             val tokens = word.split(Regex("\\s+")).filter { it.isNotEmpty() }
-            var maxToken = 0f
-            for (t in tokens) maxToken = max(maxToken, paint.measureText(t))
-            if (tokens.isEmpty()) totalTextWidth else maxToken
+            var m = 0f
+            for (t in tokens) m = max(m, paint.measureText(t))
+            m
         } else {
-            val n = minOf(word.length, 32)
-            var maxChar = 0f
-            for (i in 0 until n) {
-                maxChar = max(maxChar, paint.measureText(word[i].toString()))
-            }
-            if (maxChar <= 0f) totalTextWidth else maxChar
+            0f
         }
 
-        // 允许最多 panelMaxLines 行：把总宽度按行数摊薄（粗略估算）
-        val wrapWidthEstimate = totalTextWidth / panelMaxLines.toFloat()
+        // “更像你要的效果”的关键：短中文优先按 1 行计算（这样会更倾向占 2 格而不是换行）
+        val preferredLines = when {
+            word.length <= 4 -> 1
+            word.length <= 8 -> 2
+            else -> panelMaxLines
+        }
 
-        // “单行至少需要的宽度”取更严格的一边
-        val requiredLineWidth = max(unbreakableMinWidth, wrapWidthEstimate)
-
+        val requiredLineWidth = max(maxTokenWidth, totalTextWidth / preferredLines.toFloat())
         val requiredWidth = requiredLineWidth + extraPx
-        val spans = ceil(requiredWidth / colWidthPx).toInt().coerceIn(1, spanCount)
 
-        // 更保守：只要估算到 3 列，就直接整行（4列）
-        return if (spans >= spanCount - 1) spanCount else spans
+        var spans = ceil(requiredWidth / colWidthPx).toInt().coerceIn(1, spanCount)
+
+        // 保守：只要算到 3 格，就整行（4 格）
+        if (spans >= spanCount - 1) spans = spanCount
+
+        return spans
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -139,7 +138,6 @@ class CandidatePanelAdapter(
             maxLines = panelMaxLines
             ellipsize = TextUtils.TruncateAt.END
 
-            // 更好的换行质量（不影响低版本）
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 breakStrategy = Layout.BREAK_STRATEGY_HIGH_QUALITY
                 hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
