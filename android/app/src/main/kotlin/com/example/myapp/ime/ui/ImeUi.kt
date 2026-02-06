@@ -67,7 +67,6 @@ class ImeUi {
         recyclerHorizontal.layoutManager =
             LinearLayoutManager(rootView.context, LinearLayoutManager.HORIZONTAL, false)
 
-        // 展开面板：默认等分 4 列，但允许 item 动态占用 1~4 列
         val spanCount = 4
         val gridLm = GridLayoutManager(rootView.context, spanCount).apply {
             spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
@@ -88,7 +87,6 @@ class ImeUi {
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
 
-        // 右侧收起按钮复用外部对 btnExpand 绑定的逻辑（不需要再维护一套 close 逻辑）
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
         setComposingPreview(null)
@@ -106,16 +104,17 @@ class ImeUi {
         topBarFrame.visibility = View.VISIBLE
         toolbarContainer.visibility = View.VISIBLE
         candidateStrip.visibility = View.GONE
-        setExpanded(false, isComposing = false)
+        expandedPanel.visibility = View.GONE
         setCandidates(emptyList())
     }
 
     fun showComposingState(isExpanded: Boolean) {
         if (isExpanded) {
-            // 展开时：顶部整条直接消失，不占位
-            topBarFrame.visibility = View.GONE
+            // 展开时：顶部内容不显示（但 topBarFrame 本身保留高度，由 expandedPanel 覆盖）
+            toolbarContainer.visibility = View.GONE
+            candidateStrip.visibility = View.GONE
+            tvComposingPreview.visibility = View.GONE
         } else {
-            topBarFrame.visibility = View.VISIBLE
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.VISIBLE
         }
@@ -136,27 +135,24 @@ class ImeUi {
         adapterVertical.submitList(list)
         recyclerHorizontal.scrollToPosition(0)
 
-        // 候选变化时，触发一次重算 span（避免 span 缓存/宽度未就绪导致布局不更新）
         recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
     }
 
     fun setExpanded(expanded: Boolean, isComposing: Boolean) {
         if (expanded) {
-            // 关键：只隐藏“键盘顶部那条区域”，不去动整个屏幕的高度
-            topBarFrame.visibility = View.GONE
+            // 不要 GONE topBarFrame，否则总高度会变小；只隐藏里面内容即可
+            toolbarContainer.visibility = View.GONE
+            candidateStrip.visibility = View.GONE
             tvComposingPreview.visibility = View.GONE
 
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
 
-            // 展开后宽度才稳定，用 post 强制重算 span
             recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()
             expandedPanel.visibility = View.GONE
 
-            // 收起：恢复顶部区域，并按当前状态显示工具栏/候选栏
-            topBarFrame.visibility = View.VISIBLE
             if (isComposing) {
                 candidateStrip.visibility = View.VISIBLE
                 toolbarContainer.visibility = View.GONE

@@ -20,4 +20,10 @@
 
     <!-- New: keyboard body total height (main + bottom row) -->
     <dimen name="ime_keyboard_body_height">226dp</dimen>
+
+    <!-- New: top bar height (toolbar/candidate strip container) -->
+    <dimen name="ime_topbar_height">50dp</dimen>
+
+    <!-- New: total IME view height = top bar + keyboard body -->
+    <dimen name="ime_keyboard_total_height">276dp</dimen>
 </resources>
