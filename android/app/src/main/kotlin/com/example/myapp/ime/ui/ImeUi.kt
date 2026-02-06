@@ -111,11 +111,15 @@ class ImeUi {
 
     fun showComposingState(isExpanded: Boolean) {
         if (isExpanded) {
-            // 展开时：顶部内容不显示（但 topBarFrame 本身保留高度，由 expandedPanel 覆盖）
+            // 关键：展开面板时，彻底移除 topBarFrame 占位，让 expanded panel 顶到最上面
+            topBarFrame.visibility = View.GONE
+
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.GONE
-            // 注意：不要在这里隐藏 tvComposingPreview；它应当在 composing 期间始终悬浮显示
+            // tvComposingPreview 不在 topBarFrame 里了，是 overlay 浮层；不需要在这里处理
         } else {
+            topBarFrame.visibility = View.VISIBLE
+
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.VISIBLE
         }
@@ -141,16 +145,16 @@ class ImeUi {
 
     fun setExpanded(expanded: Boolean, isComposing: Boolean) {
         if (expanded) {
-            // 不要 GONE topBarFrame，否则总高度会变小；只隐藏里面内容即可
-            toolbarContainer.visibility = View.GONE
-            candidateStrip.visibility = View.GONE
-            // 注意：不要在这里隐藏 tvComposingPreview；它应当在 composing 期间始终悬浮显示
+            // 关键：展开时 topBarFrame 直接 GONE，避免“候选面板被顶下去”
+            topBarFrame.visibility = View.GONE
 
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
 
             recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
+            topBarFrame.visibility = View.VISIBLE
+
             btnExpand.animate().rotation(0f).setDuration(200).start()
             expandedPanel.visibility = View.GONE
 
