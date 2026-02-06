@@ -32,6 +32,7 @@ class ImeUi {
     private lateinit var candidateStrip: LinearLayout
     private lateinit var expandedPanel: LinearLayout
     private lateinit var btnExpand: ImageButton
+    private lateinit var btnExpandedClose: ImageButton
     private lateinit var btnFilter: Button
     private lateinit var tvComposingPreview: TextView
 
@@ -51,6 +52,7 @@ class ImeUi {
         candidateStrip = rootView.findViewById(R.id.candidatestrip)
         expandedPanel = rootView.findViewById(R.id.expandedcandidatespanel)
         btnExpand = rootView.findViewById(R.id.btnexpandcandidates)
+        btnExpandedClose = rootView.findViewById(R.id.expandpanelclose)
         tvComposingPreview = rootView.findViewById(R.id.tvcomposingpreview)
         btnFilter = rootView.findViewById(R.id.expandpanelfilter)
 
@@ -84,6 +86,9 @@ class ImeUi {
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
 
+        // 右侧收起按钮复用“同一条展开/收起入口”
+        btnExpandedClose.setOnClickListener { btnExpand.performClick() }
+
         setComposingPreview(null)
         showIdleState()
 
@@ -103,7 +108,12 @@ class ImeUi {
     }
 
     fun showComposingState(isExpanded: Boolean) {
-        if (!isExpanded) {
+        if (isExpanded) {
+            // 展开时顶部区域不展示（会被 expanded panel 覆盖，同时也直接隐藏）
+            toolbarContainer.visibility = View.GONE
+            candidateStrip.visibility = View.GONE
+            tvComposingPreview.visibility = View.GONE
+        } else {
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.VISIBLE
         }
@@ -130,17 +140,25 @@ class ImeUi {
 
     fun setExpanded(expanded: Boolean, isComposing: Boolean) {
         if (expanded) {
+            // 展开时：顶部候选栏 + 顶部工具栏都隐藏（expanded panel 已覆盖全区域）
+            toolbarContainer.visibility = View.GONE
+            candidateStrip.visibility = View.GONE
+            tvComposingPreview.visibility = View.GONE
+
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
 
-            // 展开后宽度才稳定，用 post 强制重算 span
             recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()
             expandedPanel.visibility = View.GONE
+
             if (isComposing) {
                 candidateStrip.visibility = View.VISIBLE
                 toolbarContainer.visibility = View.GONE
+            } else {
+                toolbarContainer.visibility = View.VISIBLE
+                candidateStrip.visibility = View.GONE
             }
         }
     }

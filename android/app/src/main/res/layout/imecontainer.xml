@@ -1,163 +1,170 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/maincontent"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
     android:background="@color/ime_panel_bg"
     android:paddingBottom="0dp">
 
-    <FrameLayout
+    <!-- 原来的竖向内容（顶部栏 + 键盘主体） -->
+    <LinearLayout
+        android:id="@+id/maincontentcolumn"
         android:layout_width="match_parent"
-        android:layout_height="50dp"
-        android:background="@color/ime_toolbar_bg">
-
-        <LinearLayout
-            android:id="@+id/toolbarcontainer"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingStart="5dp"
-            android:paddingEnd="5dp">
-
-            <Button
-                android:id="@+id/btntoollayout"
-                android:layout_width="0dp"
-                android:layout_height="40dp"
-                android:layout_weight="1"
-                android:text="⌨"
-                android:textSize="@dimen/ime_toolbar_button_text_size"
-                style="@style/KeyButton.Func"
-                android:layout_marginEnd="5dp" />
-
-            <Button
-                android:id="@+id/btntooltheme"
-                android:layout_width="0dp"
-                android:layout_height="40dp"
-                android:layout_weight="1"
-                android:text="🎨"
-                android:textSize="@dimen/ime_toolbar_button_text_size"
-                style="@style/KeyButton.Func"
-                android:layout_marginStart="5dp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/candidatestrip"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="horizontal"
-            android:visibility="gone"
-            android:background="@color/ime_surface"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:elevation="2dp">
-
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/recyclercandidateshorizontal"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:scrollbars="none" />
-
-            <ImageButton
-                android:id="@+id/btnexpandcandidates"
-                android:layout_width="50dp"
-                android:layout_height="match_parent"
-                android:src="@drawable/ic_chevron_down"
-                android:background="?android:attr/selectableItemBackground"
-                android:scaleType="centerInside"
-                android:padding="12dp"
-                android:contentDescription="展开" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/tvcomposingpreview"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@color/ime_surface"
-            android:padding="5dp"
-            android:textColor="@color/ime_accent"
-            android:textSize="@dimen/ime_composing_text_size"
-            android:textStyle="bold"
-            android:layout_gravity="center"
-            android:visibility="gone" />
-    </FrameLayout>
-
-    <!-- 覆盖容器：固定为键盘主体高度，expanded panel 出现时完全盖住键盘 -->
-    <FrameLayout
-        android:id="@+id/keyboardoverlaycontainer"
-        android:layout_width="match_parent"
-        android:layout_height="@dimen/ime_keyboard_body_height">
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
 
         <FrameLayout
-            android:id="@+id/keyboardbodyframe"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-
-        <LinearLayout
-            android:id="@+id/expandedcandidatespanel"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_gravity="bottom"
-            android:orientation="horizontal"
-            android:background="@color/ime_surface"
-            android:clickable="true"
-            android:focusable="true"
-            android:visibility="gone"
-            android:elevation="6dp">
-
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/recyclercandidatesvertical"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:padding="0dp" />
+            android:layout_height="50dp"
+            android:background="@color/ime_toolbar_bg">
 
             <LinearLayout
-                android:layout_width="60dp"
+                android:id="@+id/toolbarcontainer"
+                android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:orientation="vertical"
-                android:background="@color/ime_panel_bg"
-                android:padding="2dp">
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="5dp"
+                android:paddingEnd="5dp">
+
+                <Button
+                    android:id="@+id/btntoollayout"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="⌨"
+                    android:textSize="@dimen/ime_toolbar_button_text_size"
+                    style="@style/KeyButton.Func"
+                    android:layout_marginEnd="5dp" />
+
+                <Button
+                    android:id="@+id/btntooltheme"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="🎨"
+                    android:textSize="@dimen/ime_toolbar_button_text_size"
+                    style="@style/KeyButton.Func"
+                    android:layout_marginStart="5dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/candidatestrip"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:visibility="gone"
+                android:background="@color/ime_surface"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:elevation="2dp">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/recyclercandidateshorizontal"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:scrollbars="none" />
 
                 <ImageButton
-                    android:id="@+id/expandpanelclose"
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1"
+                    android:id="@+id/btnexpandcandidates"
+                    android:layout_width="50dp"
+                    android:layout_height="match_parent"
                     android:src="@drawable/ic_chevron_down"
-                    android:rotation="180"
                     android:background="?android:attr/selectableItemBackground"
                     android:scaleType="centerInside"
-                    android:contentDescription="关闭" />
-
-                <Button
-                    android:id="@+id/expandpaneldel"
-                    android:text="⌫"
-                    style="@style/KeyButton.Func"
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1" />
-
-                <Button
-                    android:id="@+id/expandpanelreenter"
-                    android:text="重输"
-                    style="@style/KeyButton.FuncSmallText"
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1" />
-
-                <Button
-                    android:id="@+id/expandpanelfilter"
-                    android:text="全部/单字"
-                    style="@style/KeyButton.FuncSmallText"
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1" />
+                    android:padding="12dp"
+                    android:contentDescription="展开" />
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvcomposingpreview"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@color/ime_surface"
+                android:padding="5dp"
+                android:textColor="@color/ime_accent"
+                android:textSize="@dimen/ime_composing_text_size"
+                android:textStyle="bold"
+                android:layout_gravity="center"
+                android:visibility="gone" />
+        </FrameLayout>
+
+        <!-- 键盘主体容器 -->
+        <FrameLayout
+            android:id="@+id/keyboardoverlaycontainer"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/ime_keyboard_body_height">
+
+            <FrameLayout
+                android:id="@+id/keyboardbodyframe"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </FrameLayout>
+
+    </LinearLayout>
+
+    <!-- expanded panel：作为遮罩层覆盖“顶部栏 + 键盘主体” -->
+    <LinearLayout
+        android:id="@+id/expandedcandidatespanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:background="@color/ime_surface"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone"
+        android:elevation="8dp">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recyclercandidatesvertical"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:padding="0dp" />
+
+        <LinearLayout
+            android:layout_width="60dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:background="@color/ime_panel_bg"
+            android:padding="2dp">
+
+            <ImageButton
+                android:id="@+id/expandpanelclose"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:src="@drawable/ic_chevron_down"
+                android:rotation="180"
+                android:background="?android:attr/selectableItemBackground"
+                android:scaleType="centerInside"
+                android:contentDescription="关闭" />
+
+            <Button
+                android:id="@+id/expandpaneldel"
+                android:text="⌫"
+                style="@style/KeyButton.Func"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <Button
+                android:id="@+id/expandpanelreenter"
+                android:text="重输"
+                style="@style/KeyButton.FuncSmallText"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <Button
+                android:id="@+id/expandpanelfilter"
+                android:text="全部/单字"
+                style="@style/KeyButton.FuncSmallText"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
         </LinearLayout>
+    </LinearLayout>
 
-    </FrameLayout>
-
-</LinearLayout>
+</FrameLayout>
