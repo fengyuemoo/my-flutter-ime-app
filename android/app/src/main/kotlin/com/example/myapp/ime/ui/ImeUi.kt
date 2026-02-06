@@ -28,6 +28,7 @@ class ImeUi {
     lateinit var bodyFrame: FrameLayout
         private set
 
+    private lateinit var topBarFrame: View
     private lateinit var toolbarContainer: LinearLayout
     private lateinit var candidateStrip: LinearLayout
     private lateinit var expandedPanel: LinearLayout
@@ -47,6 +48,7 @@ class ImeUi {
     ): View {
         rootView = inflater.inflate(R.layout.imecontainer, null)
 
+        topBarFrame = rootView.findViewById(R.id.topbarframe)
         bodyFrame = rootView.findViewById(R.id.keyboardbodyframe)
         toolbarContainer = rootView.findViewById(R.id.toolbarcontainer)
         candidateStrip = rootView.findViewById(R.id.candidatestrip)
@@ -86,7 +88,7 @@ class ImeUi {
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
 
-        // 右侧收起按钮复用“同一条展开/收起入口”
+        // 右侧收起按钮复用外部对 btnExpand 绑定的逻辑（不需要再维护一套 close 逻辑）
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
         setComposingPreview(null)
@@ -101,6 +103,7 @@ class ImeUi {
     fun getLayoutButton(): Button = rootView.findViewById(R.id.btntoollayout)
 
     fun showIdleState() {
+        topBarFrame.visibility = View.VISIBLE
         toolbarContainer.visibility = View.VISIBLE
         candidateStrip.visibility = View.GONE
         setExpanded(false, isComposing = false)
@@ -109,11 +112,10 @@ class ImeUi {
 
     fun showComposingState(isExpanded: Boolean) {
         if (isExpanded) {
-            // 展开时顶部区域不展示（会被 expanded panel 覆盖，同时也直接隐藏）
-            toolbarContainer.visibility = View.GONE
-            candidateStrip.visibility = View.GONE
-            tvComposingPreview.visibility = View.GONE
+            // 展开时：顶部整条直接消失，不占位
+            topBarFrame.visibility = View.GONE
         } else {
+            topBarFrame.visibility = View.VISIBLE
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.VISIBLE
         }
@@ -140,19 +142,21 @@ class ImeUi {
 
     fun setExpanded(expanded: Boolean, isComposing: Boolean) {
         if (expanded) {
-            // 展开时：顶部候选栏 + 顶部工具栏都隐藏（expanded panel 已覆盖全区域）
-            toolbarContainer.visibility = View.GONE
-            candidateStrip.visibility = View.GONE
+            // 关键：只隐藏“键盘顶部那条区域”，不去动整个屏幕的高度
+            topBarFrame.visibility = View.GONE
             tvComposingPreview.visibility = View.GONE
 
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
 
+            // 展开后宽度才稳定，用 post 强制重算 span
             recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()
             expandedPanel.visibility = View.GONE
 
+            // 收起：恢复顶部区域，并按当前状态显示工具栏/候选栏
+            topBarFrame.visibility = View.VISIBLE
             if (isComposing) {
                 candidateStrip.visibility = View.VISIBLE
                 toolbarContainer.visibility = View.GONE
@@ -220,7 +224,6 @@ class ImeUi {
         rootView.setBackgroundColor(if (themeMode == 1) bgDark else bgLight)
         expandedPanel.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
         toolbarContainer.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
-
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
 
         tvComposingPreview.setBackgroundColor(
