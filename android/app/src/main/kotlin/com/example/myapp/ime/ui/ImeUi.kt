@@ -15,7 +15,8 @@ import android.widget.TextView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.example.myapp.CandidateAdapter
+import com.example.myapp.CandidatePanelAdapter
+import com.example.myapp.CandidateStripAdapter
 import com.example.myapp.R
 import com.example.myapp.dict.model.Candidate
 
@@ -36,8 +37,8 @@ class ImeUi {
 
     private lateinit var recyclerHorizontal: RecyclerView
     private lateinit var recyclerVertical: RecyclerView
-    private lateinit var adapterHorizontal: CandidateAdapter
-    private lateinit var adapterVertical: CandidateAdapter
+    private lateinit var adapterHorizontal: CandidateStripAdapter
+    private lateinit var adapterVertical: CandidatePanelAdapter
 
     fun inflate(
         inflater: LayoutInflater,
@@ -56,12 +57,21 @@ class ImeUi {
         recyclerHorizontal = rootView.findViewById(R.id.recyclercandidateshorizontal)
         recyclerVertical = rootView.findViewById(R.id.recyclercandidatesvertical)
 
+        adapterHorizontal = CandidateStripAdapter { onCandidateClick(it) }
+        adapterVertical = CandidatePanelAdapter { onCandidateClick(it) }
+
         recyclerHorizontal.layoutManager =
             LinearLayoutManager(rootView.context, LinearLayoutManager.HORIZONTAL, false)
-        recyclerVertical.layoutManager = GridLayoutManager(rootView.context, 4)
 
-        adapterHorizontal = CandidateAdapter(isGrid = false) { onCandidateClick(it) }
-        adapterVertical = CandidateAdapter(isGrid = true) { onCandidateClick(it) }
+        val spanCount = 4
+        val gridLm = GridLayoutManager(rootView.context, spanCount).apply {
+            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(position: Int): Int {
+                    return adapterVertical.getSpanSize(position, spanCount)
+                }
+            }
+        }
+        recyclerVertical.layoutManager = gridLm
 
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
@@ -73,11 +83,8 @@ class ImeUi {
     }
 
     fun getExpandButton(): ImageButton = btnExpand
-
     fun getFilterButton(): Button = btnFilter
-
     fun getThemeButton(): Button = rootView.findViewById(R.id.btntooltheme)
-
     fun getLayoutButton(): Button = rootView.findViewById(R.id.btntoollayout)
 
     fun showIdleState() {
