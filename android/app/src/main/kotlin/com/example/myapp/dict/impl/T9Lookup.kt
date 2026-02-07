@@ -1,6 +1,6 @@
 package com.example.myapp.dict.impl
 
-internal object T9Lookup {
+object T9Lookup {
     private val t9Lookup: CharArray = CharArray(128) { 0.toChar() }
 
     init {

@@ -4,7 +4,7 @@ package com.example.myapp.dict.impl
  * 从原 DictionaryEngine.kt 中拆出来的拼音表。
  * 目前内容与你提供的 allPinyins 完全一致，不做任何增删改。
  */
-internal object PinyinTable {
+object PinyinTable {
     val allPinyins: List<String> = listOf(
         "zhuang","shuang","chuang","jiang","qiang","xiang","xiong","liang","niang","guang","kuang","huang",
         "zhang","shang","chang","zheng","sheng","cheng","zhong","chong","shong","zhuan","shuan","chuan",

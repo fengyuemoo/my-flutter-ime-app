@@ -1,23 +1,27 @@
 package com.example.myapp.ime.compose.common
 
-import com.example.myapp.dict.impl.PinyinTable
 import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
 
 class ComposingSession {
 
-    // === 状态（从 SimpleIME 挪过来）===
     private val _pinyinStack = ArrayList<String>()
     private var _rawT9Digits = ""
     private var _qwertyInput = ""
     private var _committedPrefix = ""
+
+    // NEW: 由候选/词频驱动的 T9 预览（例如 yi'ge / yi'g / w）
+    private var _t9PreviewText: String? = null
 
     val pinyinStack: List<String> get() = _pinyinStack
     val rawT9Digits: String get() = _rawT9Digits
     val qwertyInput: String get() = _qwertyInput
     val committedPrefix: String get() = _committedPrefix
 
-    // === 撤销栈（从 SimpleIME 挪过来）===
+    fun setT9PreviewText(text: String?) {
+        _t9PreviewText = text?.trim()?.lowercase().takeUnless { it.isNullOrEmpty() }
+    }
+
     private sealed class PickRecord {
         data class Qwerty(val word: String, val consumedPrefix: String) : PickRecord()
         data class Apostrophe(val word: String, val consumedParts: List<String>) : PickRecord()
@@ -37,6 +41,7 @@ class ComposingSession {
         _rawT9Digits = ""
         _qwertyInput = ""
         _committedPrefix = ""
+        _t9PreviewText = null
         pickHistory.clear()
     }
 
@@ -48,7 +53,6 @@ class ComposingSession {
     }
 
     fun appendQwerty(text: String) {
-        // 中文全键盘：统一保存为小写，避免 UI/候选出现大写
         _qwertyInput += text.lowercase()
     }
 
@@ -56,9 +60,6 @@ class ComposingSession {
         _rawT9Digits += digit
     }
 
-    /**
-     * @param t9Code 由外部 convertToT9(pinyin) 计算好再传入（session 本身不依赖键盘映射表）
-     */
     fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         _pinyinStack.add(pinyin.lowercase())
         _rawT9Digits =
@@ -128,85 +129,9 @@ class ComposingSession {
         return result
     }
 
-    // -------- T9 preedit decode (核心新增) --------
-
-    private object T9PreeditDecoder {
-        private val t9ToPinyinLen2Plus: Map<String, String>
-        private val maxCodeLen: Int
-
-        init {
-            val map = HashMap<String, String>()
-            var maxLen = 0
-
-            for (py in PinyinTable.allPinyins) {
-                val code = T9Lookup.encodeLetters(py.lowercase())
-                if (code.length >= 2) {
-                    map[code] = py.lowercase()
-                    if (code.length > maxLen) maxLen = code.length
-                }
-            }
-
-            t9ToPinyinLen2Plus = map
-            maxCodeLen = maxLen
-        }
-
-        private fun repLetter(d: Char): Char {
-            val list = T9Lookup.charsFromDigit(d)
-            if (list.isNotEmpty() && list[0].isNotEmpty()) return list[0][0]
-            return '?'
-        }
-
-        /**
-         * 返回的字符串满足：
-         * - 去掉 `'` 后，字母数 == digits.length
-         * - 尽量用“最短可完成音节”切分；最后不够完成音节则用代表字母补齐
-         */
-        fun decode(digits: String): String {
-            if (digits.isEmpty()) return ""
-
-            // 单 digit：像搜狗一样先给一个“代表字母”，避免直接跳出完整拼音（例如 9 不要直接变 zhuang）
-            if (digits.length == 1) {
-                return repLetter(digits[0]).toString()
-            }
-
-            val segs = ArrayList<String>()
-            var i = 0
-
-            while (i < digits.length) {
-                val remain = digits.length - i
-                val tryMax = minOf(maxCodeLen, remain)
-
-                var matchedPy: String? = null
-                var matchedLen = 0
-
-                // 选择“最短”可完成音节（len 从 2 开始递增）
-                var len = 2
-                while (len <= tryMax) {
-                    val sub = digits.substring(i, i + len)
-                    val py = t9ToPinyinLen2Plus[sub]
-                    if (py != null) {
-                        matchedPy = py
-                        matchedLen = len
-                        break
-                    }
-                    len++
-                }
-
-                if (matchedPy != null) {
-                    segs.add(matchedPy)
-                    i += matchedLen
-                } else {
-                    // 剩余 digits 不够组成任何合法音节：用代表字母补齐（长度严格等于剩余 digits 长度）
-                    val sb = StringBuilder()
-                    val rem = digits.substring(i)
-                    for (ch in rem) sb.append(repLetter(ch))
-                    segs.add(sb.toString())
-                    break
-                }
-            }
-
-            return segs.joinToString("'")
-        }
+    private fun repLetter(d: Char): String {
+        val list = T9Lookup.charsFromDigit(d)
+        return if (list.isNotEmpty()) list[0] else "?"
     }
 
     fun displayText(useT9Layout: Boolean): String? {
@@ -218,19 +143,22 @@ class ComposingSession {
             return _committedPrefix + pinyinUi
         }
 
-        // 中文 T9：显示 已确认拼音栈 + 对剩余 digits 的实时预览（长度随 digits 变化）
         val stackUi = _pinyinStack.joinToString("'") { it.lowercase() }
-        val previewUi = if (_rawT9Digits.isNotEmpty()) T9PreeditDecoder.decode(_rawT9Digits) else ""
+
+        val previewUi = when {
+            _rawT9Digits.isEmpty() -> ""
+            !_t9PreviewText.isNullOrEmpty() -> _t9PreviewText!!
+            _rawT9Digits.length == 1 -> repLetter(_rawT9Digits[0])
+            else -> "…"
+        }
 
         val sb = StringBuilder()
         sb.append(_committedPrefix)
-
         if (stackUi.isNotEmpty()) sb.append(stackUi)
         if (previewUi.isNotEmpty()) {
             if (stackUi.isNotEmpty()) sb.append("'")
             sb.append(previewUi)
         }
-
         return sb.toString()
     }
 

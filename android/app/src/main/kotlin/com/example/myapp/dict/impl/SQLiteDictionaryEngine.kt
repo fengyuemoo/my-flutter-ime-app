@@ -494,11 +494,12 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
+    // NEW: 取出 COL_INPUT/COL_SYLLABLES，写入 Candidate.pinyin/syllables
     private fun querySingleCharByT9Prefix(db: SQLiteDatabase, digitsPrefix: String, limit: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_T9} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -511,7 +512,20 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, digitsPrefix, freq, matchedLength = digitsPrefix.length, pinyinCount = 0))
+                    val pinyin = it.getString(2)
+                    val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = digitsPrefix,
+                            priority = freq,
+                            matchedLength = digitsPrefix.length,
+                            pinyinCount = 0,
+                            pinyin = pinyin,
+                            syllables = syllables
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {
@@ -519,6 +533,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
+    // NEW: 取出 COL_INPUT/COL_SYLLABLES，写入 Candidate.pinyin/syllables（中文候选）
     private fun queryDb(
         db: SQLiteDatabase,
         input: String,
@@ -581,9 +596,15 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 argsList.add(input)
             }
 
+            // NOTE: 多取两列：input(拼音) + syllables
             db.query(
                 DictionaryDbHelper.TABLE_NAME,
-                arrayOf(DictionaryDbHelper.COL_WORD, DictionaryDbHelper.COL_FREQ),
+                arrayOf(
+                    DictionaryDbHelper.COL_WORD,
+                    DictionaryDbHelper.COL_FREQ,
+                    DictionaryDbHelper.COL_INPUT,
+                    DictionaryDbHelper.COL_SYLLABLES
+                ),
                 selection,
                 argsList.toTypedArray(),
                 null,
@@ -594,7 +615,20 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, input, freq, matchedLen, 0))
+                    val pinyin = it.getString(2)
+                    val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = input,
+                            priority = freq,
+                            matchedLength = matchedLen,
+                            pinyinCount = 0,
+                            pinyin = if (lang == 0) pinyin else null,
+                            syllables = if (lang == 0) syllables else 0
+                        )
+                    )
                 }
             }
         } catch (e: Exception) {
