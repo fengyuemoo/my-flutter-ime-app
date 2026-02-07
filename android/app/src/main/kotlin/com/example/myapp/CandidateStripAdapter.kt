@@ -3,6 +3,7 @@ package com.example.myapp
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
@@ -23,6 +24,14 @@ class CandidateStripAdapter(
 
     private val items = ArrayList<Candidate>()
     var themeMode = 0
+
+    private fun thinTypeface(): Typeface {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Typeface.create(Typeface.SANS_SERIF, 300, false)
+        } else {
+            Typeface.create("sans-serif-light", Typeface.NORMAL)
+        }
+    }
 
     fun submitList(newItems: List<Candidate>) {
         items.clear()
@@ -53,7 +62,9 @@ class CandidateStripAdapter(
 
             isClickable = true
             isFocusable = true
-            typeface = android.graphics.Typeface.SANS_SERIF
+
+            // CHANGED: 只改粗细，不改字号
+            typeface = thinTypeface()
         }
 
         return ViewHolder(tv)
