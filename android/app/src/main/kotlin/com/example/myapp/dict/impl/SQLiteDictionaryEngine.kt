@@ -40,10 +40,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             }
         }
 
-        // 排序目标：
-        // 1) exact match（t9 == digits）最靠前
-        // 2) 更短的音节更靠前（更符合“逐位 digits 变化”的预期）
-        // 3) 最后按拼音字母序稳定排序
         val sorted = items.sortedWith(
             compareBy<Item>(
                 { if (it.code == digits) 0 else 1 },
@@ -54,7 +50,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
 
         val out = LinkedHashSet<String>()
 
-        // 单 digit：先给 w/x/y/z 这种字母候选（更像搜狗的第一步提示）
         if (digits.length == 1) {
             val firstDigit = digits[0]
             for (s in T9Lookup.charsFromDigit(firstDigit)) out.add(s)
@@ -136,9 +131,15 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             }
         }
 
+        val isAsciiLetters = !isT9 && norm.isNotEmpty() && norm.all { it in 'a'..'z' }
+        val isAcronymLikeQwerty = !isT9
+                && isAsciiLetters
+                && norm.length in 2..6
+                && norm.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
+
         // 0) 中文模式：英文精确匹配
         // - 中文 T9：只在 digits>=4 时才允许置顶英文，并且要求英文词长 == digits 长度（过滤 wi/wh/wie... 这类噪声）
-        // - 中文 QWERTY：保持原行为（允许英文精确匹配 + 变体）
+        // - 中文 QWERTY：如果像 yg/ygr 这种“无元音短缩写”，不置顶英文（让中文缩写词组优先）
         val exactEn = if (isT9) {
             if (norm.length >= 4) {
                 queryExactEnglish(
@@ -152,18 +153,22 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 emptyList()
             }
         } else {
-            queryExactEnglish(
-                db = db,
-                input = norm,
-                isT9 = false,
-                minWordLen = 1,
-                exactWordLen = null
-            )
+            if (isAcronymLikeQwerty) {
+                emptyList()
+            } else {
+                queryExactEnglish(
+                    db = db,
+                    input = norm,
+                    isT9 = false,
+                    minWordLen = 1,
+                    exactWordLen = null
+                )
+            }
         }
         addUnique(exactEn)
 
-        val isAsciiLetters = !isT9 && norm.isNotEmpty() && norm.all { it in 'a'..'z' }
-        if (isAsciiLetters && norm.length in 2..32) {
+        // 中文 QWERTY 的英文变体（s / es）：同样跳过无元音短缩写，避免 ygs/ygres 这种无意义噪声
+        if (!isAcronymLikeQwerty && isAsciiLetters && norm.length in 2..32) {
             addUnique(
                 queryExactEnglish(
                     db = db,
@@ -532,7 +537,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    // 取出 COL_INPUT/COL_SYLLABLES，写入 Candidate.pinyin/syllables
     private fun querySingleCharByT9Prefix(db: SQLiteDatabase, digitsPrefix: String, limit: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
@@ -571,7 +575,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    // 取出 COL_INPUT/COL_SYLLABLES，写入 Candidate.pinyin/syllables（中文候选）
     private fun queryDb(
         db: SQLiteDatabase,
         input: String,
