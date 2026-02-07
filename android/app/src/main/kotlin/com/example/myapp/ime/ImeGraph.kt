@@ -52,31 +52,25 @@ class ImeGraph(
             inputConnectionProvider: () -> InputConnection?
         ): ImeGraph {
 
-            // 0) Mode holder（用于让 sessions hub 在 keyboardController 创建前也能工作）
             val modeHolder = KeyboardModeHolder()
 
-            // 1) Sessions hub：只依赖 modeProvider lambda（不直接依赖 keyboardController）
             val sessions = ComposingSessionHub(
                 modeProvider = { modeHolder.mode }
             )
 
-            // 2) Dispatcher：实现 ImeActions，供键盘/KeyboardController 使用
             val dispatcher = ImeActionDispatcher(
                 context = context,
                 sessions = sessions,
                 inputConnectionProvider = inputConnectionProvider
             )
 
-            // 3) Dictionary
             val dictManager = DictionaryManager(
                 context = context,
                 mainHandler = Handler(Looper.getMainLooper())
             )
 
-            // 4) Candidate composer（你当前项目是 dictManager.dictionary）
             val candidateComposer = CandidateComposer(dictManager.dictionary)
 
-            // 5) Keyboard registry + controller（改回两参构造）
             val keyboardRegistry = DefaultKeyboardRegistry(
                 context,
                 dispatcher as ImeActions
@@ -88,11 +82,12 @@ class ImeGraph(
                 keyboardRegistry
             )
 
-            // 6) 把 modeHolder 与真实主模式绑定起来 + 订阅后续变化
+            // NEW: 让 KeyboardController 在每次切键盘/面板时都能拿到最新字体配置
+            keyboardController.fontConfigProvider = { ui.getFontConfig() }
+
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
-            // 7) Candidate controller（依赖 sessions hub）
             val candidateController = CandidateController(
                 ui = ui,
                 keyboardController = keyboardController,
@@ -103,13 +98,11 @@ class ImeGraph(
                 updateComposingView = { dispatcher.refreshComposingView() }
             )
 
-            // 8) Toolbar
             val toolbarController = ToolbarController(
                 rootView = rootView,
                 keyboardControllerProvider = { keyboardController }
             )
 
-            // 9) Attach dispatcher
             dispatcher.attach(
                 ui = ui,
                 keyboardController = keyboardController,
@@ -117,14 +110,12 @@ class ImeGraph(
                 onToolbarUpdate = { host.onToolbarUpdate() }
             )
 
-            // 10) Theme/Layout
             val themeController = ThemeController(
                 context = context,
                 uiProvider = { ui },
                 keyboardControllerProvider = { keyboardController }
             )
 
-            // IMPORTANT: let KeyboardController auto-apply current theme whenever keyboard view changes
             keyboardController.themeModeProvider = { themeController.themeMode }
 
             val layoutController = LayoutController(
@@ -132,14 +123,12 @@ class ImeGraph(
                 keyboardControllerProvider = { keyboardController }
             )
 
-            // NEW: 每次键盘 view 切换/重建后重新应用字体/字号（把新加进来的键盘 view 也覆盖到）
             val prevOnKeyboardChanged = keyboardController.onKeyboardChanged
             keyboardController.onKeyboardChanged = {
                 prevOnKeyboardChanged?.invoke()
                 ui.applySavedFontNow()
             }
 
-            // 11) UI binder（按你当前 ImeUiBinder 构造参数）
             val uiBinder = ImeUiBinder(
                 rootView = rootView,
                 ui = ui,
@@ -148,7 +137,6 @@ class ImeGraph(
                 layoutController = layoutController
             )
 
-            // NEW: 初始化时也应用一次已保存的字体/字号
             ui.applySavedFontNow()
 
             return ImeGraph(
