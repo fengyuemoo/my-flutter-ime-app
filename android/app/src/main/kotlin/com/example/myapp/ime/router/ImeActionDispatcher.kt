@@ -135,8 +135,6 @@ class ImeActionDispatcher(
     }
 
     private fun formatChinesePreeditForUi(raw: String): String {
-        // 本轮先做“强制小写”，并把可能存在的分隔空格替换成 `'`，让 UI 至少符合小写与分隔符风格。
-        // “严格按音节切分并插入 `'`”会在下一步改到 ComposingSession/CN 策略层，确保音节边界正确。
         return raw
             .lowercase()
             .trim()
@@ -152,7 +150,6 @@ class ImeActionDispatcher(
 
         if (displayText.isNullOrEmpty()) {
             ui.setComposingPreview(null)
-            // 清理 editor 侧 composing：即使中文模式我们也清一次，避免残留。
             ic?.setComposingText("", 0)
             return
         }
@@ -160,7 +157,6 @@ class ImeActionDispatcher(
         val uiText = if (mode.isChinese) formatChinesePreeditForUi(displayText) else displayText
         ui.setComposingPreview(uiText)
 
-        // 关键：中文模式不再把 composing 写入宿主输入框
         if (shouldWriteComposingToEditor(mode)) {
             ic?.setComposingText(displayText, 1)
         }
@@ -172,8 +168,9 @@ class ImeActionDispatcher(
     }
 
     private fun afterSessionMutated() {
-        refreshComposingView()
+        // NEW: 先刷新候选/侧栏（从而写入 T9 预览拼音），再刷新 composing 预览
         refreshCandidates()
+        refreshComposingView()
         syncEnglishPredictUi()
     }
 
@@ -259,30 +256,23 @@ class ImeActionDispatcher(
         if (isEnter) {
             val mode = mainMode()
 
-            // 1) 中文全键盘：composing 时 Enter 提交小写字母（不换行），并清空 composing
-            // 注意：这条功能是你要求保留的，这里保持原逻辑不动。
             if (mode.isChinese && !mode.useT9Layout && session().isComposing()) {
                 val s = session()
                 val textToCommit = (s.committedPrefix + s.qwertyInput.lowercase())
                 if (textToCommit.isNotEmpty()) {
                     commitText(textToCommit)
-                    // commitText 内部会清空 session + 预览 + composingText 并刷新候选
                     return
                 }
             }
 
-            // 2) 中文 T9：composing 且有候选时，Enter 提交候选第 1 个（不换行），并清空本次序列
             if (mode.isChinese && mode.useT9Layout && session().isComposing()) {
                 if (::candidateController.isInitialized && candidateController.commitFirstCandidateOnEnter()) {
-                    // commitCandidate 会按现有排序提交第 1 候选，并清空 composing
                     return
                 }
             }
 
-            // 3) 其他模式：交给策略（如果策略消费了则直接返回）
             if (currentStrategy().onEnter(inputConnection())) return
 
-            // 4) 默认行为：发送系统 Enter（你的需求场景会在上面被拦截掉）
             val ic = inputConnection() ?: return
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
@@ -323,7 +313,6 @@ class ImeActionDispatcher(
         beforeModeSwitch()
         if (!::keyboardController.isInitialized) return
 
-        // Default: Common + page 0.
         symbolCategory = ImeActions.SymbolCategory.COMMON
         symbolPage = 0
 
@@ -367,10 +356,8 @@ class ImeActionDispatcher(
     }
 
     override fun commitSymbolFromPanel(symbol: String) {
-        // Learn: record MRU for Common.
         SymbolPrefs.recordMruCommon(context, symbol)
 
-        // Commit
         inputConnection()?.commitText(symbol, 1)
 
         session().clear()
@@ -427,7 +414,6 @@ class ImeActionDispatcher(
 
                 if (::ui.isInitialized) ui.setComposingPreview(uiText)
 
-                // 关键：中文 composing 不再写入宿主输入框
                 if (shouldWriteComposingToEditor(mode)) {
                     inputConnection()?.setComposingText(result.composingText, 1)
                 }

@@ -10,10 +10,17 @@ class ComposingSession {
     private var _qwertyInput = ""
     private var _committedPrefix = ""
 
+    // NEW: T9 digits 的“预览拼音”（用于侧栏未实现前的悬浮 preedit 展示）
+    private var _t9PreviewPinyin: String? = null
+
     val pinyinStack: List<String> get() = _pinyinStack
     val rawT9Digits: String get() = _rawT9Digits
     val qwertyInput: String get() = _qwertyInput
     val committedPrefix: String get() = _committedPrefix
+
+    fun setT9PreviewPinyin(pinyin: String?) {
+        _t9PreviewPinyin = pinyin?.trim()?.lowercase().takeUnless { it.isNullOrEmpty() }
+    }
 
     // === 撤销栈（从 SimpleIME 挪过来）===
     private sealed class PickRecord {
@@ -35,6 +42,7 @@ class ComposingSession {
         _rawT9Digits = ""
         _qwertyInput = ""
         _committedPrefix = ""
+        _t9PreviewPinyin = null
         pickHistory.clear()
     }
 
@@ -139,9 +147,9 @@ class ComposingSession {
             return _committedPrefix + pinyinUi
         }
 
-        // 中文 T9：不再把 rawT9Digits 直接显示为数字；只显示已确认的拼音栈
-        // 若仍有未消耗 digits（用户还在按），用“…”提示仍在输入中（避免显示数字）
+        // 中文 T9：显示“已确认拼音栈” + “当前 digits 对应的预览拼音”
         val stackUi = _pinyinStack.joinToString("'") { it.lowercase() }
+        val previewUi = _t9PreviewPinyin?.lowercase()?.trim().orEmpty()
 
         val sb = StringBuilder()
         sb.append(_committedPrefix)
@@ -151,8 +159,14 @@ class ComposingSession {
         }
 
         if (_rawT9Digits.isNotEmpty()) {
-            if (stackUi.isNotEmpty()) sb.append("'")
-            sb.append("…")
+            if (previewUi.isNotEmpty()) {
+                if (stackUi.isNotEmpty()) sb.append("'")
+                sb.append(previewUi)
+            } else {
+                // 兜底：如果词典还没给出 preview（极少情况），保留原来的占位
+                if (stackUi.isNotEmpty()) sb.append("'")
+                sb.append("…")
+            }
         }
 
         return sb.toString()

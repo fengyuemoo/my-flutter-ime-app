@@ -60,6 +60,9 @@ class CandidateController(
             ui.showIdleState()
             keyboardController.updateSidebar(emptyList())
 
+            // composing 结束时也顺手清掉 T9 预览
+            session().setT9PreviewPinyin(null)
+
             if (isExpanded) {
                 isExpanded = false
                 ui.setExpanded(false, isComposing = false)
@@ -80,6 +83,13 @@ class CandidateController(
             isT9Keyboard = mainMode.useT9Layout,
             singleCharMode = isSingleCharMode
         )
+
+        // NEW: T9 模式下，用 sidebar 的第一个拼音作为悬浮 preedit 的“预览拼音”
+        if (mainMode.isChinese && mainMode.useT9Layout && session().rawT9Digits.isNotEmpty()) {
+            session().setT9PreviewPinyin(r.pinyinSidebar.firstOrNull())
+        } else {
+            session().setT9PreviewPinyin(null)
+        }
 
         keyboardController.updateSidebar(r.pinyinSidebar)
 
