@@ -2,7 +2,9 @@ package com.example.myapp
 
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.inputmethodservice.InputMethodService
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -80,6 +82,8 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         ui.getThemeButton().setOnClickListener {
             if (this::graph.isInitialized) {
                 graph.themeController.toggle()
+                // NEW: 主题切换后让悬浮 preedit 也立即同步
+                refreshFloatingPreeditStyle()
             }
         }
 
@@ -108,6 +112,8 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         graph.themeController.apply()
 
         updateFloatingPreedit(null)
+        // NEW: 确保新的输入场景下浮层样式也跟当前主题一致（即使浮层未显示也无害）
+        refreshFloatingPreeditStyle()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -123,6 +129,41 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
+    private fun applyPreeditOverlayFontFromPrefs(tv: TextView) {
+        val family = KeyboardPrefs.loadFontFamily(this)
+        val scale = KeyboardPrefs.loadFontScale(this).coerceIn(0.7f, 1.4f)
+
+        tv.typeface = Typeface.create(family, Typeface.NORMAL)
+        // base=15sp（之前写死 15f 的等价意图），再乘缩放
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f * scale)
+    }
+
+    private fun applyPreeditOverlayThemeFromPrefs(tv: TextView) {
+        val themeMode = KeyboardPrefs.loadThemeMode(this)
+        if (themeMode == KeyboardPrefs.THEME_DARK) {
+            tv.setTextColor(Color.WHITE)
+            tv.setBackgroundColor(Color.parseColor("#CC333333"))
+        } else {
+            tv.setTextColor(Color.BLACK)
+            tv.setBackgroundColor(Color.parseColor("#CCF5F5F5"))
+        }
+    }
+
+    private fun applyPreeditOverlayStyleFromPrefs(tv: TextView) {
+        applyPreeditOverlayFontFromPrefs(tv)
+        applyPreeditOverlayThemeFromPrefs(tv)
+    }
+
+    private fun refreshFloatingPreeditStyle() {
+        val tv = preeditOverlayView ?: return
+        applyPreeditOverlayStyleFromPrefs(tv)
+        val lp = preeditOverlayParams ?: return
+        try {
+            wm.updateViewLayout(tv, lp)
+        } catch (_: Throwable) {
+        }
+    }
+
     private fun ensureFloatingPreedit() {
         if (preeditOverlayView != null) return
 
@@ -131,12 +172,12 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         val tv = TextView(this).apply {
             text = ""
             visibility = View.GONE
-            setTextColor(Color.BLACK)
-            setBackgroundColor(Color.parseColor("#CCF5F5F5")) // semi-transparent
             setPadding(dp(8), dp(6), dp(8), dp(6))
-            textSize = 15f
             maxLines = 1
             elevation = 20f
+
+            // NEW: 创建时就同步字体/字号 + 主题
+            applyPreeditOverlayStyleFromPrefs(this)
         }
 
         val params = WindowManager.LayoutParams().apply {
@@ -150,9 +191,9 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
             // 关键：不抢焦点、不拦截触摸，同时允许在 IME 之上显示
             flags =
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
 
             format = PixelFormat.TRANSLUCENT
 
@@ -178,15 +219,18 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         val tv = preeditOverlayView ?: return
         val lp = preeditOverlayParams ?: return
 
+        // NEW: 每次更新时都同步一次（刚改完字体/字号/主题立刻生效）
+        applyPreeditOverlayStyleFromPrefs(tv)
+
         tv.text = text
         tv.visibility = View.VISIBLE
 
-        // 把浮层放到“键盘 top 再往上抬一点”，达到“超过键盘高度压住输入框一点点”的视觉
+        // 把浮层放到“键盘 top 再往上抬一点”
         val loc = IntArray(2)
         mainView.getLocationOnScreen(loc)
         val keyboardTopOnScreenY = loc[1]
 
-        lp.y = keyboardTopOnScreenY - dp(32)  // 你想更高就把 32 调大，例如 44/56
+        lp.y = keyboardTopOnScreenY - dp(32)
         wm.updateViewLayout(tv, lp)
     }
 
