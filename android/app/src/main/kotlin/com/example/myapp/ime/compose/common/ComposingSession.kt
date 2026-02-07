@@ -1,5 +1,7 @@
 package com.example.myapp.ime.compose.common
 
+import com.example.myapp.dict.impl.PinyinTable
+import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
 
 class ComposingSession {
@@ -10,17 +12,10 @@ class ComposingSession {
     private var _qwertyInput = ""
     private var _committedPrefix = ""
 
-    // NEW: T9 digits 的“预览拼音”（用于侧栏未实现前的悬浮 preedit 展示）
-    private var _t9PreviewPinyin: String? = null
-
     val pinyinStack: List<String> get() = _pinyinStack
     val rawT9Digits: String get() = _rawT9Digits
     val qwertyInput: String get() = _qwertyInput
     val committedPrefix: String get() = _committedPrefix
-
-    fun setT9PreviewPinyin(pinyin: String?) {
-        _t9PreviewPinyin = pinyin?.trim()?.lowercase().takeUnless { it.isNullOrEmpty() }
-    }
 
     // === 撤销栈（从 SimpleIME 挪过来）===
     private sealed class PickRecord {
@@ -42,7 +37,6 @@ class ComposingSession {
         _rawT9Digits = ""
         _qwertyInput = ""
         _committedPrefix = ""
-        _t9PreviewPinyin = null
         pickHistory.clear()
     }
 
@@ -79,15 +73,12 @@ class ComposingSession {
         val s = raw.trim().lowercase()
         if (s.isEmpty()) return emptyList()
 
-        // 如果用户/上层已经带了 `'`，直接按它作为音节边界（再清理空段）
         if (s.contains("'")) {
             return s.split("'")
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
         }
 
-        // 简单启发式：当“当前段已经出现过元音”且“后面出现一个可作为声母开头”的位置，就切分
-        // 目的：仅用于 UI 展示的音节分隔，不改变内部 qwertyInput（避免影响候选检索/消耗逻辑）
         val initials = arrayOf(
             "zh", "ch", "sh",
             "b", "p", "m", "f",
@@ -137,46 +128,112 @@ class ComposingSession {
         return result
     }
 
+    // -------- T9 preedit decode (核心新增) --------
+
+    private object T9PreeditDecoder {
+        private val t9ToPinyinLen2Plus: Map<String, String>
+        private val maxCodeLen: Int
+
+        init {
+            val map = HashMap<String, String>()
+            var maxLen = 0
+
+            for (py in PinyinTable.allPinyins) {
+                val code = T9Lookup.encodeLetters(py.lowercase())
+                if (code.length >= 2) {
+                    map[code] = py.lowercase()
+                    if (code.length > maxLen) maxLen = code.length
+                }
+            }
+
+            t9ToPinyinLen2Plus = map
+            maxCodeLen = maxLen
+        }
+
+        private fun repLetter(d: Char): Char {
+            val list = T9Lookup.charsFromDigit(d)
+            if (list.isNotEmpty() && list[0].isNotEmpty()) return list[0][0]
+            return '?'
+        }
+
+        /**
+         * 返回的字符串满足：
+         * - 去掉 `'` 后，字母数 == digits.length
+         * - 尽量用“最短可完成音节”切分；最后不够完成音节则用代表字母补齐
+         */
+        fun decode(digits: String): String {
+            if (digits.isEmpty()) return ""
+
+            // 单 digit：像搜狗一样先给一个“代表字母”，避免直接跳出完整拼音（例如 9 不要直接变 zhuang）
+            if (digits.length == 1) {
+                return repLetter(digits[0]).toString()
+            }
+
+            val segs = ArrayList<String>()
+            var i = 0
+
+            while (i < digits.length) {
+                val remain = digits.length - i
+                val tryMax = minOf(maxCodeLen, remain)
+
+                var matchedPy: String? = null
+                var matchedLen = 0
+
+                // 选择“最短”可完成音节（len 从 2 开始递增）
+                var len = 2
+                while (len <= tryMax) {
+                    val sub = digits.substring(i, i + len)
+                    val py = t9ToPinyinLen2Plus[sub]
+                    if (py != null) {
+                        matchedPy = py
+                        matchedLen = len
+                        break
+                    }
+                    len++
+                }
+
+                if (matchedPy != null) {
+                    segs.add(matchedPy)
+                    i += matchedLen
+                } else {
+                    // 剩余 digits 不够组成任何合法音节：用代表字母补齐（长度严格等于剩余 digits 长度）
+                    val sb = StringBuilder()
+                    val rem = digits.substring(i)
+                    for (ch in rem) sb.append(repLetter(ch))
+                    segs.add(sb.toString())
+                    break
+                }
+            }
+
+            return segs.joinToString("'")
+        }
+    }
+
     fun displayText(useT9Layout: Boolean): String? {
         if (!isComposing()) return null
 
-        // committedPrefix 是已选中但未最终上屏的汉字前缀（仍保持显示）
         if (!useT9Layout) {
             val syllables = splitPinyinForDisplay(_qwertyInput)
             val pinyinUi = syllables.joinToString("'")
             return _committedPrefix + pinyinUi
         }
 
-        // 中文 T9：显示“已确认拼音栈” + “当前 digits 对应的预览拼音”
+        // 中文 T9：显示 已确认拼音栈 + 对剩余 digits 的实时预览（长度随 digits 变化）
         val stackUi = _pinyinStack.joinToString("'") { it.lowercase() }
-        val previewUi = _t9PreviewPinyin?.lowercase()?.trim().orEmpty()
+        val previewUi = if (_rawT9Digits.isNotEmpty()) T9PreeditDecoder.decode(_rawT9Digits) else ""
 
         val sb = StringBuilder()
         sb.append(_committedPrefix)
 
-        if (stackUi.isNotEmpty()) {
-            sb.append(stackUi)
-        }
-
-        if (_rawT9Digits.isNotEmpty()) {
-            if (previewUi.isNotEmpty()) {
-                if (stackUi.isNotEmpty()) sb.append("'")
-                sb.append(previewUi)
-            } else {
-                // 兜底：如果词典还没给出 preview（极少情况），保留原来的占位
-                if (stackUi.isNotEmpty()) sb.append("'")
-                sb.append("…")
-            }
+        if (stackUi.isNotEmpty()) sb.append(stackUi)
+        if (previewUi.isNotEmpty()) {
+            if (stackUi.isNotEmpty()) sb.append("'")
+            sb.append(previewUi)
         }
 
         return sb.toString()
     }
 
-    /**
-     * backspace 是否在 composing 场景被 session 消耗掉：
-     * - true：session 已处理（撤销前缀 or 删除 composing 输入）
-     * - false：说明当前不在 composing，外部应发送系统 DEL
-     */
     fun backspace(useT9Layout: Boolean): Boolean {
         if (_committedPrefix.isNotEmpty()) {
             undoLastPick()
@@ -232,7 +289,6 @@ class ComposingSession {
 
         val inputStr = _qwertyInput
 
-        // 中文 + ' 分词的那套消耗逻辑（原样搬过来）
         if (isChinese && inputStr.contains("'")) {
             val parts = inputStr.split("'").map { it.trim().lowercase() }
             val nonEmptyParts = parts.filter { it.isNotEmpty() }

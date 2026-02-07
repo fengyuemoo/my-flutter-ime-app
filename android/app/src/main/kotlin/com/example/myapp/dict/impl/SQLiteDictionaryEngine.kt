@@ -27,17 +27,42 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
     }
 
     override fun getPinyinPossibilities(digits: String): List<String> {
-        val possiblePinyins = LinkedHashSet<String>()
+        if (digits.isEmpty()) return emptyList()
+
+        data class Item(val pinyin: String, val code: String)
+
+        val items = ArrayList<Item>()
+
         for (pinyin in allPinyins) {
             val t9 = T9Lookup.encodeLetters(pinyin)
-            if (digits.startsWith(t9)) possiblePinyins.add(pinyin)
-            else if (t9.startsWith(digits)) possiblePinyins.add(pinyin)
+            if (digits.startsWith(t9) || t9.startsWith(digits)) {
+                items.add(Item(pinyin, t9))
+            }
         }
-        if (digits.isNotEmpty()) {
+
+        // 排序目标：
+        // 1) exact match（t9 == digits）最靠前
+        // 2) 更短的音节更靠前（更符合“逐位 digits 变化”的预期）
+        // 3) 最后按拼音字母序稳定排序
+        val sorted = items.sortedWith(
+            compareBy<Item>(
+                { if (it.code == digits) 0 else 1 },
+                { it.code.length },
+                { it.pinyin }
+            )
+        )
+
+        val out = LinkedHashSet<String>()
+
+        // 单 digit：先给 w/x/y/z 这种字母候选（更像搜狗的第一步提示）
+        if (digits.length == 1) {
             val firstDigit = digits[0]
-            possiblePinyins.addAll(T9Lookup.charsFromDigit(firstDigit))
+            for (s in T9Lookup.charsFromDigit(firstDigit)) out.add(s)
         }
-        return possiblePinyins.toList()
+
+        for (it in sorted) out.add(it.pinyin)
+
+        return out.toList()
     }
 
     override fun getSuggestionsFromPinyinStack(pinyinStack: List<String>, rawDigits: String): List<Candidate> {
