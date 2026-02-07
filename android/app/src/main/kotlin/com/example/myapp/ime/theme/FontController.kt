@@ -3,14 +3,13 @@ package com.example.myapp.ime.theme
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Typeface
+import android.os.IBinder
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.LinearLayout
-import android.widget.Spinner
 import android.widget.TextView
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.prefs.KeyboardPrefs
@@ -43,8 +42,16 @@ class FontController(
         keyboardControllerProvider()?.applyFont(fontFamily, fontScale)
     }
 
+    private fun attachToImeWindow(dialog: AlertDialog, token: IBinder?) {
+        if (token == null) return
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG)
+        dialog.window?.attributes = dialog.window?.attributes?.apply { this.token = token }
+        dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+    }
+
     fun showPickerDialog() {
         val ui = uiProvider()
+        val ctx = ui?.rootView?.context ?: context
         val windowToken = ui?.rootView?.windowToken
 
         val families = listOf(
@@ -61,70 +68,121 @@ class FontController(
         fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
         fun scaleLabel(s: Float): String = "${(s * 100f).roundToInt()}%"
 
-        val root = LinearLayout(context).apply {
+        val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(context.dp(16), context.dp(14), context.dp(16), context.dp(10))
+            setPadding(ctx.dp(16), ctx.dp(14), ctx.dp(16), ctx.dp(10))
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
 
-        val preview = TextView(context).apply {
+        val preview = TextView(ctx).apply {
             text = "Aa 字 符号 123"
             gravity = Gravity.CENTER
-            setPadding(0, context.dp(8), 0, context.dp(12))
+            setPadding(0, ctx.dp(8), 0, ctx.dp(12))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
         }
-
-        val fontSpinner = Spinner(context)
-        val scaleSpinner = Spinner(context)
-
-        fontSpinner.adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, families)
-        scaleSpinner.adapter = ArrayAdapter(
-            context,
-            android.R.layout.simple_spinner_dropdown_item,
-            scales.map { scaleLabel(it) }
-        )
 
         fun applyPreview() {
             preview.typeface = Typeface.create(selectedFamily, Typeface.NORMAL)
             preview.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f * selectedScale)
         }
 
-        fontSpinner.setSelection(families.indexOf(selectedFamily).coerceAtLeast(0))
-        scaleSpinner.setSelection(scales.indexOf(selectedScale).takeIf { it >= 0 } ?: scales.indexOf(1.0f).coerceAtLeast(0))
-
-        fontSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>, view: android.view.View?, position: Int, id: Long) {
-                selectedFamily = families[position]
-                applyPreview()
+        // 可点击行（代替 Spinner）
+        fun makeRow(title: String, initialValue: String, onClick: (valueView: TextView) -> Unit): View {
+            val row = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(ctx.dp(12), ctx.dp(12), ctx.dp(12), ctx.dp(12))
+                isClickable = true
+                isFocusable = true
+                setBackgroundResource(android.R.drawable.list_selector_background)
             }
 
-            override fun onNothingSelected(parent: AdapterView<*>) {}
+            val tvTitle = TextView(ctx).apply {
+                text = title
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            }
+
+            val tvValue = TextView(ctx).apply {
+                text = initialValue
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                gravity = Gravity.END
+                setPadding(ctx.dp(12), 0, 0, 0)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            row.addView(tvTitle)
+            row.addView(tvValue)
+
+            row.setOnClickListener { onClick(tvValue) }
+            return row
         }
 
-        scaleSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>, view: android.view.View?, position: Int, id: Long) {
-                selectedScale = scales[position]
-                applyPreview()
-            }
+        fun showSingleChoiceDialog(
+            title: String,
+            items: Array<String>,
+            checkedIndex: Int,
+            onPicked: (index: Int) -> Unit
+        ) {
+            val d = AlertDialog.Builder(ctx)
+                .setTitle(title)
+                .setSingleChoiceItems(items, checkedIndex) { dialog, which ->
+                    onPicked(which)
+                    dialog.dismiss()
+                }
+                .setNegativeButton("取消", null)
+                .create()
 
-            override fun onNothingSelected(parent: AdapterView<*>) {}
+            attachToImeWindow(d, windowToken)
+
+            try {
+                d.show()
+            } catch (t: Throwable) {
+                t.printStackTrace()
+            }
         }
 
         root.addView(preview)
-        root.addView(TextView(context).apply { text = "字体" })
-        root.addView(fontSpinner)
-        root.addView(TextView(context).apply {
-            text = "字号缩放"
-            setPadding(0, context.dp(10), 0, 0)
-        })
-        root.addView(scaleSpinner)
+
+        // 字体行
+        root.addView(
+            makeRow(title = "字体", initialValue = selectedFamily) { valueView ->
+                val items = families.toTypedArray()
+                val checked = families.indexOf(selectedFamily).coerceAtLeast(0)
+                showSingleChoiceDialog(
+                    title = "选择字体",
+                    items = items,
+                    checkedIndex = checked
+                ) { idx ->
+                    selectedFamily = families[idx]
+                    valueView.text = selectedFamily
+                    applyPreview()
+                }
+            }
+        )
+
+        // 字号行
+        root.addView(
+            makeRow(title = "字号缩放", initialValue = scaleLabel(selectedScale)) { valueView ->
+                val labels = scales.map { scaleLabel(it) }.toTypedArray()
+                val checked = scales.indexOf(selectedScale).takeIf { it >= 0 } ?: scales.indexOf(1.0f).coerceAtLeast(0)
+                showSingleChoiceDialog(
+                    title = "选择字号缩放",
+                    items = labels,
+                    checkedIndex = checked
+                ) { idx ->
+                    selectedScale = scales[idx]
+                    valueView.text = scaleLabel(selectedScale)
+                    applyPreview()
+                }
+            }
+        )
 
         applyPreview()
 
-        val dialog = AlertDialog.Builder(context)
+        val dialog = AlertDialog.Builder(ctx)
             .setTitle("字体与字号")
             .setView(root)
             .setNegativeButton("取消", null)
@@ -136,18 +194,11 @@ class FontController(
             }
             .create()
 
-        // 关键：把 dialog 绑定到输入法窗口 token，避免 BadTokenException 直接把 IME 打崩
-        if (windowToken != null) {
-            dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG)
-            dialog.window?.attributes = dialog.window?.attributes?.apply { token = windowToken }
-            // 可选：让对话框不抢走 IME 的输入焦点（更像“附着在键盘上的弹窗”）
-            dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
-        }
+        attachToImeWindow(dialog, windowToken)
 
         try {
             dialog.show()
         } catch (t: Throwable) {
-            // 防止任何异常导致输入法服务崩溃而“退出”
             t.printStackTrace()
         }
     }
