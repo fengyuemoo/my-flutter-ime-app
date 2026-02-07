@@ -32,13 +32,9 @@ class ImeActionDispatcher(
     private lateinit var keyboardController: KeyboardController
     private lateinit var candidateController: CandidateController
 
-    // ---------------- Symbol panel state (source of truth) ----------------
-
     private var symbolCategory: ImeActions.SymbolCategory = ImeActions.SymbolCategory.COMMON
     private var symbolPage: Int = 0
     private var symbolLocked: Boolean = false
-
-    // ---------------- Session access ----------------
 
     private fun session(): ComposingSession = sessions.current()
 
@@ -48,8 +44,6 @@ class ImeActionDispatcher(
         }
         return keyboardController.getMainMode()
     }
-
-    // ---------------- Strategy layer ----------------
 
     private val cnQwertyStrategy: ComposeStrategy =
         CnQwertyComposeStrategy(
@@ -86,8 +80,6 @@ class ImeActionDispatcher(
 
     private fun currentEnglishStrategy(): EnglishComposeStrategy? =
         currentStrategy() as? EnglishComposeStrategy
-
-    // ---------------- Wiring & UI sync ----------------
 
     fun attach(
         ui: ImeUi,
@@ -129,8 +121,6 @@ class ImeActionDispatcher(
     }
 
     private fun shouldWriteComposingToEditor(mode: KeyboardMode): Boolean {
-        // 需求：中文拼音 composing 不进入输入框（全键盘/T9 都一样）。
-        // 英文保持原有 composing 行为（写入输入框），避免破坏英文预测/编辑体验。
         return !mode.isChinese
     }
 
@@ -168,13 +158,10 @@ class ImeActionDispatcher(
     }
 
     private fun afterSessionMutated() {
-        // NEW: 先刷新候选/侧栏（从而写入 T9 预览拼音），再刷新 composing 预览
         refreshCandidates()
         refreshComposingView()
         syncEnglishPredictUi()
     }
-
-    // ---------------- ImeActions ----------------
 
     override fun inputConnection(): InputConnection? = inputConnectionProvider()
 
@@ -265,8 +252,12 @@ class ImeActionDispatcher(
                 }
             }
 
+            // CHANGED: 中文 T9 composing 时，优先提交“预览拼音(去掉')”；
+            // 如果取不到预览，则继续走原本的 onEnter / 系统换行（满足“没有预览时换行”）。
             if (mode.isChinese && mode.useT9Layout && session().isComposing()) {
-                if (::candidateController.isInitialized && candidateController.commitFirstCandidateOnEnter()) {
+                val previewCommit = session().t9PreviewCommitText()
+                if (!previewCommit.isNullOrEmpty()) {
+                    commitText(previewCommit)
                     return
                 }
             }
@@ -332,8 +323,6 @@ class ImeActionDispatcher(
         closeSymbolPanel()
     }
 
-    // ---------------- Symbol panel actions ----------------
-
     override fun setSymbolCategory(category: ImeActions.SymbolCategory) {
         symbolCategory = category
         symbolPage = 0
@@ -374,8 +363,6 @@ class ImeActionDispatcher(
         }
     }
 
-    // ---------------- English predict (per English main mode) ----------------
-
     override fun getEnglishPredictEnabled(): Boolean {
         return currentEnglishStrategy()?.getEnglishPredictEnabled() ?: false
     }
@@ -389,8 +376,6 @@ class ImeActionDispatcher(
         currentEnglishStrategy()?.toggleEnglishPredict()
         afterSessionMutated()
     }
-
-    // ---------------- Internal helpers ----------------
 
     private fun handleStrategyResult(result: StrategyResult) {
         when (result) {

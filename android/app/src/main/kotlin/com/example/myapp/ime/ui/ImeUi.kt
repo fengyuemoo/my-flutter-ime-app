@@ -1,12 +1,15 @@
 package com.example.myapp.ime.ui
 
 import android.graphics.Color
+import android.graphics.Typeface
+import android.os.Build
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -47,6 +50,37 @@ class ImeUi {
 
     fun setComposingPreviewListener(listener: ((String?) -> Unit)?) {
         composingPreviewListener = listener
+    }
+
+    private fun makeThinTypeface(base: Typeface?): Typeface {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Typeface.create(base ?: Typeface.DEFAULT, 300, false)
+        } else {
+            Typeface.create("sans-serif-light", Typeface.NORMAL)
+        }
+    }
+
+    private fun applyThinFontRecursive(v: View) {
+        if (v is TextView) {
+            v.typeface = makeThinTypeface(v.typeface)
+        }
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount) {
+                applyThinFontRecursive(v.getChildAt(i))
+            }
+        }
+    }
+
+    private fun installRecyclerAutoThinFont(rv: RecyclerView) {
+        rv.addOnChildAttachStateChangeListener(object : RecyclerView.OnChildAttachStateChangeListener {
+            override fun onChildViewAttachedToWindow(view: View) {
+                applyThinFontRecursive(view)
+            }
+
+            override fun onChildViewDetachedFromWindow(view: View) {
+                // no-op
+            }
+        })
     }
 
     fun inflate(
@@ -94,6 +128,10 @@ class ImeUi {
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
 
+        // NEW: 候选 item 是动态 attach 的，确保每次 attach 都应用细字体（不改字号）
+        installRecyclerAutoThinFont(recyclerHorizontal)
+        installRecyclerAutoThinFont(recyclerVertical)
+
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
         // IMPORTANT：不在 inputView 内显示预览，避免遮挡首候选
@@ -102,6 +140,9 @@ class ImeUi {
 
         setComposingPreview(null)
         showIdleState()
+
+        // NEW: 对整个输入法前端（ImeUi 这棵 View 树）统一应用细字体（不改字号）
+        applyThinFontRecursive(rootView)
 
         return rootView
     }
@@ -122,7 +163,6 @@ class ImeUi {
 
     fun showComposingState(isExpanded: Boolean) {
         if (isExpanded) {
-            // 注意：你本地已修复“展开高度变化”，这里不要再强行 GONE topBarFrame（由你现有逻辑决定）
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.GONE
         } else {
@@ -132,11 +172,9 @@ class ImeUi {
     }
 
     fun setComposingPreview(text: String?) {
-        // 不在布局里显示（防遮挡）
         tvComposingPreview.text = ""
         tvComposingPreview.visibility = View.GONE
 
-        // 交给 service 的浮层显示
         composingPreviewListener?.invoke(text)
     }
 
@@ -205,6 +243,8 @@ class ImeUi {
         }
 
         btnFilter.text = spannable
+        // NEW: Spannable 改完后再确保字体仍是细体
+        btnFilter.typeface = makeThinTypeface(btnFilter.typeface)
     }
 
     fun setThemeMode(themeMode: Int) {
@@ -227,11 +267,13 @@ class ImeUi {
         toolbarContainer.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
 
-        // tvComposingPreview 不再用来展示预览，这里只保持隐藏即可
         tvComposingPreview.visibility = View.GONE
         tvComposingPreview.setBackgroundColor(
             if (themeMode == 1) panelDark else Color.parseColor("#F5F5F5")
         )
         tvComposingPreview.setTextColor(if (themeMode == 1) textDark else textLight)
+
+        // NEW: 主题切换后再扫一遍，确保所有文字仍保持细体
+        applyThinFontRecursive(rootView)
     }
 }

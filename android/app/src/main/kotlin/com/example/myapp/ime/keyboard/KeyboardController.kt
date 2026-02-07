@@ -1,6 +1,11 @@
 package com.example.myapp.ime.keyboard
 
+import android.graphics.Typeface
+import android.os.Build
+import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.TextView
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.keyboard.model.PanelState
@@ -12,10 +17,6 @@ import com.example.myapp.keyboard.core.KeyboardType
 import com.example.myapp.keyboard.core.PanelType
 import com.example.myapp.keyboard.core.RawCommitMode
 
-/**
- * UI contract for the symbol panel keyboard.
- * KeyboardController does NOT own symbol panel state; dispatcher does.
- */
 interface SymbolPanelUi {
     fun renderSymbolPanel(
         category: ImeActions.SymbolCategory,
@@ -35,48 +36,45 @@ class KeyboardController(
     private var currentKeyboard: IKeyboardMode? = null
     private var lastKeyboardBeforePanel: IKeyboardMode? = null
 
-    // Internal unified state: main mode + panel state
     private var _mode: KeyboardMode = KeyboardMode(isChinese = true, useT9Layout = false)
     private var _panelState: PanelState = PanelState.None
 
-    // Optional listeners (for SessionHub / UI binder / etc.)
     var onModeChanged: ((KeyboardMode) -> Unit)? = null
     var onKeyboardChanged: (() -> Unit)? = null
 
-    /**
-     * Theme mode provider: used to apply theme automatically whenever keyboard view is switched/rebuilt.
-     * 0 = light, 1 = dark (matches KeyboardPrefs / ThemeController).
-     */
     var themeModeProvider: (() -> Int)? = null
-
-    /**
-     * English predict state provider: injected by router/dispatcher.
-     *
-     * KeyboardController does NOT own predict state; it only pushes it into current keyboard UI
-     * (if supported).
-     */
     var englishPredictEnabledProvider: (() -> Boolean)? = null
 
-    // Read-only public properties
     val mode: KeyboardMode get() = _mode
-
-    /**
-     * Note: don't name this 'panelState' (would conflict with getPanelState() JVM signature).
-     * Use panel / getPanelState().
-     */
     val panel: PanelState get() = _panelState
 
-    // Compat getters (legacy call sites)
     val isChinese: Boolean get() = _mode.isChinese
     val useT9Layout: Boolean get() = _mode.useT9Layout
 
-    // Cache: avoid repeated registry.get and ensure stable instances
     private val kbNumeric: IKeyboardMode = registry.get(KeyboardType.NUMERIC)
     private val kbSymbol: IKeyboardMode = registry.get(KeyboardType.SYMBOL)
     private val kbCnT9: IKeyboardMode = registry.get(KeyboardType.CNT9)
     private val kbEnT9: IKeyboardMode = registry.get(KeyboardType.ENT9)
 
-    /** UI-only: push English predict state to current keyboard UI if it supports EnglishPredictUi. */
+    private fun makeThinTypeface(base: Typeface?): Typeface {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Typeface.create(base ?: Typeface.DEFAULT, 300, false)
+        } else {
+            Typeface.create("sans-serif-light", Typeface.NORMAL)
+        }
+    }
+
+    private fun applyThinFontRecursive(v: View) {
+        if (v is TextView) {
+            v.typeface = makeThinTypeface(v.typeface)
+        }
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount) {
+                applyThinFontRecursive(v.getChildAt(i))
+            }
+        }
+    }
+
     fun updateEnglishPredictUi(enabled: Boolean) {
         val keyboard = currentKeyboard
         if (keyboard is EnglishPredictUi) {
@@ -84,13 +82,11 @@ class KeyboardController(
         }
     }
 
-    /** UI-only: pull predict state from provider (current strategy) and push to keyboard UI. */
     fun refreshEnglishPredictUi() {
         val enabled = englishPredictEnabledProvider?.invoke() ?: false
         updateEnglishPredictUi(enabled)
     }
 
-    /** UI-only: push symbol panel state to current keyboard UI if it supports SymbolPanelUi. */
     fun updateSymbolPanelUi(
         category: ImeActions.SymbolCategory,
         page: Int,
@@ -107,14 +103,9 @@ class KeyboardController(
         }
     }
 
-    /** Router/dispatcher should use this: panel does not participate in compose strategy selection. */
     fun getMainMode(): KeyboardMode = _mode
-
-    /** Panel state (None / Open(type)). */
     fun getPanelState(): PanelState = _panelState
-
     fun isPanelOpen(): Boolean = getPanelState() is PanelState.Open
-
     fun isRawCommitMode(): Boolean = currentKeyboard is RawCommitMode
 
     fun updateSidebar(items: List<String>) {
@@ -133,12 +124,6 @@ class KeyboardController(
         }
     }
 
-    /**
-     * Set main input mode (CN/EN + Qwerty/T9).
-     *
-     * If a panel is currently open, we still update internal mode and refresh
-     * "keyboard to restore to" (lastKeyboardBeforePanel), but we do not change UI immediately.
-     */
     fun setMainMode(isChinese: Boolean, useT9Layout: Boolean) {
         val newMode = KeyboardMode(isChinese = isChinese, useT9Layout = useT9Layout)
 
@@ -147,11 +132,9 @@ class KeyboardController(
 
         val targetMain = resolveMainKeyboard(_mode.isChinese, _mode.useT9Layout)
 
-        // Panel open: only update the keyboard that will be restored after closing the panel.
         if (_panelState is PanelState.Open) {
             lastKeyboardBeforePanel = targetMain
             host.onToolbarUpdate()
-            // Refresh is harmless even on panels (only keyboards implementing EnglishPredictUi react).
             refreshEnglishPredictUi()
             return
         }
@@ -175,12 +158,7 @@ class KeyboardController(
         setMainMode(isChinese = _mode.isChinese, useT9Layout = !_mode.useT9Layout)
     }
 
-    /**
-     * Open panel (NUMERIC / SYMBOL).
-     * Records which keyboard to restore after closing the panel.
-     */
     fun openPanel(type: PanelType) {
-        // Record the pre-panel keyboard only once.
         if (_panelState !is PanelState.Open) {
             lastKeyboardBeforePanel = currentKeyboard
         }
@@ -194,10 +172,6 @@ class KeyboardController(
         showKeyboard(target)
     }
 
-    /**
-     * Close panel: prefer restoring lastKeyboardBeforePanel;
-     * if null, fall back to current main mode keyboard.
-     */
     fun closePanel() {
         _panelState = PanelState.None
 
@@ -213,6 +187,8 @@ class KeyboardController(
 
     fun applyTheme(themeMode: Int) {
         currentKeyboard?.applyTheme(themeMode)
+        // NEW: 主题应用后也确保当前键盘 view 的字体保持细体
+        currentKeyboard?.getView()?.let { applyThinFontRecursive(it) }
     }
 
     private fun showKeyboard(target: IKeyboardMode) {
@@ -221,14 +197,15 @@ class KeyboardController(
         bodyFrame.addView(target.getView())
         target.onActivate()
 
-        // IMPORTANT: apply current theme to the newly shown keyboard immediately
         val themeMode = themeModeProvider?.invoke() ?: 0
         target.applyTheme(themeMode)
+
+        // NEW: 每次键盘切换/重建后统一把键盘前端文字变细（不改字号）
+        applyThinFontRecursive(target.getView())
 
         host.onToolbarUpdate()
         onKeyboardChanged?.invoke()
 
-        // After switching keyboards, sync English predict UI once (if supported by current keyboard).
         refreshEnglishPredictUi()
     }
 }
