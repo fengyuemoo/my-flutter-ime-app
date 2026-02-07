@@ -49,7 +49,6 @@ class CandidateController(
             val s = letters.lowercase()
             if (s.isEmpty()) return ""
 
-            // dp[i] = 最佳分词（把 0..i 完全分成合法音节）
             val dp: ArrayList<List<String>?> = ArrayList<List<String>?>(s.length + 1)
             repeat(s.length + 1) { dp.add(null) }
             dp[0] = emptyList()
@@ -63,14 +62,12 @@ class CandidateController(
                     if (!pinyinSet.contains(sub)) continue
                     val cand = base + sub
                     val old = dp[i + l]
-                    // 规则：同长度前缀下，优先 syllable 更多（更利于 yi'ge 这种）
                     if (old == null || cand.size > old.size) {
                         dp[i + l] = cand
                     }
                 }
             }
 
-            // 选一个 cut，让前半部分能完整分词，且 cut 尽量靠后（剩余尽量短）
             var bestCut = 0
             for (k in s.length downTo 0) {
                 if (dp[k] != null) {
@@ -93,12 +90,10 @@ class CandidateController(
         fun buildPreview(digits: String, candidates: List<Candidate>): String? {
             if (digits.isEmpty()) return null
 
-            // 1 位 digits：永远先显示字母提示（9->w），避免直接跳完整音节
             if (digits.length == 1) {
                 return repLetter(digits[0]).toString()
             }
 
-            // 从高频候选里找拼音
             val bestPinyin = candidates.asSequence()
                 .mapNotNull { it.pinyin }
                 .firstOrNull { it.isNotBlank() }
@@ -109,7 +104,6 @@ class CandidateController(
                 val letters = lettersOnly(bestPinyin)
                 val sb = StringBuilder()
                 sb.append(letters.take(digits.length))
-                // 如果拼音太短，补齐剩余 digits 的代表字母，保证“字母数=digits 数”
                 var i = sb.length
                 while (i < digits.length) {
                     sb.append(repLetter(digits[i]))
@@ -117,7 +111,6 @@ class CandidateController(
                 }
                 sb.toString()
             } else {
-                // 候选还没加载好时的兜底：纯代表字母串
                 buildString {
                     for (ch in digits) append(repLetter(ch))
                 }
@@ -125,6 +118,59 @@ class CandidateController(
 
             return segmentLettersForUi(prefixLetters)
         }
+
+        fun normalizePreviewLetters(previewText: String): String {
+            val sb = StringBuilder()
+            for (ch in previewText.lowercase()) {
+                if (ch in 'a'..'z') sb.append(ch)
+            }
+            return sb.toString()
+        }
+
+        fun normalizePinyinLetters(pinyin: String): String {
+            val sb = StringBuilder()
+            for (ch in pinyin.lowercase()) {
+                if (ch in 'a'..'z') sb.append(ch)
+            }
+            return sb.toString()
+        }
+    }
+
+    private fun promoteCandidateMatchingPreview(
+        candidates: ArrayList<Candidate>,
+        previewText: String?
+    ) {
+        if (previewText.isNullOrEmpty()) return
+        if (candidates.isEmpty()) return
+
+        val key = T9PreviewBuilder.normalizePreviewLetters(previewText)
+        if (key.isEmpty()) return
+
+        var bestIdx = -1
+        var bestScore = Int.MIN_VALUE
+
+        // 只用中文候选：cand.pinyin != null 才算匹配候选
+        for (i in candidates.indices) {
+            val c = candidates[i]
+            val py = c.pinyin ?: continue
+            val pyLetters = T9PreviewBuilder.normalizePinyinLetters(py)
+            if (!pyLetters.startsWith(key)) continue
+
+            // 评分：越“贴合预览长度”越好，其次频率更高更好
+            val lenScore = -kotlin.math.abs(pyLetters.length - key.length)
+            val freqScore = c.priority
+            val score = lenScore * 1_000_000 + freqScore
+
+            if (score > bestScore) {
+                bestScore = score
+                bestIdx = i
+            }
+        }
+
+        if (bestIdx <= 0) return
+
+        val matched = candidates.removeAt(bestIdx)
+        candidates.add(0, matched)
     }
 
     override fun toggleCandidatesExpanded() {
@@ -155,9 +201,9 @@ class CandidateController(
     }
 
     fun updateCandidates() {
+        val s = session()
         currentCandidates.clear()
 
-        val s = session()
         if (!s.isComposing()) {
             ui.showIdleState()
             keyboardController.updateSidebar(emptyList())
@@ -185,14 +231,23 @@ class CandidateController(
         keyboardController.updateSidebar(r.pinyinSidebar)
 
         currentCandidates = ArrayList(r.candidates)
-        ui.setCandidates(currentCandidates)
 
-        // NEW: 用高频候选的拼音实时生成 T9 预览（驱动悬浮框）
-        if (mainMode.isChinese && mainMode.useT9Layout && s.rawT9Digits.isNotEmpty()) {
-            s.setT9PreviewText(T9PreviewBuilder.buildPreview(s.rawT9Digits, currentCandidates))
-        } else {
-            s.setT9PreviewText(null)
+        // 1) 先生成预览（依赖当前 candidates）
+        val previewText =
+            if (mainMode.isChinese && mainMode.useT9Layout && s.rawT9Digits.isNotEmpty()) {
+                T9PreviewBuilder.buildPreview(s.rawT9Digits, currentCandidates)
+            } else {
+                null
+            }
+        s.setT9PreviewText(previewText)
+
+        // 2) 再把与预览一致的中文候选提升到第 1 位
+        if (mainMode.isChinese && mainMode.useT9Layout) {
+            promoteCandidateMatchingPreview(currentCandidates, previewText)
         }
+
+        // 3) 最后一次性 setCandidates（避免 UI 闪动）
+        ui.setCandidates(currentCandidates)
     }
 
     fun handleSpaceKey() {

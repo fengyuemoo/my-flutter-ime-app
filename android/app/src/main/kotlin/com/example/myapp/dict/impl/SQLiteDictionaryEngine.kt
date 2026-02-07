@@ -136,14 +136,52 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             }
         }
 
-        // 0) 中文模式：完整英文词 + 少量可控变体（s / es）
-        val exactEn = queryExactEnglish(db, norm, isT9)
+        // 0) 中文模式：英文精确匹配
+        // - 中文 T9：只在 digits>=4 时才允许置顶英文，并且要求英文词长 == digits 长度（过滤 wi/wh/wie... 这类噪声）
+        // - 中文 QWERTY：保持原行为（允许英文精确匹配 + 变体）
+        val exactEn = if (isT9) {
+            if (norm.length >= 4) {
+                queryExactEnglish(
+                    db = db,
+                    input = norm,
+                    isT9 = true,
+                    minWordLen = 4,
+                    exactWordLen = norm.length
+                )
+            } else {
+                emptyList()
+            }
+        } else {
+            queryExactEnglish(
+                db = db,
+                input = norm,
+                isT9 = false,
+                minWordLen = 1,
+                exactWordLen = null
+            )
+        }
         addUnique(exactEn)
 
         val isAsciiLetters = !isT9 && norm.isNotEmpty() && norm.all { it in 'a'..'z' }
         if (isAsciiLetters && norm.length in 2..32) {
-            addUnique(queryExactEnglish(db, "${norm}s", false))
-            addUnique(queryExactEnglish(db, "${norm}es", false))
+            addUnique(
+                queryExactEnglish(
+                    db = db,
+                    input = "${norm}s",
+                    isT9 = false,
+                    minWordLen = 1,
+                    exactWordLen = null
+                )
+            )
+            addUnique(
+                queryExactEnglish(
+                    db = db,
+                    input = "${norm}es",
+                    isT9 = false,
+                    minWordLen = 1,
+                    exactWordLen = null
+                )
+            )
         }
 
         // 1) 中文 T9：整串 digits + 单字回退
@@ -494,7 +532,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    // NEW: 取出 COL_INPUT/COL_SYLLABLES，写入 Candidate.pinyin/syllables
+    // 取出 COL_INPUT/COL_SYLLABLES，写入 Candidate.pinyin/syllables
     private fun querySingleCharByT9Prefix(db: SQLiteDatabase, digitsPrefix: String, limit: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
@@ -533,7 +571,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    // NEW: 取出 COL_INPUT/COL_SYLLABLES，写入 Candidate.pinyin/syllables（中文候选）
+    // 取出 COL_INPUT/COL_SYLLABLES，写入 Candidate.pinyin/syllables（中文候选）
     private fun queryDb(
         db: SQLiteDatabase,
         input: String,
@@ -596,7 +634,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 argsList.add(input)
             }
 
-            // NOTE: 多取两列：input(拼音) + syllables
             db.query(
                 DictionaryDbHelper.TABLE_NAME,
                 arrayOf(
@@ -637,15 +674,37 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    private fun queryExactEnglish(db: SQLiteDatabase, input: String, isT9: Boolean): List<Candidate> {
+    private fun queryExactEnglish(
+        db: SQLiteDatabase,
+        input: String,
+        isT9: Boolean,
+        minWordLen: Int,
+        exactWordLen: Int?
+    ): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
             val col = if (isT9) DictionaryDbHelper.COL_T9 else DictionaryDbHelper.COL_INPUT
+
+            val selectionSb = StringBuilder()
+            val args = ArrayList<String>()
+
+            selectionSb.append("lower($col) = ?")
+            args.add(input.lowercase())
+
+            selectionSb.append(" AND ${DictionaryDbHelper.COL_LANG} = 1")
+            selectionSb.append(" AND ${DictionaryDbHelper.COL_WORD_LEN} >= ?")
+            args.add(minWordLen.toString())
+
+            if (exactWordLen != null) {
+                selectionSb.append(" AND ${DictionaryDbHelper.COL_WORD_LEN} = ?")
+                args.add(exactWordLen.toString())
+            }
+
             db.query(
                 DictionaryDbHelper.TABLE_NAME,
                 arrayOf(DictionaryDbHelper.COL_WORD, DictionaryDbHelper.COL_FREQ),
-                "lower($col) = ? AND ${DictionaryDbHelper.COL_LANG} = 1",
-                arrayOf(input.lowercase()),
+                selectionSb.toString(),
+                args.toTypedArray(),
                 null,
                 null,
                 "${DictionaryDbHelper.COL_FREQ} DESC",
@@ -654,7 +713,17 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, input, freq, input.length, 0))
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = input,
+                            priority = freq,
+                            matchedLength = input.length,
+                            pinyinCount = 0,
+                            pinyin = null,
+                            syllables = 0
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {
