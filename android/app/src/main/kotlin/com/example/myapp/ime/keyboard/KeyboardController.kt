@@ -1,15 +1,11 @@
 package com.example.myapp.ime.keyboard
 
-import android.graphics.Typeface
-import android.os.Build
-import android.view.View
-import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.TextView
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.keyboard.model.PanelState
 import com.example.myapp.ime.keyboard.ui.EnglishPredictUi
+import com.example.myapp.ime.ui.FontApplier
 import com.example.myapp.keyboard.core.IKeyboardMode
 import com.example.myapp.keyboard.core.ISidebarHost
 import com.example.myapp.keyboard.core.KeyboardRegistry
@@ -45,6 +41,9 @@ class KeyboardController(
     var themeModeProvider: (() -> Int)? = null
     var englishPredictEnabledProvider: (() -> Boolean)? = null
 
+    // NEW: Font config provider (family + scale)
+    var fontConfigProvider: (() -> Pair<String, Float>)? = null
+
     val mode: KeyboardMode get() = _mode
     val panel: PanelState get() = _panelState
 
@@ -56,23 +55,13 @@ class KeyboardController(
     private val kbCnT9: IKeyboardMode = registry.get(KeyboardType.CNT9)
     private val kbEnT9: IKeyboardMode = registry.get(KeyboardType.ENT9)
 
-    private fun makeThinTypeface(base: Typeface?): Typeface {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            Typeface.create(base ?: Typeface.DEFAULT, 300, false)
-        } else {
-            Typeface.create("sans-serif-light", Typeface.NORMAL)
-        }
+    private fun applyFontIfAny() {
+        val (family, scale) = fontConfigProvider?.invoke() ?: return
+        currentKeyboard?.getView()?.let { FontApplier.apply(it, family, scale) }
     }
 
-    private fun applyThinFontRecursive(v: View) {
-        if (v is TextView) {
-            v.typeface = makeThinTypeface(v.typeface)
-        }
-        if (v is ViewGroup) {
-            for (i in 0 until v.childCount) {
-                applyThinFontRecursive(v.getChildAt(i))
-            }
-        }
+    fun applyFont(fontFamily: String, fontScale: Float) {
+        currentKeyboard?.getView()?.let { FontApplier.apply(it, fontFamily, fontScale) }
     }
 
     fun updateEnglishPredictUi(enabled: Boolean) {
@@ -187,8 +176,8 @@ class KeyboardController(
 
     fun applyTheme(themeMode: Int) {
         currentKeyboard?.applyTheme(themeMode)
-        // NEW: 主题应用后也确保当前键盘 view 的字体保持细体
-        currentKeyboard?.getView()?.let { applyThinFontRecursive(it) }
+        // NEW: 主题应用后也要保持当前字体/字号选择
+        applyFontIfAny()
     }
 
     private fun showKeyboard(target: IKeyboardMode) {
@@ -200,8 +189,8 @@ class KeyboardController(
         val themeMode = themeModeProvider?.invoke() ?: 0
         target.applyTheme(themeMode)
 
-        // NEW: 每次键盘切换/重建后统一把键盘前端文字变细（不改字号）
-        applyThinFontRecursive(target.getView())
+        // NEW: 每次键盘切换后应用用户字体/字号
+        applyFontIfAny()
 
         host.onToolbarUpdate()
         onKeyboardChanged?.invoke()

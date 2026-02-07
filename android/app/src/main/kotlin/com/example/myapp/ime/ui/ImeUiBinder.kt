@@ -4,6 +4,7 @@ import android.view.View
 import com.example.myapp.R
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.prefs.LayoutController
+import com.example.myapp.ime.theme.FontController
 import com.example.myapp.ime.ui.api.UiStateActions
 
 class ImeUiBinder(
@@ -11,7 +12,8 @@ class ImeUiBinder(
     private val ui: ImeUi,
     private val imeActions: ImeActions,
     private val uiStateActions: UiStateActions,
-    private val layoutController: LayoutController
+    private val layoutController: LayoutController,
+    private val fontController: FontController
 ) {
     fun bind() {
         ui.getExpandButton().setOnClickListener { uiStateActions.toggleCandidatesExpanded() }
@@ -30,5 +32,9 @@ class ImeUiBinder(
 
         ui.rootView.findViewById<View>(R.id.btntoollayout)
             .setOnClickListener { layoutController.toggle() }
+
+        // NEW: 字体/字号按钮
+        ui.rootView.findViewById<View>(R.id.btntoolfont)
+            .setOnClickListener { fontController.showPickerDialog() }
     }
 }

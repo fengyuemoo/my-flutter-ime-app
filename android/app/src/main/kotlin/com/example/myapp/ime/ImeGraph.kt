@@ -132,6 +132,13 @@ class ImeGraph(
                 keyboardControllerProvider = { keyboardController }
             )
 
+            // NEW: 每次键盘 view 切换/重建后重新应用字体/字号（把新加进来的键盘 view 也覆盖到）
+            val prevOnKeyboardChanged = keyboardController.onKeyboardChanged
+            keyboardController.onKeyboardChanged = {
+                prevOnKeyboardChanged?.invoke()
+                ui.applySavedFontNow()
+            }
+
             // 11) UI binder（按你当前 ImeUiBinder 构造参数）
             val uiBinder = ImeUiBinder(
                 rootView = rootView,
@@ -140,6 +147,9 @@ class ImeGraph(
                 uiStateActions = candidateController,
                 layoutController = layoutController
             )
+
+            // NEW: 初始化时也应用一次已保存的字体/字号
+            ui.applySavedFontNow()
 
             return ImeGraph(
                 ui = ui,

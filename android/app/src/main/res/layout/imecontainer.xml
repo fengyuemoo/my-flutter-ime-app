@@ -49,6 +49,20 @@
                         style="@style/KeyButton.Func"
                         android:layout_marginEnd="5dp" />
 
+                    <!-- NEW: 字体/字号按钮（图标在 ImeUi.kt 里运行时设置；这里给一个占位 src） -->
+                    <ImageButton
+                        android:id="@+id/btntoolfont"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="5dp"
+                        android:layout_marginEnd="5dp"
+                        android:background="@drawable/ripple_ime_key_func"
+                        android:contentDescription="字体/字号"
+                        android:padding="8dp"
+                        android:scaleType="centerInside"
+                        android:src="@android:drawable/ic_menu_edit" />
+
                     <Button
                         android:id="@+id/btntooltheme"
                         android:layout_width="0dp"
