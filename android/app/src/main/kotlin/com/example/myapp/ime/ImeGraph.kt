@@ -16,6 +16,7 @@ import com.example.myapp.ime.keyboard.KeyboardHost
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.prefs.LayoutController
 import com.example.myapp.ime.router.ImeActionDispatcher
+import com.example.myapp.ime.theme.FontController
 import com.example.myapp.ime.theme.ThemeController
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.ime.ui.ImeUiBinder
@@ -52,25 +53,31 @@ class ImeGraph(
             inputConnectionProvider: () -> InputConnection?
         ): ImeGraph {
 
+            // 0) Mode holder
             val modeHolder = KeyboardModeHolder()
 
+            // 1) Sessions hub
             val sessions = ComposingSessionHub(
                 modeProvider = { modeHolder.mode }
             )
 
+            // 2) Dispatcher
             val dispatcher = ImeActionDispatcher(
                 context = context,
                 sessions = sessions,
                 inputConnectionProvider = inputConnectionProvider
             )
 
+            // 3) Dictionary
             val dictManager = DictionaryManager(
                 context = context,
                 mainHandler = Handler(Looper.getMainLooper())
             )
 
+            // 4) Candidate composer
             val candidateComposer = CandidateComposer(dictManager.dictionary)
 
+            // 5) Keyboard registry + controller
             val keyboardRegistry = DefaultKeyboardRegistry(
                 context,
                 dispatcher as ImeActions
@@ -82,12 +89,11 @@ class ImeGraph(
                 keyboardRegistry
             )
 
-            // NEW: 让 KeyboardController 在每次切键盘/面板时都能拿到最新字体配置
-            keyboardController.fontConfigProvider = { ui.getFontConfig() }
-
+            // 6) Mode binding
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
+            // 7) Candidate controller
             val candidateController = CandidateController(
                 ui = ui,
                 keyboardController = keyboardController,
@@ -98,11 +104,13 @@ class ImeGraph(
                 updateComposingView = { dispatcher.refreshComposingView() }
             )
 
+            // 8) Toolbar
             val toolbarController = ToolbarController(
                 rootView = rootView,
                 keyboardControllerProvider = { keyboardController }
             )
 
+            // 9) Attach dispatcher
             dispatcher.attach(
                 ui = ui,
                 keyboardController = keyboardController,
@@ -110,6 +118,7 @@ class ImeGraph(
                 onToolbarUpdate = { host.onToolbarUpdate() }
             )
 
+            // 10) Theme/Layout
             val themeController = ThemeController(
                 context = context,
                 uiProvider = { ui },
@@ -123,20 +132,36 @@ class ImeGraph(
                 keyboardControllerProvider = { keyboardController }
             )
 
+            // NEW: Font controller（ImeUiBinder 需要这个参数）
+            val fontController = FontController(
+                context = context,
+                uiProvider = { ui },
+                keyboardControllerProvider = { keyboardController }
+            )
+            fontController.load()
+            fontController.apply()
+
+            // NEW: 让 KeyboardController 在切键盘/主题后能自动保持字体/字号
+            keyboardController.fontConfigProvider = { fontController.fontFamily to fontController.fontScale }
+
+            // 每次键盘 view 切换/重建后，UI 再应用一次（覆盖新 view）
             val prevOnKeyboardChanged = keyboardController.onKeyboardChanged
             keyboardController.onKeyboardChanged = {
                 prevOnKeyboardChanged?.invoke()
                 ui.applySavedFontNow()
             }
 
+            // 11) UI binder（注意：这里必须传 fontController）
             val uiBinder = ImeUiBinder(
                 rootView = rootView,
                 ui = ui,
                 imeActions = dispatcher as ImeActions,
                 uiStateActions = candidateController,
-                layoutController = layoutController
+                layoutController = layoutController,
+                fontController = fontController
             )
 
+            // 初始化时也应用一次已保存字体/字号（和 fontController.load/apply 一致）
             ui.applySavedFontNow()
 
             return ImeGraph(

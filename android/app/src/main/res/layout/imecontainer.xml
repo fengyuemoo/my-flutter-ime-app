@@ -49,7 +49,7 @@
                         style="@style/KeyButton.Func"
                         android:layout_marginEnd="5dp" />
 
-                    <!-- 字体/字号按钮：直接引用你上传的 drawable/ic_tool_font.jpg -->
+                    <!-- 字体/字号按钮：直接引用 drawable/ic_tool_font.jpg -->
                     <ImageButton
                         android:id="@+id/btntoolfont"
                         android:layout_width="0dp"

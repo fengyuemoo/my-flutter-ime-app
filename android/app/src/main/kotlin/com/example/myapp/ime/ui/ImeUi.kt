@@ -1,7 +1,5 @@
 package com.example.myapp.ime.ui
 
-import android.app.AlertDialog
-import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.Spannable
@@ -9,17 +7,13 @@ import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.Spinner
 import android.widget.TextView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -28,11 +22,12 @@ import com.example.myapp.CandidatePanelAdapter
 import com.example.myapp.CandidateStripAdapter
 import com.example.myapp.R
 import com.example.myapp.dict.model.Candidate
+import com.example.myapp.ime.prefs.KeyboardPrefs
 import java.util.WeakHashMap
-import kotlin.math.roundToInt
 
 /**
- * 供 KeyboardController 直接 import 的全局 FontApplier（不要放在 ImeUi class 内部）。
+ * 供 KeyboardController 直接 import 使用：
+ * import com.example.myapp.ime.ui.FontApplier
  */
 object FontApplier {
     private val baseTextSizePx = WeakHashMap<TextView, Float>()
@@ -80,7 +75,12 @@ class ImeUi {
 
     private lateinit var btnToolFont: ImageButton
 
+    // 将预览文本交给 service 去“浮层显示”
     private var composingPreviewListener: ((String?) -> Unit)? = null
+
+    // 当前字体配置（由 FontController / KeyboardPrefs 驱动）
+    private var currentFontFamily: String = "sans-serif-light"
+    private var currentFontScale: Float = 1.0f
 
     fun setComposingPreviewListener(listener: ((String?) -> Unit)?) {
         composingPreviewListener = listener
@@ -92,30 +92,6 @@ class ImeUi {
     fun getLayoutButton(): Button = rootView.findViewById(R.id.btntoollayout)
     fun getFontButton(): ImageButton = btnToolFont
 
-    // ===== Font prefs & state =====
-    private val prefsName = "KeyboardPrefs"
-    private val keyFontFamily = "font_family"
-    private val keyFontScale = "font_scale"
-
-    private var currentFontFamily: String = "sans-serif-light"
-    private var currentFontScale: Float = 1.0f
-
-    fun getFontConfig(): Pair<String, Float> = currentFontFamily to currentFontScale
-
-    private fun loadFontPrefs(context: Context) {
-        val sp = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
-        currentFontFamily = sp.getString(keyFontFamily, "sans-serif-light") ?: "sans-serif-light"
-        currentFontScale = sp.getFloat(keyFontScale, 1.0f).coerceIn(0.7f, 1.4f)
-    }
-
-    private fun saveFontPrefs(context: Context) {
-        context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
-            .edit()
-            .putString(keyFontFamily, currentFontFamily)
-            .putFloat(keyFontScale, currentFontScale)
-            .apply()
-    }
-
     fun applyFont(fontFamily: String, fontScale: Float) {
         currentFontFamily = fontFamily
         currentFontScale = fontScale.coerceIn(0.7f, 1.4f)
@@ -123,7 +99,8 @@ class ImeUi {
     }
 
     fun applySavedFontNow() {
-        loadFontPrefs(rootView.context)
+        currentFontFamily = KeyboardPrefs.loadFontFamily(rootView.context)
+        currentFontScale = KeyboardPrefs.loadFontScale(rootView.context)
         applyFont(currentFontFamily, currentFontScale)
     }
 
@@ -137,94 +114,6 @@ class ImeUi {
                 // no-op
             }
         })
-    }
-
-    private fun showFontPickerDialog() {
-        val ctx = rootView.context
-
-        val families = listOf("sans-serif-light", "sans-serif", "serif", "monospace")
-        val scales = listOf(0.85f, 0.9f, 0.95f, 1.0f, 1.05f, 1.1f, 1.15f, 1.2f, 1.3f)
-
-        var selectedFamily = currentFontFamily
-        var selectedScale = currentFontScale
-
-        fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
-        fun scaleLabel(s: Float): String = "${(s * 100f).roundToInt()}%"
-
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(ctx.dp(16), ctx.dp(14), ctx.dp(16), ctx.dp(10))
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-
-        val preview = TextView(ctx).apply {
-            text = "Aa 字 符号 123"
-            gravity = Gravity.CENTER
-            setPadding(0, ctx.dp(10), 0, ctx.dp(12))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-        }
-
-        val fontSpinner = Spinner(ctx)
-        val scaleSpinner = Spinner(ctx)
-
-        fontSpinner.adapter = ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, families)
-        scaleSpinner.adapter = ArrayAdapter(
-            ctx,
-            android.R.layout.simple_spinner_dropdown_item,
-            scales.map { scaleLabel(it) }
-        )
-
-        fun applyPreview() {
-            preview.typeface = Typeface.create(selectedFamily, Typeface.NORMAL)
-            preview.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f * selectedScale)
-        }
-
-        fontSpinner.setSelection(families.indexOf(selectedFamily).coerceAtLeast(0))
-        scaleSpinner.setSelection(
-            scales.indexOf(selectedScale).takeIf { it >= 0 } ?: scales.indexOf(1.0f).coerceAtLeast(0)
-        )
-
-        fontSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>, view: View?, position: Int, id: Long) {
-                selectedFamily = families[position]
-                applyPreview()
-            }
-            override fun onNothingSelected(parent: AdapterView<*>) {}
-        }
-
-        scaleSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>, view: View?, position: Int, id: Long) {
-                selectedScale = scales[position]
-                applyPreview()
-            }
-            override fun onNothingSelected(parent: AdapterView<*>) {}
-        }
-
-        root.addView(preview)
-        root.addView(TextView(ctx).apply { text = "字体" })
-        root.addView(fontSpinner)
-        root.addView(TextView(ctx).apply {
-            text = "字号缩放"
-            setPadding(0, ctx.dp(10), 0, 0)
-        })
-        root.addView(scaleSpinner)
-
-        applyPreview()
-
-        AlertDialog.Builder(ctx)
-            .setTitle("字体与字号")
-            .setView(root)
-            .setNegativeButton("取消", null)
-            .setPositiveButton("应用") { _, _ ->
-                currentFontFamily = selectedFamily
-                currentFontScale = selectedScale.coerceIn(0.7f, 1.4f)
-                saveFontPrefs(ctx)
-                applyFont(currentFontFamily, currentFontScale)
-            }
-            .show()
     }
 
     fun inflate(
@@ -244,7 +133,7 @@ class ImeUi {
         btnFilter = rootView.findViewById(R.id.expandpanelfilter)
         btnToolFont = rootView.findViewById(R.id.btntoolfont)
 
-        // 再设置一次资源兜底（即使 XML 已经 src 了也没坏处）
+        // NEW: 直接引用资源图标（你已上传 drawable/ic_tool_font.jpg）
         btnToolFont.setImageResource(R.drawable.ic_tool_font)
 
         recyclerHorizontal = rootView.findViewById(R.id.recyclercandidateshorizontal)
@@ -276,20 +165,22 @@ class ImeUi {
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
 
+        // 候选 item 动态 attach：每次 attach 都重新应用字体/字号
         installRecyclerAutoFont(recyclerHorizontal)
         installRecyclerAutoFont(recyclerVertical)
 
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
+        // IMPORTANT：不在 inputView 内显示预览，避免遮挡首候选
         tvComposingPreview.text = ""
         tvComposingPreview.visibility = View.GONE
-
-        btnToolFont.setOnClickListener { showFontPickerDialog() }
 
         setComposingPreview(null)
         showIdleState()
 
+        // 启动时应用已保存字体/字号
         applySavedFontNow()
+
         return rootView
     }
 
@@ -322,6 +213,7 @@ class ImeUi {
         adapterHorizontal.submitList(list)
         adapterVertical.submitList(list)
         recyclerHorizontal.scrollToPosition(0)
+
         recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
     }
 
@@ -329,6 +221,7 @@ class ImeUi {
         if (expanded) {
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
+
             recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()
@@ -350,14 +243,34 @@ class ImeUi {
 
         if (!singleCharMode) {
             spannable.setSpan(RelativeSizeSpan(1.2f), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(ForegroundColorSpan(Color.BLACK), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(
+                ForegroundColorSpan(Color.BLACK),
+                0,
+                2,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
             spannable.setSpan(RelativeSizeSpan(0.8f), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(ForegroundColorSpan(Color.GRAY), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(
+                ForegroundColorSpan(Color.GRAY),
+                3,
+                5,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
         } else {
             spannable.setSpan(RelativeSizeSpan(0.8f), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(ForegroundColorSpan(Color.GRAY), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(
+                ForegroundColorSpan(Color.GRAY),
+                0,
+                2,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
             spannable.setSpan(RelativeSizeSpan(1.2f), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(ForegroundColorSpan(Color.BLACK), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(
+                ForegroundColorSpan(Color.BLACK),
+                3,
+                5,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
         }
 
         btnFilter.text = spannable
@@ -385,7 +298,9 @@ class ImeUi {
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
 
         tvComposingPreview.visibility = View.GONE
-        tvComposingPreview.setBackgroundColor(if (themeMode == 1) panelDark else Color.parseColor("#F5F5F5"))
+        tvComposingPreview.setBackgroundColor(
+            if (themeMode == 1) panelDark else Color.parseColor("#F5F5F5")
+        )
         tvComposingPreview.setTextColor(if (themeMode == 1) textDark else textLight)
 
         applyFont(currentFontFamily, currentFontScale)
