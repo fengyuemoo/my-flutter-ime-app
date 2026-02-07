@@ -138,8 +138,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 && norm.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
 
         // 0) 中文模式：英文精确匹配
-        // - 中文 T9：只在 digits>=4 时才允许置顶英文，并且要求英文词长 == digits 长度（过滤 wi/wh/wie... 这类噪声）
-        // - 中文 QWERTY：如果像 yg/ygr 这种“无元音短缩写”，不置顶英文（让中文缩写词组优先）
         val exactEn = if (isT9) {
             if (norm.length >= 4) {
                 queryExactEnglish(
@@ -167,7 +165,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         }
         addUnique(exactEn)
 
-        // 中文 QWERTY 的英文变体（s / es）：同样跳过无元音短缩写，避免 ygs/ygres 这种无意义噪声
+        // 中文 QWERTY 的英文变体（s / es）
         if (!isAcronymLikeQwerty && isAsciiLetters && norm.length in 2..32) {
             addUnique(
                 queryExactEnglish(
@@ -308,10 +306,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             addUnique(queryAcronymPrefixByWordLenEq(db, prefix = norm, wordLen = norm.length, limit = 160))
         }
 
-        // 控制噪声：最多只补充 2 字以内的前缀中文词
         addUnique(queryChinesePrefixWithMaxWordLen(db, prefix = norm, maxWordLen = 2, limit = 120))
-
-        // 单字回退（按首字母）
         addUnique(querySingleCharByInputPrefix(db, norm.take(1)).take(200))
 
         return resultList
@@ -386,12 +381,13 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return result
     }
 
+    // NEW: 把 input/syllables 带出来，写入 Candidate.pinyin/syllables
     private fun queryMultiCharByAcronymPrefix(db: SQLiteDatabase, parts: List<String>, wordLen: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
             val acronymPrefix = parts.joinToString("") { it.take(1) }
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -403,7 +399,20 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, acronymPrefix, freq, matchedLength = 0, pinyinCount = 0))
+                    val pinyin = it.getString(2)
+                    val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = acronymPrefix,
+                            priority = freq,
+                            matchedLength = 0,
+                            pinyinCount = 0,
+                            pinyin = pinyin,
+                            syllables = syllables
+                        )
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -412,11 +421,12 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
+    // NEW: 把 input/syllables 带出来，写入 Candidate.pinyin/syllables（用于 yg/ygr 强置顶）
     private fun queryAcronymPrefixByWordLenEq(db: SQLiteDatabase, prefix: String, wordLen: Int, limit: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -429,7 +439,20 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, prefix, freq, matchedLength = prefix.length, pinyinCount = 0))
+                    val pinyin = it.getString(2)
+                    val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = prefix,
+                            priority = freq,
+                            matchedLength = prefix.length,
+                            pinyinCount = 0,
+                            pinyin = pinyin,
+                            syllables = syllables
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {
@@ -437,11 +460,12 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
+    // NEW: 同样带出 pinyin/syllables（不影响现有行为，只让 Candidate 信息更完整）
     private fun queryChinesePrefixWithWordLenEq(db: SQLiteDatabase, prefix: String, wordLen: Int, limit: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE (${DictionaryDbHelper.COL_INPUT} LIKE ? OR ${DictionaryDbHelper.COL_ACRONYM} LIKE ?)
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -454,7 +478,20 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, prefix, freq, matchedLength = prefix.length, pinyinCount = 0))
+                    val pinyin = it.getString(2)
+                    val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = prefix,
+                            priority = freq,
+                            matchedLength = prefix.length,
+                            pinyinCount = 0,
+                            pinyin = pinyin,
+                            syllables = syllables
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {
@@ -466,7 +503,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE (${DictionaryDbHelper.COL_INPUT} LIKE ? OR ${DictionaryDbHelper.COL_ACRONYM} LIKE ?)
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -479,7 +516,20 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, prefix, freq, matchedLength = prefix.length, pinyinCount = 0))
+                    val pinyin = it.getString(2)
+                    val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = prefix,
+                            priority = freq,
+                            matchedLength = prefix.length,
+                            pinyinCount = 0,
+                            pinyin = pinyin,
+                            syllables = syllables
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {

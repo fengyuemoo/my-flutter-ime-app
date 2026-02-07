@@ -26,6 +26,56 @@ class CandidateController(
 
     private fun session(): ComposingSession = sessions.current()
 
+    private object PinyinUtil {
+        private val pinyinSet: Set<String> = PinyinTable.allPinyins.map { it.lowercase() }.toHashSet()
+        private val maxPyLen: Int = PinyinTable.allPinyins.maxOfOrNull { it.length } ?: 8
+
+        fun normalizeLetters(s: String): String {
+            val sb = StringBuilder()
+            for (ch in s.lowercase()) if (ch in 'a'..'z') sb.append(ch)
+            return sb.toString()
+        }
+
+        /**
+         * 把完整拼音（如 yige / yinggai / yiger）尽量切成更多音节（yi + ge，ying + gai，yi + ge + ren）。
+         * 如果无法完全切分，返回 emptyList。
+         */
+        fun splitToSyllablesBest(letters: String): List<String> {
+            val s = normalizeLetters(letters)
+            if (s.isEmpty()) return emptyList()
+
+            val dp: ArrayList<List<String>?> = ArrayList<List<String>?>(s.length + 1)
+            repeat(s.length + 1) { dp.add(null) }
+            dp[0] = emptyList()
+
+            for (i in 0..s.length) {
+                val base = dp[i] ?: continue
+                val remain = s.length - i
+                val tryMax = minOf(maxPyLen, remain)
+                for (l in 1..tryMax) {
+                    val sub = s.substring(i, i + l)
+                    if (!pinyinSet.contains(sub)) continue
+                    val cand = base + sub
+                    val old = dp[i + l]
+                    // 优先音节更多（更符合 yg/ygr 这种缩写）
+                    if (old == null || cand.size > old.size) {
+                        dp[i + l] = cand
+                    }
+                }
+            }
+
+            return dp[s.length] ?: emptyList()
+        }
+
+        fun acronymOfPinyin(pinyin: String): String {
+            val syl = splitToSyllablesBest(pinyin)
+            if (syl.isEmpty()) return ""
+            val sb = StringBuilder()
+            for (s in syl) if (s.isNotEmpty()) sb.append(s[0])
+            return sb.toString()
+        }
+    }
+
     private object T9PreviewBuilder {
         private val pinyinSet: Set<String> = PinyinTable.allPinyins.map { it.lowercase() }.toHashSet()
         private val maxPyLen: Int = PinyinTable.allPinyins.maxOfOrNull { it.length } ?: 8
@@ -136,6 +186,51 @@ class CandidateController(
         }
     }
 
+    private fun isAcronymLikeQwerty(inputLower: String): Boolean {
+        if (inputLower.length !in 2..6) return false
+        if (!inputLower.all { it in 'a'..'z' }) return false
+        if (inputLower == "zh" || inputLower == "ch" || inputLower == "sh") return false
+        // 无元音：更像 yg/ygr/hy/py 这类缩写，而不是 year/near 这类英文词
+        return inputLower.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
+    }
+
+    private fun promoteChineseCandidateByAcronym(
+        candidates: ArrayList<Candidate>,
+        acronymKey: String
+    ) {
+        if (acronymKey.isEmpty()) return
+        if (candidates.isEmpty()) return
+
+        var bestIdx = -1
+        var bestScore = Long.MIN_VALUE
+
+        for (i in candidates.indices) {
+            val c = candidates[i]
+            val py = c.pinyin ?: continue // 只提升中文（有拼音信息）的候选
+            val ac = PinyinUtil.acronymOfPinyin(py)
+            if (ac != acronymKey) continue
+
+            // 更强置顶策略：
+            // - 完全缩写匹配：必选集合
+            // - 词长 == 缩写长度：更像“一个(2)/一个人(3)”这种短语
+            // - syllables == 缩写长度：如果词库提供更可靠（没有也不影响）
+            // - priority(freq)：仍然作为主要排序依据
+            val wordLenBoost = if (c.word.length == acronymKey.length) 200_000_000L else 0L
+            val syllablesBoost = if (c.syllables > 0 && c.syllables == acronymKey.length) 100_000_000L else 0L
+            val freqScore = c.priority.toLong()
+
+            val score = wordLenBoost + syllablesBoost + freqScore
+            if (score > bestScore) {
+                bestScore = score
+                bestIdx = i
+            }
+        }
+
+        if (bestIdx <= 0) return
+        val matched = candidates.removeAt(bestIdx)
+        candidates.add(0, matched)
+    }
+
     private fun promoteCandidateMatchingPreview(
         candidates: ArrayList<Candidate>,
         previewText: String?
@@ -149,14 +244,12 @@ class CandidateController(
         var bestIdx = -1
         var bestScore = Int.MIN_VALUE
 
-        // 只用中文候选：cand.pinyin != null 才算匹配候选
         for (i in candidates.indices) {
             val c = candidates[i]
             val py = c.pinyin ?: continue
             val pyLetters = T9PreviewBuilder.normalizePinyinLetters(py)
             if (!pyLetters.startsWith(key)) continue
 
-            // 评分：越“贴合预览长度”越好，其次频率更高更好
             val lenScore = -kotlin.math.abs(pyLetters.length - key.length)
             val freqScore = c.priority
             val score = lenScore * 1_000_000 + freqScore
@@ -232,7 +325,7 @@ class CandidateController(
 
         currentCandidates = ArrayList(r.candidates)
 
-        // 1) 先生成预览（依赖当前 candidates）
+        // T9 预览（用于悬浮）
         val previewText =
             if (mainMode.isChinese && mainMode.useT9Layout && s.rawT9Digits.isNotEmpty()) {
                 T9PreviewBuilder.buildPreview(s.rawT9Digits, currentCandidates)
@@ -241,12 +334,19 @@ class CandidateController(
             }
         s.setT9PreviewText(previewText)
 
-        // 2) 再把与预览一致的中文候选提升到第 1 位
+        // 中文 T9：把与预览一致的中文候选提升到第 1 位
         if (mainMode.isChinese && mainMode.useT9Layout) {
             promoteCandidateMatchingPreview(currentCandidates, previewText)
         }
 
-        // 3) 最后一次性 setCandidates（避免 UI 闪动）
+        // 中文全键盘：缩写词组（yg/ygr/hy/py）进一步强置顶（确保“一个/一个人...”稳定排第 1）
+        if (mainMode.isChinese && !mainMode.useT9Layout) {
+            val key = s.qwertyInput.lowercase()
+            if (isAcronymLikeQwerty(key)) {
+                promoteChineseCandidateByAcronym(currentCandidates, key)
+            }
+        }
+
         ui.setCandidates(currentCandidates)
     }
 
