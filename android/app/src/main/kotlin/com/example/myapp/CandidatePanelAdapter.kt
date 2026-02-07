@@ -37,11 +37,7 @@ class CandidatePanelAdapter(
     private val fullRowMaxLines = 12
 
     private fun thinTypeface(): Typeface {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            Typeface.create(Typeface.SANS_SERIF, 300, false)
-        } else {
-            Typeface.create("sans-serif-light", Typeface.NORMAL)
-        }
+        return Typeface.create("sans-serif-light", Typeface.NORMAL)
     }
 
     fun submitList(newItems: List<Candidate>) {
@@ -70,7 +66,7 @@ class CandidatePanelAdapter(
         val paint = TextPaint().apply {
             isAntiAlias = true
             textSize = textPx
-            // CHANGED: 测量也用细体，保证 span 计算与实际显示一致
+            // CHANGED: 测量也用细体，保证 span 计算与显示一致
             typeface = thinTypeface()
         }
 

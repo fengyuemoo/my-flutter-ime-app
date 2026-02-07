@@ -26,11 +26,7 @@ class CandidateStripAdapter(
     var themeMode = 0
 
     private fun thinTypeface(): Typeface {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            Typeface.create(Typeface.SANS_SERIF, 300, false)
-        } else {
-            Typeface.create("sans-serif-light", Typeface.NORMAL)
-        }
+        return Typeface.create("sans-serif-light", Typeface.NORMAL)
     }
 
     fun submitList(newItems: List<Candidate>) {

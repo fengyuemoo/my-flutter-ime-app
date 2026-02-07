@@ -13,4 +13,6 @@
     android:textSize="@dimen/ime_key_text_size_small"
     android:textAllCaps="false"
     android:background="@drawable/bg_symbol_tab_normal"
-    android:textColor="@color/ime_key_text" />
+    android:textColor="@color/ime_key_text"
+    android:fontFamily="sans-serif-light"
+    android:textStyle="normal" />

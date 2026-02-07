@@ -13,4 +13,6 @@
     android:paddingEnd="10dp"
     android:paddingTop="2dp"
     android:paddingBottom="2dp"
-    android:background="@drawable/ripple_symbol_key" />
+    android:background="@drawable/ripple_symbol_key"
+    android:fontFamily="sans-serif-light"
+    android:textStyle="normal" />
