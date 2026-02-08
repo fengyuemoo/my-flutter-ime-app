@@ -127,7 +127,7 @@ class ImeActionDispatcher(
         return raw
             .lowercase()
             .trim()
-            .replace(' ', '''')
+            .replace(' ', ''')
     }
 
     fun refreshComposingView() {
@@ -256,7 +256,7 @@ class ImeActionDispatcher(
 
         val ic = inputConnection() ?: return
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
-        ic.sendKeyEvent(KeyEvent(ACTION_UP, KeyEvent.KEYCODE_DEL))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
     }
 
     override fun handleSpecialKey(keyLabel: String) {
