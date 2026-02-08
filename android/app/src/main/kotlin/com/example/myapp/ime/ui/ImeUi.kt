@@ -32,11 +32,34 @@ import java.util.WeakHashMap
 object FontApplier {
     private val baseTextSizePx = WeakHashMap<TextView, Float>()
 
+    // NEW: 缓存 typeface，避免每次遍历 view 树都重复加载字体文件
+    private val typefaceCache = HashMap<String, Typeface>()
+
+    private fun resolveTypeface(view: View, spec: String): Typeface {
+        synchronized(typefaceCache) {
+            typefaceCache[spec]?.let { return it }
+
+            val tf = runCatching {
+                if (spec.startsWith("asset:")) {
+                    val path = spec.removePrefix("asset:")
+                    Typeface.createFromAsset(view.context.assets, path)
+                } else {
+                    Typeface.create(spec, Typeface.NORMAL)
+                }
+            }.getOrElse {
+                Typeface.DEFAULT
+            }
+
+            typefaceCache[spec] = tf
+            return tf
+        }
+    }
+
     fun apply(root: View, fontFamily: String, scale: Float) {
         val s = scale.coerceIn(0.7f, 1.4f)
         walk(root) { tv ->
             val base = baseTextSizePx[tv] ?: tv.textSize.also { baseTextSizePx[tv] = it }
-            tv.typeface = Typeface.create(fontFamily, Typeface.NORMAL)
+            tv.typeface = resolveTypeface(tv, fontFamily)
             tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, base * s)
         }
     }
@@ -133,7 +156,7 @@ class ImeUi {
         btnFilter = rootView.findViewById(R.id.expandpanelfilter)
         btnToolFont = rootView.findViewById(R.id.btntoolfont)
 
-        // NEW: 直接引用资源图标（你已上传 drawable/ic_tool_font.jpg）
+        // 直接引用资源图标
         btnToolFont.setImageResource(R.drawable.ic_tool_font)
 
         recyclerHorizontal = rootView.findViewById(R.id.recyclercandidateshorizontal)
@@ -165,22 +188,18 @@ class ImeUi {
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
 
-        // 候选 item 动态 attach：每次 attach 都重新应用字体/字号
         installRecyclerAutoFont(recyclerHorizontal)
         installRecyclerAutoFont(recyclerVertical)
 
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
-        // IMPORTANT：不在 inputView 内显示预览，避免遮挡首候选
         tvComposingPreview.text = ""
         tvComposingPreview.visibility = View.GONE
 
         setComposingPreview(null)
         showIdleState()
 
-        // 启动时应用已保存字体/字号
         applySavedFontNow()
-
         return rootView
     }
 
@@ -213,7 +232,6 @@ class ImeUi {
         adapterHorizontal.submitList(list)
         adapterVertical.submitList(list)
         recyclerHorizontal.scrollToPosition(0)
-
         recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
     }
 
@@ -221,7 +239,6 @@ class ImeUi {
         if (expanded) {
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
-
             recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()

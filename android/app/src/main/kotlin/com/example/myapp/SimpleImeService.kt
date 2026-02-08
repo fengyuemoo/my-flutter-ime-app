@@ -16,6 +16,7 @@ import com.example.myapp.ime.bootstrap.ImeBootstrapper
 import com.example.myapp.ime.keyboard.KeyboardHost
 import com.example.myapp.ime.prefs.KeyboardPrefs
 import com.example.myapp.ime.ui.ImeUi
+import java.util.Locale
 
 class SimpleImeService : InputMethodService(), KeyboardHost {
 
@@ -33,6 +34,9 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     private var preeditOverlayParams: WindowManager.LayoutParams? = null
     private val wm: WindowManager by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
 
+    // NEW: cache for overlay typeface
+    private val typefaceCache = HashMap<String, Typeface>()
+
     override fun onToolbarUpdate() {
         if (this::graph.isInitialized) graph.toolbarController.refresh()
     }
@@ -46,7 +50,6 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         mainView = ui.inflate(layoutInflater) { cand -> onCandidateClick(cand) }
         bodyFrame = ui.bodyFrame
 
-        // 预览文本从 UI 统一回调到这里，交给浮层展示
         ui.setComposingPreviewListener { text ->
             updateFloatingPreedit(text)
         }
@@ -72,9 +75,7 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         graph.themeController.load()
         graph.themeController.apply()
 
-        // 初始隐藏
         updateFloatingPreedit(null)
-
         return mainView
     }
 
@@ -82,7 +83,6 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         ui.getThemeButton().setOnClickListener {
             if (this::graph.isInitialized) {
                 graph.themeController.toggle()
-                // NEW: 主题切换后让悬浮 preedit 也立即同步
                 refreshFloatingPreeditStyle()
             }
         }
@@ -112,7 +112,6 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         graph.themeController.apply()
 
         updateFloatingPreedit(null)
-        // NEW: 确保新的输入场景下浮层样式也跟当前主题一致（即使浮层未显示也无害）
         refreshFloatingPreeditStyle()
     }
 
@@ -129,12 +128,31 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
+    private fun resolveTypefaceFromSpec(spec: String): Typeface {
+        synchronized(typefaceCache) {
+            typefaceCache[spec]?.let { return it }
+
+            val tf = runCatching {
+                if (spec.startsWith("asset:")) {
+                    val path = spec.removePrefix("asset:")
+                    Typeface.createFromAsset(assets, path)
+                } else {
+                    Typeface.create(spec, Typeface.NORMAL)
+                }
+            }.getOrElse {
+                Typeface.DEFAULT
+            }
+
+            typefaceCache[spec] = tf
+            return tf
+        }
+    }
+
     private fun applyPreeditOverlayFontFromPrefs(tv: TextView) {
-        val family = KeyboardPrefs.loadFontFamily(this)
+        val familySpec = KeyboardPrefs.loadFontFamily(this)
         val scale = KeyboardPrefs.loadFontScale(this).coerceIn(0.7f, 1.4f)
 
-        tv.typeface = Typeface.create(family, Typeface.NORMAL)
-        // base=15sp（之前写死 15f 的等价意图），再乘缩放
+        tv.typeface = resolveTypefaceFromSpec(familySpec)
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f * scale)
     }
 
@@ -175,28 +193,20 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
             setPadding(dp(8), dp(6), dp(8), dp(6))
             maxLines = 1
             elevation = 20f
-
-            // NEW: 创建时就同步字体/字号 + 主题
             applyPreeditOverlayStyleFromPrefs(this)
         }
 
         val params = WindowManager.LayoutParams().apply {
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
-
-            // 这个 type 不需要“悬浮窗权限”，并且可以挂到 IME 自己的 token 上
             type = WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG
             this.token = token
-
-            // 关键：不抢焦点、不拦截触摸，同时允许在 IME 之上显示
             flags =
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
-
             format = PixelFormat.TRANSLUCENT
-
             gravity = Gravity.START or Gravity.TOP
             x = dp(8)
             y = 0
@@ -219,13 +229,11 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         val tv = preeditOverlayView ?: return
         val lp = preeditOverlayParams ?: return
 
-        // NEW: 每次更新时都同步一次（刚改完字体/字号/主题立刻生效）
         applyPreeditOverlayStyleFromPrefs(tv)
 
         tv.text = text
         tv.visibility = View.VISIBLE
 
-        // 把浮层放到“键盘 top 再往上抬一点”
         val loc = IntArray(2)
         mainView.getLocationOnScreen(loc)
         val keyboardTopOnScreenY = loc[1]

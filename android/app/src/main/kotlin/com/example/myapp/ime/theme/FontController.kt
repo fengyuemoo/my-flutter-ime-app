@@ -14,6 +14,8 @@ import android.widget.TextView
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.prefs.KeyboardPrefs
 import com.example.myapp.ime.ui.ImeUi
+import java.text.Collator
+import java.util.Locale
 import kotlin.math.roundToInt
 
 class FontController(
@@ -21,7 +23,7 @@ class FontController(
     private val uiProvider: () -> ImeUi?,
     private val keyboardControllerProvider: () -> KeyboardController?
 ) {
-    var fontFamily: String = "sans-serif-light"
+    var fontFamily: String = "sans-serif-light" // 现在既可能是 system family，也可能是 "asset:fonts/xxx.ttf"
         private set
 
     var fontScale: Float = 1.0f
@@ -49,24 +51,69 @@ class FontController(
         dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
     }
 
+    private fun isFontFile(name: String): Boolean {
+        val n = name.lowercase(Locale.ROOT)
+        return n.endsWith(".ttf") || n.endsWith(".otf") || n.endsWith(".ttc")
+    }
+
+    private fun displayNameOf(spec: String): String {
+        return if (spec.startsWith("asset:")) {
+            spec.removePrefix("asset:").substringAfterLast('/')
+        } else {
+            spec
+        }
+    }
+
     fun showPickerDialog() {
         val ui = uiProvider()
         val ctx = ui?.rootView?.context ?: context
         val windowToken = ui?.rootView?.windowToken
 
-        val families = listOf(
+        // 1) 内置 system families（保持原样）
+        val builtinFamilies = listOf(
             "sans-serif-light",
             "sans-serif",
             "serif",
             "monospace"
-        )
+        ).map { display -> display to display }
+
+        // 2) 扫描 assets/fonts 下的字体文件（显示原文件名，存储为 asset:fonts/<文件名>）
+        val assetFamilies: List<Pair<String, String>> = runCatching {
+            val files = ctx.assets.list("fonts")?.toList().orEmpty()
+            val collator = Collator.getInstance(Locale.getDefault())
+            files.filter { isFontFile(it) }
+                .sortedWith { a, b -> collator.compare(a, b) }
+                .map { fileName -> fileName to "asset:fonts/$fileName" }
+        }.getOrDefault(emptyList())
+
+        // 最终可选项：displayName -> spec
+        val allFamilies = builtinFamilies + assetFamilies
+        val displayNames = allFamilies.map { it.first }.toTypedArray()
+        val specs = allFamilies.map { it.second }
+
         val scales = listOf(0.85f, 0.9f, 0.95f, 1.0f, 1.05f, 1.1f, 1.15f, 1.2f, 1.3f)
 
-        var selectedFamily = fontFamily
+        var selectedSpec = fontFamily
         var selectedScale = fontScale
 
         fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
         fun scaleLabel(s: Float): String = "${(s * 100f).roundToInt()}%"
+
+        // cache for preview typeface
+        val typefaceCache = HashMap<String, Typeface>()
+        fun resolveTypeface(spec: String): Typeface {
+            typefaceCache[spec]?.let { return it }
+            val tf = runCatching {
+                if (spec.startsWith("asset:")) {
+                    val path = spec.removePrefix("asset:")
+                    Typeface.createFromAsset(ctx.assets, path)
+                } else {
+                    Typeface.create(spec, Typeface.NORMAL)
+                }
+            }.getOrElse { Typeface.DEFAULT }
+            typefaceCache[spec] = tf
+            return tf
+        }
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -85,11 +132,10 @@ class FontController(
         }
 
         fun applyPreview() {
-            preview.typeface = Typeface.create(selectedFamily, Typeface.NORMAL)
+            preview.typeface = resolveTypeface(selectedSpec)
             preview.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f * selectedScale)
         }
 
-        // 可点击行（代替 Spinner）
         fun makeRow(title: String, initialValue: String, onClick: (valueView: TextView) -> Unit): View {
             val row = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -115,7 +161,6 @@ class FontController(
 
             row.addView(tvTitle)
             row.addView(tvValue)
-
             row.setOnClickListener { onClick(tvValue) }
             return row
         }
@@ -146,18 +191,17 @@ class FontController(
 
         root.addView(preview)
 
-        // 字体行
+        // 字体行（显示：原文件名或 system family 名）
         root.addView(
-            makeRow(title = "字体", initialValue = selectedFamily) { valueView ->
-                val items = families.toTypedArray()
-                val checked = families.indexOf(selectedFamily).coerceAtLeast(0)
+            makeRow(title = "字体", initialValue = displayNameOf(selectedSpec)) { valueView ->
+                val checked = specs.indexOf(selectedSpec).takeIf { it >= 0 } ?: 0
                 showSingleChoiceDialog(
                     title = "选择字体",
-                    items = items,
+                    items = displayNames,
                     checkedIndex = checked
                 ) { idx ->
-                    selectedFamily = families[idx]
-                    valueView.text = selectedFamily
+                    selectedSpec = specs[idx]
+                    valueView.text = displayNameOf(selectedSpec)
                     applyPreview()
                 }
             }
@@ -187,7 +231,7 @@ class FontController(
             .setView(root)
             .setNegativeButton("取消", null)
             .setPositiveButton("应用") { _, _ ->
-                fontFamily = selectedFamily
+                fontFamily = selectedSpec
                 fontScale = selectedScale.coerceIn(0.7f, 1.4f)
                 save()
                 apply()
