@@ -127,7 +127,7 @@ class ImeActionDispatcher(
         return raw
             .lowercase()
             .trim()
-            .replace(' ', ''')
+            .replace(' ', '\'')
     }
 
     fun refreshComposingView() {
