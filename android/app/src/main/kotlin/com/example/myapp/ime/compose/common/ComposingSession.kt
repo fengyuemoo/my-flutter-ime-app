@@ -1,6 +1,5 @@
 package com.example.myapp.ime.compose.common
 
-import com.example.myapp.dict.impl.PinyinTable
 import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
 
@@ -14,7 +13,7 @@ class ComposingSession {
     // 由候选/词频驱动的 T9 预览（例如 yi'ge / yi'g / w）
     private var _t9PreviewText: String? = null
 
-    // 中文全键盘允许预览覆盖文本（由 CandidateController 按“首候选”决定是否覆盖）
+    // 中文全键盘允许预览覆盖文本（由上层按“首候选/策略”决定）
     private var _qwertyPreviewText: String? = null
 
     val pinyinStack: List<String> get() = _pinyinStack
@@ -88,99 +87,6 @@ class ComposingSession {
             if (_rawT9Digits.length >= t9Code.length) _rawT9Digits.substring(t9Code.length) else ""
     }
 
-    private fun isVowel(ch: Char): Boolean {
-        return ch == 'a' || ch == 'e' || ch == 'i' || ch == 'o' || ch == 'u' || ch == 'v' || ch == 'ü'
-    }
-
-    private object PinyinDisplaySplitter {
-        private val pinyinSet: Set<String> = PinyinTable.allPinyins.map { it.lowercase() }.toHashSet()
-        private val maxPyLen: Int = PinyinTable.allPinyins.maxOfOrNull { it.length } ?: 8
-
-        fun normalizeLetters(s: String): String {
-            val sb = StringBuilder()
-            for (ch in s.lowercase()) if (ch in 'a'..'z') sb.append(ch)
-            return sb.toString()
-        }
-
-        /**
-         * DP：尽可能多地从开头匹配拼音音节，取“覆盖最长”的切分；
-         * 覆盖相同则取“音节数最少”（更长音节优先），避免 luo -> lu'o 这种过度切分。
-         * 返回 (parts, coveredLen)；coveredLen==0 表示完全不匹配。
-         */
-        fun splitBestPrefix(lettersRaw: String): Pair<List<String>, Int> {
-            val s = normalizeLetters(lettersRaw)
-            if (s.isEmpty()) return emptyList<String>() to 0
-
-            val dp = arrayOfNulls<List<String>>(s.length + 1)
-            dp[0] = emptyList()
-
-            for (i in 0..s.length) {
-                val base = dp[i] ?: continue
-                val remain = s.length - i
-                val tryMax = minOf(maxPyLen, remain)
-
-                // 倒序枚举长度：更长音节更容易得到更少的音节数
-                for (l in tryMax downTo 1) {
-                    val sub = s.substring(i, i + l)
-                    if (!pinyinSet.contains(sub)) continue
-
-                    val cand = base + sub
-                    val old = dp[i + l]
-                    // 覆盖长度固定为 i+l，这里只比较“音节数更少”
-                    if (old == null || cand.size < old.size) {
-                        dp[i + l] = cand
-                    }
-                }
-            }
-
-            var bestCut = 0
-            for (k in s.length downTo 0) {
-                if (dp[k] != null) {
-                    bestCut = k
-                    break
-                }
-            }
-
-            val parts = dp[bestCut] ?: emptyList()
-            return parts to bestCut
-        }
-    }
-
-    private fun splitPinyinForDisplay(raw: String): List<String> {
-        val s = raw.trim().lowercase()
-        if (s.isEmpty()) return emptyList()
-
-        // 1) 用户显式输入分隔符：按 ' 原样分段
-        if (s.contains("'")) {
-            return s.split("'")
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-        }
-
-        // 2) 中文全键盘：无元音缩写 => 强制逐字母分段
-        val isAsciiLetters = s.all { it in 'a'..'z' }
-        if (isAsciiLetters) {
-            val noVowel = s.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
-            if (noVowel && s.length in 2..12 && s != "zh" && s != "ch" && s != "sh") {
-                return s.map { it.toString() }
-            }
-        }
-
-        // 3) 用拼音表做 DP 切分（更“像拼音”的预览）
-        val (parts, cut) = PinyinDisplaySplitter.splitBestPrefix(s)
-        if (cut <= 0) return listOf(s)
-
-        val out = ArrayList<String>()
-        out.addAll(parts)
-
-        val normalized = PinyinDisplaySplitter.normalizeLetters(s)
-        if (cut < normalized.length) {
-            out.add(normalized.substring(cut))
-        }
-
-        return out
-    }
-
     private fun repLetter(d: Char): String {
         val list = T9Lookup.charsFromDigit(d)
         return if (list.isNotEmpty()) list[0] else "?"
@@ -190,8 +96,8 @@ class ComposingSession {
         if (!isComposing()) return null
 
         if (!useT9Layout) {
-            // 关键改动：不再在 session 层做“拼音切分兜底”，避免英文被拆。
-            // 中文全键盘由上层（CnQwertyHandler/CandidateController）写入 _qwertyPreviewText 来决定预览样式。
+            // 非 T9：不在 session 层做拼音切分兜底，避免英文被拆。
+            // 中文全键盘由上层写入 _qwertyPreviewText 来控制预览显示。
             val qwertyUi = _qwertyPreviewText ?: _qwertyInput
 
             val sb = StringBuilder()
