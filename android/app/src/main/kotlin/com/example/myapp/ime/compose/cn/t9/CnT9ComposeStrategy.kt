@@ -22,8 +22,6 @@ class CnT9ComposeStrategy(
     }
 
     private fun pinyinToT9Code(pinyin: String): String {
-        // 标准电话键盘映射：abc=2, def=3, ghi=4, jkl=5, mno=6, pqrs=7, tuv=8, wxyz=9
-        // v/ü 作为 ü 的常见占位，按 u 归到 8
         val s = pinyin.lowercase()
         val sb = StringBuilder()
         for (ch in s) {
@@ -44,18 +42,21 @@ class CnT9ComposeStrategy(
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
-        // 关键修复：侧栏点击应进入 pinyinStack，并消耗对应的 digits
-        // 不能清空 session，否则会导致 composing 丢失与显示异常
         val code = pinyinToT9Code(pinyin)
         session().onPinyinSidebarClick(pinyin.lowercase(), code)
     }
 
-    override fun onEnter(ic: InputConnection?): Boolean {
-        // 需求（已在 dispatcher 注释里写明）：中文 T9 composing 时优先提交“预览拼音(去掉')”；
-        // 如果取不到预览，则交给上层走系统换行（不要吞掉）。
-        if (!session().isComposing()) return false
+    override fun onEnter(ic: InputConnection?): StrategyResult {
+        @Suppress("UNUSED_PARAMETER")
+        val ignored = ic
+
+        if (!session().isComposing()) return StrategyResult.Noop
 
         val previewCommit = session().t9PreviewCommitText()
-        return !previewCommit.isNullOrEmpty()
+        return if (!previewCommit.isNullOrEmpty()) {
+            StrategyResult.DirectCommit(previewCommit)
+        } else {
+            StrategyResult.Noop
+        }
     }
 }

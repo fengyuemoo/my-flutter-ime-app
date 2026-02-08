@@ -30,11 +30,19 @@ class CnQwertyComposeStrategy(
         session().appendQwerty(pinyin.lowercase())
     }
 
-    override fun onEnter(ic: InputConnection?): Boolean {
-        if (session().isComposing()) {
-            clearComposing()
-            return true // Consumed
+    override fun onEnter(ic: InputConnection?): StrategyResult {
+        @Suppress("UNUSED_PARAMETER")
+        val ignored = ic
+
+        val s = session()
+        if (!s.isComposing()) return StrategyResult.Noop
+
+        // 迁移自 ImeActionDispatcher.handleSpecialKey：中文全键盘 composing 时，Enter 提交 raw input
+        val textToCommit = (s.committedPrefix + s.qwertyInput.lowercase())
+        return if (textToCommit.isNotEmpty()) {
+            StrategyResult.DirectCommit(textToCommit)
+        } else {
+            StrategyResult.Noop
         }
-        return false // Not consumed, let the system handle it (e.g., new line)
     }
 }

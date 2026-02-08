@@ -239,30 +239,13 @@ class ImeActionDispatcher(
     override fun handleSpecialKey(keyLabel: String) {
         beforeModeSwitch()
 
-        val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\\n")
+        val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
-            val mode = mainMode()
-
-            if (mode.isChinese && !mode.useT9Layout && session().isComposing()) {
-                val s = session()
-                val textToCommit = (s.committedPrefix + s.qwertyInput.lowercase())
-                if (textToCommit.isNotEmpty()) {
-                    commitText(textToCommit)
-                    return
-                }
+            val result = currentStrategy().onEnter(inputConnection())
+            if (result !is StrategyResult.Noop) {
+                handleStrategyResult(result)
+                return
             }
-
-            // CHANGED: 中文 T9 composing 时，优先提交“预览拼音(去掉')”；
-            // 如果取不到预览，则继续走原本的 onEnter / 系统换行（满足“没有预览时换行”）。
-            if (mode.isChinese && mode.useT9Layout && session().isComposing()) {
-                val previewCommit = session().t9PreviewCommitText()
-                if (!previewCommit.isNullOrEmpty()) {
-                    commitText(previewCommit)
-                    return
-                }
-            }
-
-            if (currentStrategy().onEnter(inputConnection())) return
 
             val ic = inputConnection() ?: return
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))

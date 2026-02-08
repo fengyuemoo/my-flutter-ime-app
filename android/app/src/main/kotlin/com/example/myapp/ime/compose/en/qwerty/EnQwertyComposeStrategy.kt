@@ -48,8 +48,5 @@ class EnQwertyComposeStrategy(
         // Not handled in English
     }
 
-    override fun onEnter(ic: InputConnection?): Boolean {
-        // Keep old behavior: don't consume Enter here.
-        return false
-    }
+    override fun onEnter(ic: InputConnection?): StrategyResult = StrategyResult.Noop
 }

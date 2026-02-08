@@ -9,7 +9,9 @@ interface ComposeStrategy {
 
     /**
      * 处理 Enter / Re-enter 这类特殊键。
-     * 返回 true 表示已消费；false 表示由上层使用默认 KeyEvent ENTER 处理。
+     * 返回 StrategyResult：
+     * - DirectCommit / SessionMutated / ComposingUpdate => 已消费
+     * - Noop => 不消费，由上层发送系统 ENTER KeyEvent
      */
-    fun onEnter(ic: InputConnection?): Boolean
+    fun onEnter(ic: InputConnection?): StrategyResult
 }

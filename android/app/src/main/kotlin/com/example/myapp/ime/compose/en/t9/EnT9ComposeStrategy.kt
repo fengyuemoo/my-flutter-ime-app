@@ -76,7 +76,7 @@ class EnT9ComposeStrategy(
         // Not handled in English
     }
 
-    override fun onEnter(ic: InputConnection?): Boolean = false
+    override fun onEnter(ic: InputConnection?): StrategyResult = StrategyResult.Noop
 
     // --- PendingCommitStrategy ---
 
@@ -85,7 +85,7 @@ class EnT9ComposeStrategy(
     override fun handleBackspaceInOwnBuffer(ic: InputConnection?): Boolean {
         if (!englishPredictEnabled) {
             if (resetMultiTapState()) {
-                ic?.setComposingText("", 0)
+                ic()?.setComposingText("", 0)
                 return true
             }
         }
