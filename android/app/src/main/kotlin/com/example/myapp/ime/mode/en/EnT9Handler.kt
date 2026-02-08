@@ -29,9 +29,8 @@ object EnT9Handler : ImeModeHandler {
                 candidates
             }
 
-        // Preserve current behavior: only CN T9 sets preview/sidebar
+        // English modes do not use these previews
         session.setT9PreviewText(null)
-        session.setQwertyPreviewText(null)
 
         return ImeModeHandler.Output(
             candidates = finalList,
