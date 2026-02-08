@@ -162,7 +162,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             !isT9 && isAsciiLetters && !isAcronymLikeQwerty && norm.length >= 4
 
         // 0) 中文模式：英文精确匹配
-        val exactEn = if (isT9) {
+        var exactEn = if (isT9) {
             if (norm.length >= 4) {
                 queryExactEnglish(
                     db = db,
@@ -187,9 +187,35 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 emptyList()
             }
         }
+
+        // 严格过滤（但不一刀切）：
+        // 若输入是“完整拼音串”且确实存在中文候选，则屏蔽英文精确候选（以及 s/es 变体），避免 zhuan/zhuang 这种纯拼音串出现在候选里。
+        var suppressEnglishBecausePinyin = false
+        if (!isT9 && allowEnglishExactInChineseQwerty && isAsciiLetters) {
+            val syl = splitConcatPinyinToSyllables(norm)
+            val isCompletePinyin = syl.isNotEmpty() && syl.joinToString("") == norm
+            if (isCompletePinyin) {
+                val chineseProbe = queryDb(
+                    db = db,
+                    input = norm,
+                    isT9 = false,
+                    lang = 0,
+                    limit = 1,
+                    offset = 0,
+                    matchedLen = norm.length,
+                    exactMatch = true,
+                    pinyinFilter = null
+                )
+                if (chineseProbe.isNotEmpty()) {
+                    suppressEnglishBecausePinyin = true
+                    exactEn = emptyList()
+                }
+            }
+        }
+
         addUnique(exactEn)
 
-        if (allowEnglishExactInChineseQwerty && isAsciiLetters && norm.length in 2..32) {
+        if (!suppressEnglishBecausePinyin && allowEnglishExactInChineseQwerty && isAsciiLetters && norm.length in 2..32) {
             addUnique(
                 queryExactEnglish(
                     db = db,
