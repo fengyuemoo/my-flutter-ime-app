@@ -15,10 +15,6 @@ class ComposingSession {
     val qwertyInput: String get() = _qwertyInput
     val committedPrefix: String get() = _committedPrefix
 
-    fun setT9PreviewText(text: String?) {
-        // no-op
-    }
-
     private sealed class PickRecord {
         data class Qwerty(val word: String, val consumedPrefix: String) : PickRecord()
         data class Apostrophe(val word: String, val consumedParts: List<String>) : PickRecord()
