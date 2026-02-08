@@ -157,8 +157,7 @@ class ComposingSession {
                 .filter { it.isNotEmpty() }
         }
 
-        // 2) 中文全键盘：无元音缩写（yg/ygr/hy/py/hhzstsl...）=> 强制逐字母分段，显示 y'g / y'g'r
-        // 条件：全字母、2~12 位、且不含 aeiouv；zh/ch/sh 这类双字母声母不拆
+        // 2) 中文全键盘：无元音缩写 => 强制逐字母分段
         val isAsciiLetters = s.all { it in 'a'..'z' }
         if (isAsciiLetters) {
             val noVowel = s.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
@@ -167,9 +166,7 @@ class ComposingSession {
             }
         }
 
-        // 3) 用拼音表做 DP 切分（更“像拼音”的预览），并且避免把纯英文误拆：
-        // - 如果从 0 开始完全匹配不到任何拼音前缀：直接返回原串（home -> home，不再 ho'me）
-        // - 如果能匹配到：返回 “拼音音节 + 余串”，余串原样附加（year -> ye'ar，baby -> ba'by）
+        // 3) 用拼音表做 DP 切分（更“像拼音”的预览）
         val (parts, cut) = PinyinDisplaySplitter.splitBestPrefix(s)
         if (cut <= 0) return listOf(s)
 
@@ -181,8 +178,6 @@ class ComposingSession {
             out.add(normalized.substring(cut))
         }
 
-        // 如果只切出了 1 个音节且余串很长，通常更像英文（例如 "ba" + "by" 仍算可接受）；
-        // 这里不额外强制回退，后续会由 CandidateController 根据“首候选是英文/中文”决定是否覆盖预览。
         return out
     }
 
@@ -195,10 +190,9 @@ class ComposingSession {
         if (!isComposing()) return null
 
         if (!useT9Layout) {
-            val qwertyUi = _qwertyPreviewText ?: run {
-                val syllables = splitPinyinForDisplay(_qwertyInput)
-                syllables.joinToString("'")
-            }
+            // 关键改动：不再在 session 层做“拼音切分兜底”，避免英文被拆。
+            // 中文全键盘由上层（CnQwertyHandler/CandidateController）写入 _qwertyPreviewText 来决定预览样式。
+            val qwertyUi = _qwertyPreviewText ?: _qwertyInput
 
             val sb = StringBuilder()
             sb.append(_committedPrefix)
