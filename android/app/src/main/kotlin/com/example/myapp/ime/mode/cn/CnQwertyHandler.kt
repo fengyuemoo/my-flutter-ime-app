@@ -1,8 +1,8 @@
 package com.example.myapp.ime.mode.cn
 
+import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.impl.PinyinTable
 import com.example.myapp.dict.model.Candidate
-import com.example.myapp.ime.compose.common.CandidateComposer
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.mode.ImeModeHandler
 
@@ -10,31 +10,47 @@ object CnQwertyHandler : ImeModeHandler {
 
     override fun build(
         session: ComposingSession,
-        candidateComposer: CandidateComposer,
+        dictEngine: Dictionary,
         singleCharMode: Boolean
     ): ImeModeHandler.Output {
 
-        val r = candidateComposer.compose(
-            session = session,
-            isChinese = true,
-            useT9Layout = false,
-            isT9Keyboard = false,
-            singleCharMode = singleCharMode
-        )
+        val input = session.qwertyInput
 
-        val candidates = ArrayList(r.candidates)
-
-        // CN Qwerty: only qwerty preview
-        session.setT9PreviewText(null)
-
-        val inputLower = session.qwertyInput.lowercase()
-
-        // 缩写词组强置顶
-        if (isAcronymLikeQwerty(inputLower)) {
-            promoteChineseCandidateByAcronym(candidates, inputLower)
+        // 1) Candidates (dictionary)
+        val candidates = ArrayList<Candidate>()
+        if (dictEngine.isLoaded && input.isNotEmpty()) {
+            candidates.addAll(dictEngine.getSuggestions(input, isT9 = false, isChineseMode = true))
         }
 
-        val top = candidates.firstOrNull()
+        // 2) Single char filter (CN only)
+        val filtered = if (singleCharMode) {
+            candidates.filter { it.word.length == 1 }
+        } else {
+            candidates
+        }
+
+        // 3) CN-mode English reorder strategy (exactly same idea as CandidateComposer)
+        val finalCandidates = reorderForChineseModePreferHan(filtered, input)
+
+        // 4) Fallback: show raw input if no candidates
+        val finalList =
+            if (finalCandidates.isEmpty() && input.isNotEmpty()) {
+                arrayListOf(Candidate(input, input, 0, 0, 0))
+            } else {
+                ArrayList(finalCandidates)
+            }
+
+        // CN Qwerty: only qwerty preview, no T9 preview
+        session.setT9PreviewText(null)
+
+        val inputLower = input.lowercase()
+
+        // 缩写词组（yg/ygr/hy/py）强置顶
+        if (isAcronymLikeQwerty(inputLower)) {
+            promoteChineseCandidateByAcronym(finalList, inputLower)
+        }
+
+        val top = finalList.firstOrNull()
 
         val preview = when {
             inputLower.contains("'") -> inputLower
@@ -42,7 +58,7 @@ object CnQwertyHandler : ImeModeHandler {
             // 1) 首候选是英文精确词或变体：预览显示英文（不带分词符）
             top != null && isAsciiWord(top.word) -> {
                 val w = top.word.lowercase()
-                val variants = englishVariantsFor(inputLower)
+                val variants = englishVariantsForPreview(inputLower)
                 if (w == inputLower || w in variants) w else QwertyPreviewBuilder.build(inputLower)
             }
 
@@ -74,10 +90,12 @@ object CnQwertyHandler : ImeModeHandler {
         session.setQwertyPreviewText(preview)
 
         return ImeModeHandler.Output(
-            candidates = candidates,
-            pinyinSidebar = r.pinyinSidebar
+            candidates = finalList,
+            pinyinSidebar = emptyList()
         )
     }
+
+    // -------- from old CandidateController (CN Qwerty preview & acronym promote) --------
 
     private object PinyinUtil {
         private val pinyinSet: Set<String> = PinyinTable.allPinyins.map { it.lowercase() }.toHashSet()
@@ -214,19 +232,6 @@ object CnQwertyHandler : ImeModeHandler {
         return inputLower.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
     }
 
-    private fun isAsciiWord(word: String): Boolean {
-        if (word.isEmpty()) return false
-        return word.all { it in 'a'..'z' || it in 'A'..'Z' }
-    }
-
-    private fun englishVariantsFor(inputLower: String): Set<String> {
-        if (inputLower.length < 2) return emptySet()
-        val out = LinkedHashSet<String>()
-        out.add("${inputLower}s")
-        out.add("${inputLower}es")
-        return out
-    }
-
     private fun promoteChineseCandidateByAcronym(
         candidates: ArrayList<Candidate>,
         acronymKey: String
@@ -264,5 +269,107 @@ object CnQwertyHandler : ImeModeHandler {
         if (bestIdx <= 0) return
         val matched = candidates.removeAt(bestIdx)
         candidates.add(0, matched)
+    }
+
+    // -------- from old CandidateComposer (CN-mode prefer Han) --------
+
+    private fun reorderForChineseModePreferHan(
+        list: List<Candidate>,
+        rawInput: String
+    ): List<Candidate> {
+        if (list.isEmpty()) return list
+        if (rawInput.isEmpty()) return list
+
+        val isAlphaInput = rawInput.all { it in 'a'..'z' || it in 'A'..'Z' }
+        if (!isAlphaInput) {
+            return groupChineseFirst(list, englishTailLimit = 5)
+        }
+
+        val inputLower = rawInput.lowercase()
+
+        val (english, nonEnglish) = list.partition { isAsciiWord(it.word) }
+
+        val englishExact = ArrayList<Candidate>()
+        val englishVariants = ArrayList<Candidate>()
+        val englishOthers = ArrayList<Candidate>()
+
+        val variantWhitelist = englishVariantsForOrder(inputLower).toHashSet()
+
+        for (c in english) {
+            val w = c.word.lowercase()
+            when {
+                w == inputLower -> englishExact.add(c)
+                w in variantWhitelist -> englishVariants.add(c)
+                else -> englishOthers.add(c)
+            }
+        }
+
+        val shouldPromoteEnglish = inputLower.length >= 4
+
+        val promotedEnglish = if (shouldPromoteEnglish && englishExact.isNotEmpty()) {
+            englishExact + englishVariants.take(2)
+        } else {
+            emptyList()
+        }
+
+        val promotedSet = promotedEnglish.toHashSet()
+
+        val nonEnglishKept = nonEnglish.filter { it !in promotedSet }
+        val englishVariantsKept = englishVariants.filter { it !in promotedSet }
+        val englishExactKept = englishExact.filter { it !in promotedSet }
+        val englishOthersKept = englishOthers.filter { it !in promotedSet }
+
+        val tail = (englishExactKept + englishVariantsKept + englishOthersKept).take(5)
+
+        return promotedEnglish + nonEnglishKept + tail
+    }
+
+    private fun englishVariantsForOrder(inputLower: String): List<String> {
+        if (inputLower.length < 2) return emptyList()
+
+        fun isVowel(c: Char): Boolean = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u'
+
+        val out = ArrayList<String>()
+
+        if (inputLower.endsWith("y") && inputLower.length >= 2) {
+            val prev = inputLower[inputLower.length - 2]
+            if (!isVowel(prev)) {
+                out.add(inputLower.dropLast(1) + "ies")
+                return out
+            }
+        }
+
+        out.add("${inputLower}s")
+
+        val needEs =
+            inputLower.endsWith("s")
+                    || inputLower.endsWith("x")
+                    || inputLower.endsWith("z")
+                    || inputLower.endsWith("ch")
+                    || inputLower.endsWith("sh")
+                    || inputLower.endsWith("o")
+
+        if (needEs) out.add("${inputLower}es")
+
+        return out
+    }
+
+    private fun groupChineseFirst(list: List<Candidate>, englishTailLimit: Int): List<Candidate> {
+        val (english, nonEnglish) = list.partition { isAsciiWord(it.word) }
+        return nonEnglish + english.take(englishTailLimit)
+    }
+
+    private fun isAsciiWord(word: String): Boolean {
+        if (word.isEmpty()) return false
+        return word.all { it in 'a'..'z' || it in 'A'..'Z' }
+    }
+
+    // Preview uses a simpler whitelist (matches old CandidateController behavior)
+    private fun englishVariantsForPreview(inputLower: String): Set<String> {
+        if (inputLower.length < 2) return emptySet()
+        val out = LinkedHashSet<String>()
+        out.add("${inputLower}s")
+        out.add("${inputLower}es")
+        return out
     }
 }

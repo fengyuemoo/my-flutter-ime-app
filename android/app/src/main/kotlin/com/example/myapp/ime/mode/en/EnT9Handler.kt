@@ -1,6 +1,7 @@
 package com.example.myapp.ime.mode.en
 
-import com.example.myapp.ime.compose.common.CandidateComposer
+import com.example.myapp.dict.api.Dictionary
+import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.mode.ImeModeHandler
 
@@ -8,25 +9,33 @@ object EnT9Handler : ImeModeHandler {
 
     override fun build(
         session: ComposingSession,
-        candidateComposer: CandidateComposer,
+        dictEngine: Dictionary,
         singleCharMode: Boolean
     ): ImeModeHandler.Output {
+        @Suppress("UNUSED_PARAMETER")
+        val ignored = singleCharMode
 
-        val r = candidateComposer.compose(
-            session = session,
-            isChinese = false,
-            useT9Layout = true,
-            isT9Keyboard = true,
-            singleCharMode = singleCharMode
-        )
+        val input = session.rawT9Digits
 
-        // Preserve current behavior: only CN T9 sets preview
+        val candidates = ArrayList<Candidate>()
+        if (dictEngine.isLoaded && input.isNotEmpty()) {
+            candidates.addAll(dictEngine.getSuggestions(input, isT9 = true, isChineseMode = false))
+        }
+
+        val finalList =
+            if (candidates.isEmpty() && input.isNotEmpty()) {
+                arrayListOf(Candidate(input, input, 0, 0, 0))
+            } else {
+                candidates
+            }
+
+        // Preserve current behavior: only CN T9 sets preview/sidebar
         session.setT9PreviewText(null)
         session.setQwertyPreviewText(null)
 
         return ImeModeHandler.Output(
-            candidates = ArrayList(r.candidates),
-            pinyinSidebar = r.pinyinSidebar
+            candidates = finalList,
+            pinyinSidebar = emptyList()
         )
     }
 }
