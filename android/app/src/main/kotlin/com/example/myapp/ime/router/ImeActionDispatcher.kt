@@ -47,8 +47,7 @@ class ImeActionDispatcher(
 
     private val cnQwertyStrategy: ComposeStrategy =
         CnQwertyComposeStrategy(
-            sessionProvider = { sessions.cnQwerty },
-            clearComposing = { clearComposing() }
+            sessionProvider = { sessions.cnQwerty }
         )
 
     private val cnT9Strategy: ComposeStrategy =
@@ -239,7 +238,7 @@ class ImeActionDispatcher(
     override fun handleSpecialKey(keyLabel: String) {
         beforeModeSwitch()
 
-        val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
+        val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\\n")
         if (isEnter) {
             val result = currentStrategy().onEnter(inputConnection())
             if (result !is StrategyResult.Noop) {

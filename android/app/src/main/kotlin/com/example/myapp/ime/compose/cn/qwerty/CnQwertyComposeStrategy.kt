@@ -6,8 +6,7 @@ import com.example.myapp.ime.compose.common.ComposeStrategy
 import com.example.myapp.ime.compose.common.StrategyResult
 
 class CnQwertyComposeStrategy(
-    private val sessionProvider: () -> ComposingSession,
-    private val clearComposing: () -> Unit
+    private val sessionProvider: () -> ComposingSession
 ) : ComposeStrategy {
 
     private fun session(): ComposingSession = sessionProvider()
@@ -26,8 +25,14 @@ class CnQwertyComposeStrategy(
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
-        session().clear()
-        session().appendQwerty(pinyin.lowercase())
+        val s = session()
+
+        // 关键：如果已有 committedPrefix（已选词但仍在 composing），这里不要 clear，避免前缀丢失
+        // 当前 CN-QWERTY 正常情况下也不会出现 sidebar（sidebar 主要来自 CN-T9），保守处理即可。
+        if (s.committedPrefix.isNotEmpty()) return
+
+        s.clear()
+        s.appendQwerty(pinyin.lowercase())
     }
 
     override fun onEnter(ic: InputConnection?): StrategyResult {
@@ -37,7 +42,7 @@ class CnQwertyComposeStrategy(
         val s = session()
         if (!s.isComposing()) return StrategyResult.Noop
 
-        // 迁移自 ImeActionDispatcher.handleSpecialKey：中文全键盘 composing 时，Enter 提交 raw input
+        // 中文全键盘 composing 时，Enter 提交 raw input
         val textToCommit = (s.committedPrefix + s.qwertyInput.lowercase())
         return if (textToCommit.isNotEmpty()) {
             StrategyResult.DirectCommit(textToCommit)
