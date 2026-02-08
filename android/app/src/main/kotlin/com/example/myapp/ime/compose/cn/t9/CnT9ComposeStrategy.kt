@@ -51,10 +51,11 @@ class CnT9ComposeStrategy(
     }
 
     override fun onEnter(ic: InputConnection?): Boolean {
-        // Similar logic to CnQwertyComposeStrategy
-        if (session().isComposing()) {
-            return true // Consumed
-        }
-        return false
+        // 需求（已在 dispatcher 注释里写明）：中文 T9 composing 时优先提交“预览拼音(去掉')”；
+        // 如果取不到预览，则交给上层走系统换行（不要吞掉）。
+        if (!session().isComposing()) return false
+
+        val previewCommit = session().t9PreviewCommitText()
+        return !previewCommit.isNullOrEmpty()
     }
 }
