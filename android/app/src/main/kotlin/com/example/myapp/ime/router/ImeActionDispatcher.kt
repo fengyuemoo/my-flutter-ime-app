@@ -127,7 +127,7 @@ class ImeActionDispatcher(
         return raw
             .lowercase()
             .trim()
-            .replace(' ', '\'')
+            .replace(' ', ''')
     }
 
     fun refreshComposingView() {
@@ -399,9 +399,17 @@ class ImeActionDispatcher(
 
             is StrategyResult.ComposingUpdate -> {
                 val mode = mainMode()
-                val uiText =
-                    if (mode.isChinese) formatChinesePreeditForUi(result.composingText) else result.composingText
 
+                // Chinese modes: composing preview must come from handler Output (CandidateController override),
+                // so never set UI preview directly here.
+                if (mode.isChinese) {
+                    refreshCandidates()
+                    refreshComposingView()
+                    return
+                }
+
+                // Non-Chinese: keep existing behavior.
+                val uiText = result.composingText
                 if (::ui.isInitialized) ui.setComposingPreview(uiText)
 
                 if (shouldWriteComposingToEditor(mode)) {
