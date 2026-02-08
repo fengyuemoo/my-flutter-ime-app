@@ -197,6 +197,10 @@ class ImeActionDispatcher(
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
+        // 只允许 CN-T9 响应 sidebar，避免其它模式误触导致 session 状态被改坏
+        val mode = mainMode()
+        if (!(mode.isChinese && mode.useT9Layout)) return
+
         currentStrategy().onPinyinSidebarClick(pinyin)
         afterSessionMutated()
     }
@@ -367,7 +371,6 @@ class ImeActionDispatcher(
             is StrategyResult.SessionMutated -> afterSessionMutated()
 
             is StrategyResult.DirectCommit -> {
-                // Reuse the unified commit + reset behavior.
                 commitText(result.text)
             }
 
