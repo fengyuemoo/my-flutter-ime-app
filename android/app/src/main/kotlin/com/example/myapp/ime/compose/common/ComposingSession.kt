@@ -23,8 +23,8 @@ class ComposingSession {
     }
 
     @Deprecated(
-        message = "CN-Qwerty preview moved to ImeModeHandler.Output.composingPreviewText; keep as no-op for compatibility.",
-        level = DeprecationLevel.WARNING
+        message = "CN-Qwerty preview moved to ImeModeHandler.Output.composingPreviewText; remove all call sites.",
+        level = DeprecationLevel.ERROR
     )
     fun setQwertyPreviewText(@Suppress("UNUSED_PARAMETER") text: String?) {
         // no-op
