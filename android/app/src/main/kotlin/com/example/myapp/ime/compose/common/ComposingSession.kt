@@ -13,8 +13,7 @@ class ComposingSession {
     // 由候选/词频驱动的 T9 预览（例如 yi'ge / yi'g / w）
     private var _t9PreviewText: String? = null
 
-    // NEW: 中文全键盘也允许由候选驱动“预览覆盖文本”
-    // 例如：yg -> y'g；ygr -> y'g'r；year -> year（不分割）
+    // 中文全键盘允许预览覆盖文本（保留接口，但本次方案不再由 CandidateController 写入）
     private var _qwertyPreviewText: String? = null
 
     val pinyinStack: List<String> get() = _pinyinStack
@@ -26,7 +25,6 @@ class ComposingSession {
         _t9PreviewText = text?.trim()?.lowercase().takeUnless { it.isNullOrEmpty() }
     }
 
-    // NEW
     fun setQwertyPreviewText(text: String?) {
         _qwertyPreviewText = text?.trim()?.takeUnless { it.isNullOrEmpty() }
     }
@@ -97,12 +95,24 @@ class ComposingSession {
         val s = raw.trim().lowercase()
         if (s.isEmpty()) return emptyList()
 
+        // 1) 用户显式输入分隔符：按 ' 原样分段
         if (s.contains("'")) {
             return s.split("'")
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
         }
 
+        // 2) 中文全键盘：无元音短缩写（yg/ygr/hy/py...）=> 强制逐字母分段，显示 y'g / y'g'r
+        // 条件：全字母、2~6 位、且不含 aeiouv；zh/ch/sh 这类双字母声母不拆
+        val isAsciiLetters = s.all { it in 'a'..'z' }
+        if (isAsciiLetters) {
+            val noVowel = s.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
+            if (noVowel && s.length in 2..6 && s != "zh" && s != "ch" && s != "sh") {
+                return s.map { it.toString() }
+            }
+        }
+
+        // 3) 启发式拼音分段（用于 nihao -> ni'hao 这种 UI 预览）
         val initials = arrayOf(
             "zh", "ch", "sh",
             "b", "p", "m", "f",
@@ -149,6 +159,15 @@ class ComposingSession {
 
         val tail = s.substring(start).trim()
         if (tail.isNotEmpty()) result.add(tail)
+
+        // 4) 避免把英文词拆成 “yea'r” 这种末尾单辅音假分隔：year/near/... 都保持原样
+        if (s.length >= 4 && result.size >= 2) {
+            val last = result.last()
+            if (last.length == 1 && !isVowel(last[0])) {
+                return listOf(s)
+            }
+        }
+
         return result
     }
 
