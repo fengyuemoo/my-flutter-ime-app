@@ -71,10 +71,9 @@ class CandidateController(
         currentCandidates.clear()
 
         if (!s.isComposing()) {
+            // UI idle 状态由 ImeUi 统一处理：会清候选 + 清预览
             ui.showIdleState()
             keyboardController.updateSidebar(emptyList())
-            s.setT9PreviewText(null)
-            s.setQwertyPreviewText(null)
 
             if (isExpanded) {
                 isExpanded = false
@@ -95,9 +94,8 @@ class CandidateController(
         keyboardController.updateSidebar(out.pinyinSidebar)
         currentCandidates = out.candidates
 
-        val mainMode = keyboardController.getMainMode()
+        // 只更新候选；composing preview 统一由 dispatcher.refreshComposingView() 刷新
         ui.setCandidates(currentCandidates)
-        ui.setComposingPreview(s.displayText(mainMode.useT9Layout))
     }
 
     fun handleSpaceKey() {
