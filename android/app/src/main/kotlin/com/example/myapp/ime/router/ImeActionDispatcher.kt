@@ -127,7 +127,7 @@ class ImeActionDispatcher(
         return raw
             .lowercase()
             .trim()
-            .replace(' ', '\'')
+            .replace(' ', '''')
     }
 
     fun refreshComposingView() {
@@ -135,6 +135,7 @@ class ImeActionDispatcher(
 
         val mode = mainMode()
         val ic = inputConnection()
+
         val displayText = session().displayText(mode.useT9Layout)
 
         if (displayText.isNullOrEmpty()) {
@@ -143,7 +144,16 @@ class ImeActionDispatcher(
             return
         }
 
-        val uiText = if (mode.isChinese) formatChinesePreeditForUi(displayText) else displayText
+        val rawUiText = when {
+            // CN-Qwerty: prefer handler-provided segmented preview (includes committedPrefix)
+            mode.isChinese && !mode.useT9Layout && ::candidateController.isInitialized -> {
+                candidateController.getComposingPreviewOverride() ?: displayText
+            }
+
+            else -> displayText
+        }
+
+        val uiText = if (mode.isChinese) formatChinesePreeditForUi(rawUiText) else rawUiText
         ui.setComposingPreview(uiText)
 
         if (shouldWriteComposingToEditor(mode)) {
@@ -246,13 +256,13 @@ class ImeActionDispatcher(
 
         val ic = inputConnection() ?: return
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+        ic.sendKeyEvent(KeyEvent(ACTION_UP, KeyEvent.KEYCODE_DEL))
     }
 
     override fun handleSpecialKey(keyLabel: String) {
         beforeModeSwitch()
 
-        val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\\n")
+        val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
             val result = currentStrategy().onEnter(inputConnection())
             if (result !is StrategyResult.Noop) {
@@ -360,6 +370,8 @@ class ImeActionDispatcher(
         currentEnglishStrategy()?.setEnglishPredictEnabled(enabled)
         afterSessionMutated()
     }
+
+
 
     override fun toggleEnglishPredict() {
         currentEnglishStrategy()?.toggleEnglishPredict()

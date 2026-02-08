@@ -87,11 +87,13 @@ object CnQwertyHandler : ImeModeHandler {
             }
         }
 
+        // 兼容保留（后续一步我们再把 session 里的 qwerty preview 字段彻底移除）
         session.setQwertyPreviewText(preview)
 
         return ImeModeHandler.Output(
             candidates = finalList,
-            pinyinSidebar = emptyList()
+            pinyinSidebar = emptyList(),
+            composingPreviewText = session.committedPrefix + preview
         )
     }
 

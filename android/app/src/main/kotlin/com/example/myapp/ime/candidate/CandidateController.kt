@@ -27,6 +27,11 @@ class CandidateController(
     private var isSingleCharMode = false
     private var currentCandidates: ArrayList<Candidate> = ArrayList()
 
+    // NEW: handler computed composing preview (CN-Qwerty segmentation)
+    private var composingPreviewOverride: String? = null
+
+    fun getComposingPreviewOverride(): String? = composingPreviewOverride
+
     private fun session(): ComposingSession = sessions.current()
 
     override fun toggleCandidatesExpanded() {
@@ -71,7 +76,7 @@ class CandidateController(
         currentCandidates.clear()
 
         if (!s.isComposing()) {
-            // UI idle 状态由 ImeUi 统一处理：会清候选 + 清预览
+            composingPreviewOverride = null
             ui.showIdleState()
             keyboardController.updateSidebar(emptyList())
 
@@ -91,10 +96,11 @@ class CandidateController(
             singleCharMode = isSingleCharMode
         )
 
+        composingPreviewOverride = out.composingPreviewText
+
         keyboardController.updateSidebar(out.pinyinSidebar)
         currentCandidates = out.candidates
 
-        // 只更新候选；composing preview 统一由 dispatcher.refreshComposingView() 刷新
         ui.setCandidates(currentCandidates)
     }
 
