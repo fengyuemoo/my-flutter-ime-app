@@ -103,7 +103,8 @@ class ComposingSession {
         }
 
         /**
-         * DP：尽可能多地从开头匹配拼音音节，取“覆盖最长”的切分；覆盖相同则取“音节数最多”。
+         * DP：尽可能多地从开头匹配拼音音节，取“覆盖最长”的切分；
+         * 覆盖相同则取“音节数最少”（更长音节优先），避免 luo -> lu'o 这种过度切分。
          * 返回 (parts, coveredLen)；coveredLen==0 表示完全不匹配。
          */
         fun splitBestPrefix(lettersRaw: String): Pair<List<String>, Int> {
@@ -117,12 +118,16 @@ class ComposingSession {
                 val base = dp[i] ?: continue
                 val remain = s.length - i
                 val tryMax = minOf(maxPyLen, remain)
-                for (l in 1..tryMax) {
+
+                // 倒序枚举长度：更长音节更容易得到更少的音节数
+                for (l in tryMax downTo 1) {
                     val sub = s.substring(i, i + l)
                     if (!pinyinSet.contains(sub)) continue
+
                     val cand = base + sub
                     val old = dp[i + l]
-                    if (old == null || cand.size > old.size) {
+                    // 覆盖长度固定为 i+l，这里只比较“音节数更少”
+                    if (old == null || cand.size < old.size) {
                         dp[i + l] = cand
                     }
                 }
@@ -152,19 +157,19 @@ class ComposingSession {
                 .filter { it.isNotEmpty() }
         }
 
-        // 2) 中文全键盘：无元音短缩写（yg/ygr/hy/py...）=> 强制逐字母分段，显示 y'g / y'g'r
-        // 条件：全字母、2~6 位、且不含 aeiouv；zh/ch/sh 这类双字母声母不拆
+        // 2) 中文全键盘：无元音缩写（yg/ygr/hy/py/hhzstsl...）=> 强制逐字母分段，显示 y'g / y'g'r
+        // 条件：全字母、2~12 位、且不含 aeiouv；zh/ch/sh 这类双字母声母不拆
         val isAsciiLetters = s.all { it in 'a'..'z' }
         if (isAsciiLetters) {
             val noVowel = s.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
-            if (noVowel && s.length in 2..6 && s != "zh" && s != "ch" && s != "sh") {
+            if (noVowel && s.length in 2..12 && s != "zh" && s != "ch" && s != "sh") {
                 return s.map { it.toString() }
             }
         }
 
         // 3) 用拼音表做 DP 切分（更“像拼音”的预览），并且避免把纯英文误拆：
         // - 如果从 0 开始完全匹配不到任何拼音前缀：直接返回原串（home -> home，不再 ho'me）
-        // - 如果能匹配到：返回 “拼音音节 + 余串”，余串原样附加（year -> ye'a'r，baby -> ba'by）
+        // - 如果能匹配到：返回 “拼音音节 + 余串”，余串原样附加（year -> ye'ar，baby -> ba'by）
         val (parts, cut) = PinyinDisplaySplitter.splitBestPrefix(s)
         if (cut <= 0) return listOf(s)
 
