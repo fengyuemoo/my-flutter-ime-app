@@ -40,9 +40,6 @@ object CnQwertyHandler : ImeModeHandler {
                 ArrayList(finalCandidates)
             }
 
-        // CN Qwerty: only qwerty preview, no T9 preview
-        session.setT9PreviewText(null)
-
         val inputLower = input.lowercase()
 
         // 缩写词组（yg/ygr/hy/py）强置顶

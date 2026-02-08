@@ -29,9 +29,6 @@ object EnQwertyHandler : ImeModeHandler {
                 candidates
             }
 
-        // English modes do not use these previews
-        session.setT9PreviewText(null)
-
         return ImeModeHandler.Output(
             candidates = finalList,
             pinyinSidebar = emptyList()
