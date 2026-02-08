@@ -144,14 +144,14 @@ class ImeActionDispatcher(
             return
         }
 
-        val rawUiText = when {
-            // CN-Qwerty: prefer handler-provided segmented preview (includes committedPrefix)
-            mode.isChinese && !mode.useT9Layout && ::candidateController.isInitialized -> {
-                candidateController.getComposingPreviewOverride() ?: displayText
+        val overrideText =
+            if (mode.isChinese && ::candidateController.isInitialized) {
+                candidateController.getComposingPreviewOverride()
+            } else {
+                null
             }
 
-            else -> displayText
-        }
+        val rawUiText = overrideText ?: displayText
 
         val uiText = if (mode.isChinese) formatChinesePreeditForUi(rawUiText) else rawUiText
         ui.setComposingPreview(uiText)

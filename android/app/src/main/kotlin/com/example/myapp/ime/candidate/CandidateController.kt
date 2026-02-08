@@ -27,7 +27,7 @@ class CandidateController(
     private var isSingleCharMode = false
     private var currentCandidates: ArrayList<Candidate> = ArrayList()
 
-    // NEW: handler computed composing preview (CN-Qwerty segmentation)
+    // Handler computed composing preview override (CN-Qwerty segmentation / CN-T9 preview line)
     private var composingPreviewOverride: String? = null
 
     fun getComposingPreviewOverride(): String? = composingPreviewOverride
@@ -138,8 +138,9 @@ class CandidateController(
             }
 
             is ComposingSession.PickResult.Updated -> {
-                updateComposingView()
+                // 先更新候选/override，再刷新 composing preview，避免短暂显示旧 preview
                 updateCandidates()
+                updateComposingView()
             }
         }
     }

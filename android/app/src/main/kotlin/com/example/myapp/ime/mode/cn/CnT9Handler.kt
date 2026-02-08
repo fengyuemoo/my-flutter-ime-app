@@ -60,13 +60,27 @@ object CnT9Handler : ImeModeHandler {
                 null
             }
 
+        // 仍保留：Enter 走 session.t9PreviewCommitText() 时需要这个状态
         session.setT9PreviewText(t9PreviewText)
 
         promoteCandidateMatchingPreview(finalList, t9PreviewText)
 
+        // NEW: 统一由 handler 输出 composingPreviewText（包含 committedPrefix + stack + preview）
+        val stackUi = session.pinyinStack.joinToString("'") { it.lowercase() }
+        val previewUi = t9PreviewText ?: ""
+        val composingPreviewText = buildString {
+            append(session.committedPrefix)
+            if (stackUi.isNotEmpty()) append(stackUi)
+            if (previewUi.isNotEmpty()) {
+                if (stackUi.isNotEmpty()) append("'")
+                append(previewUi)
+            }
+        }.takeIf { it.isNotBlank() }
+
         return ImeModeHandler.Output(
             candidates = finalList,
-            pinyinSidebar = sidebar
+            pinyinSidebar = sidebar,
+            composingPreviewText = composingPreviewText
         )
     }
 
