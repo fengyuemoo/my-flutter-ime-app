@@ -122,6 +122,9 @@ class ImeGraph(
 
             keyboardController.themeModeProvider = { themeController.themeMode }
 
+            // NEW: let keyboard refresh EN predict UI by itself when switching keyboards
+            keyboardController.englishPredictEnabledProvider = { dispatcher.getEnglishPredictEnabled() }
+
             val layoutController = LayoutController(
                 context = context,
                 keyboardControllerProvider = { keyboardController }
