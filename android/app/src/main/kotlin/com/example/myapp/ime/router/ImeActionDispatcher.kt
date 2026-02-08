@@ -125,7 +125,6 @@ class ImeActionDispatcher(
 
     private fun formatChinesePreeditForUi(raw: String): String {
         return raw
-            .lowercase()
             .trim()
             .replace(' ', '\'')
     }
