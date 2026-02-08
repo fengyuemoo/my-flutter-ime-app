@@ -61,7 +61,6 @@ object CnT9Handler : ImeModeHandler {
             }
 
         session.setT9PreviewText(t9PreviewText)
-        session.setQwertyPreviewText(null)
 
         promoteCandidateMatchingPreview(finalList, t9PreviewText)
 

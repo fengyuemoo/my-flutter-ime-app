@@ -13,9 +13,6 @@ class ComposingSession {
     // 由候选/词频驱动的 T9 预览（例如 yi'ge / yi'g / w）
     private var _t9PreviewText: String? = null
 
-    // 中文全键盘允许预览覆盖文本（由上层按“首候选/策略”决定）
-    private var _qwertyPreviewText: String? = null
-
     val pinyinStack: List<String> get() = _pinyinStack
     val rawT9Digits: String get() = _rawT9Digits
     val qwertyInput: String get() = _qwertyInput
@@ -25,13 +22,17 @@ class ComposingSession {
         _t9PreviewText = text?.trim()?.lowercase().takeUnless { it.isNullOrEmpty() }
     }
 
-    fun setQwertyPreviewText(text: String?) {
-        _qwertyPreviewText = text?.trim()?.takeUnless { it.isNullOrEmpty() }
+    @Deprecated(
+        message = "CN-Qwerty preview moved to ImeModeHandler.Output.composingPreviewText; keep as no-op for compatibility.",
+        level = DeprecationLevel.WARNING
+    )
+    fun setQwertyPreviewText(@Suppress("UNUSED_PARAMETER") text: String?) {
+        // no-op
     }
 
     /**
      * 中文 T9：把预览拼音转换为可直接上屏的字母串（小写、无分词符）。
-     * 例如 "yi'ge" -> "yige"；"w" -> "w"。
+     * 例如 \"yi'ge\" -> \"yige\"；\"w\" -> \"w\"。
      */
     fun t9PreviewCommitText(): String? {
         val raw = _t9PreviewText ?: return null
@@ -62,7 +63,6 @@ class ComposingSession {
         _qwertyInput = ""
         _committedPrefix = ""
         _t9PreviewText = null
-        _qwertyPreviewText = null
         pickHistory.clear()
     }
 
@@ -96,13 +96,11 @@ class ComposingSession {
         if (!isComposing()) return null
 
         if (!useT9Layout) {
-            // 非 T9：不在 session 层做拼音切分兜底，避免英文被拆。
-            // 中文全键盘由上层写入 _qwertyPreviewText 来控制预览显示。
-            val qwertyUi = _qwertyPreviewText ?: _qwertyInput
-
+            // 非 T9：session 只输出 committedPrefix + raw qwertyInput。
+            // CN-Qwerty 的分词预览由 handler 输出 -> CandidateController override -> Dispatcher 决定显示。
             val sb = StringBuilder()
             sb.append(_committedPrefix)
-            sb.append(qwertyUi)
+            sb.append(_qwertyInput)
             return sb.toString()
         }
 

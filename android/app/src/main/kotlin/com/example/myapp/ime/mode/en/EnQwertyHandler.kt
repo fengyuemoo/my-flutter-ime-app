@@ -31,7 +31,6 @@ object EnQwertyHandler : ImeModeHandler {
 
         // English modes do not use these previews
         session.setT9PreviewText(null)
-        session.setQwertyPreviewText(null)
 
         return ImeModeHandler.Output(
             candidates = finalList,
