@@ -164,6 +164,28 @@ class ImeActionDispatcher(
 
     override fun inputConnection(): InputConnection? = inputConnectionProvider()
 
+    private fun clearSessionAndEditorComposing() {
+        session().clear()
+        if (::ui.isInitialized) ui.setComposingPreview(null)
+        inputConnection()?.setComposingText("", 0)
+    }
+
+    private fun afterCommitOrClear() {
+        refreshCandidates()
+        syncEnglishPredictUi()
+    }
+
+    private fun commitAndReset(text: String) {
+        inputConnection()?.commitText(text, 1)
+        clearSessionAndEditorComposing()
+        afterCommitOrClear()
+    }
+
+    private fun clearAndReset() {
+        clearSessionAndEditorComposing()
+        afterCommitOrClear()
+    }
+
     override fun handleComposingInput(text: String) {
         val result = currentStrategy().onComposingInput(text)
         handleStrategyResult(result)
@@ -180,23 +202,11 @@ class ImeActionDispatcher(
     }
 
     override fun commitText(text: String) {
-        inputConnection()?.commitText(text, 1)
-
-        session().clear()
-        if (::ui.isInitialized) ui.setComposingPreview(null)
-        inputConnection()?.setComposingText("", 0)
-
-        refreshCandidates()
-        syncEnglishPredictUi()
+        commitAndReset(text)
     }
 
     override fun clearComposing() {
-        session().clear()
-        if (::ui.isInitialized) ui.setComposingPreview(null)
-        inputConnection()?.setComposingText("", 0)
-
-        refreshCandidates()
-        syncEnglishPredictUi()
+        clearAndReset()
     }
 
     override fun handleSpaceKey() {
@@ -329,14 +339,7 @@ class ImeActionDispatcher(
     override fun commitSymbolFromPanel(symbol: String) {
         SymbolPrefs.recordMruCommon(context, symbol)
 
-        inputConnection()?.commitText(symbol, 1)
-
-        session().clear()
-        if (::ui.isInitialized) ui.setComposingPreview(null)
-        inputConnection()?.setComposingText("", 0)
-
-        refreshCandidates()
-        syncEnglishPredictUi()
+        commitAndReset(symbol)
 
         if (!symbolLocked) {
             closeSymbolPanel()
@@ -364,14 +367,8 @@ class ImeActionDispatcher(
             is StrategyResult.SessionMutated -> afterSessionMutated()
 
             is StrategyResult.DirectCommit -> {
-                inputConnection()?.commitText(result.text, 1)
-
-                session().clear()
-                if (::ui.isInitialized) ui.setComposingPreview(null)
-                inputConnection()?.setComposingText("", 0)
-
-                refreshCandidates()
-                syncEnglishPredictUi()
+                // Reuse the unified commit + reset behavior.
+                commitText(result.text)
             }
 
             is StrategyResult.ComposingUpdate -> {
