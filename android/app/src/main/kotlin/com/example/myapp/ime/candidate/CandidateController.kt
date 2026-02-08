@@ -36,10 +36,6 @@ class CandidateController(
             return sb.toString()
         }
 
-        /**
-         * DP：在“能完整覆盖”的前提下，优先“音节数更少”（也就是更长音节优先）。
-         * 这能避免 luo -> lu'o 这种过度切分。
-         */
         fun splitToSyllablesBest(letters: String): List<String> {
             val s = normalizeLetters(letters)
             if (s.isEmpty()) return emptyList()
@@ -52,12 +48,9 @@ class CandidateController(
                 val base = dp[i] ?: continue
                 val remain = s.length - i
                 val tryMax = minOf(maxPyLen, remain)
-
-                // 倒序枚举长度，让“更长音节”更容易成为更少音节的解
                 for (l in tryMax downTo 1) {
                     val sub = s.substring(i, i + l)
                     if (!pinyinSet.contains(sub)) continue
-
                     val cand = base + sub
                     val old = dp[i + l]
                     if (old == null || cand.size < old.size) {
@@ -97,9 +90,6 @@ class CandidateController(
             return sb.toString()
         }
 
-        /**
-         * 返回：能从 0 开始覆盖的“最长切分”，当覆盖长度相同，优先“音节数更少”（更长音节优先）。
-         */
         private fun splitBestExactPrefix(s: String): Pair<List<String>, Int> {
             if (s.isEmpty()) return emptyList<String>() to 0
 
@@ -110,16 +100,12 @@ class CandidateController(
                 val base = dp[i] ?: continue
                 val remain = s.length - i
                 val tryMax = minOf(maxLen, remain)
-
                 for (l in tryMax downTo 1) {
                     val sub = s.substring(i, i + l)
                     if (!syllableSet.contains(sub)) continue
-
                     val cand = base + sub
                     val old = dp[i + l]
-                    if (old == null || cand.size < old.size) {
-                        dp[i + l] = cand
-                    }
+                    if (old == null || cand.size < old.size) dp[i + l] = cand
                 }
             }
 
@@ -155,7 +141,6 @@ class CandidateController(
             val out = ArrayList<String>()
             out.addAll(parts)
 
-            // cut==letters.length：说明是完整音节串，例如 luo -> ["luo"]，不会再变成 lu'o
             if (cut < letters.length) {
                 val rem = letters.substring(cut)
                 val p = longestPrefix(rem)
@@ -279,6 +264,13 @@ class CandidateController(
         }
     }
 
+    private fun isAcronymLikeQwerty(inputLower: String): Boolean {
+        if (inputLower.length !in 2..6) return false
+        if (!inputLower.all { it in 'a'..'z' }) return false
+        if (inputLower == "zh" || inputLower == "ch" || inputLower == "sh") return false
+        return inputLower.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
+    }
+
     private fun isAsciiWord(word: String): Boolean {
         if (word.isEmpty()) return false
         return word.all { it in 'a'..'z' || it in 'A'..'Z' }
@@ -290,14 +282,6 @@ class CandidateController(
         out.add("${inputLower}s")
         out.add("${inputLower}es")
         return out
-    }
-
-    private fun shouldPromoteAcronym(inputLower: String): Boolean {
-        if (inputLower.isEmpty()) return false
-        if (!inputLower.all { it in 'a'..'z' }) return false
-        if (inputLower == "zh" || inputLower == "ch" || inputLower == "sh") return false
-        val noVowel = inputLower.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
-        return noVowel && inputLower.length in 2..12
     }
 
     private fun promoteChineseCandidateByAcronym(
@@ -312,8 +296,15 @@ class CandidateController(
 
         for (i in candidates.indices) {
             val c = candidates[i]
-            val py = c.pinyin ?: continue
-            val ac = PinyinUtil.acronymOfPinyin(py)
+
+            // 优先用 DB 的 acronym（严格且不受拼音切分影响）；缺失才回退到从 pinyin 反算
+            val ac = c.acronym
+                ?: run {
+                    val py = c.pinyin ?: return@run null
+                    PinyinUtil.acronymOfPinyin(py).takeIf { it.isNotEmpty() }
+                }
+                ?: continue
+
             if (ac != acronymKey) continue
 
             val wordLenBoost = if (c.word.length == acronymKey.length) 200_000_000L else 0L
@@ -443,8 +434,8 @@ class CandidateController(
         if (mainMode.isChinese && !mainMode.useT9Layout) {
             val inputLower = s.qwertyInput.lowercase()
 
-            // 先尝试把“缩写真正匹配的候选”置顶（避免预览依赖偶然排序）
-            if (shouldPromoteAcronym(inputLower)) {
+            // 缩写词组（yg/ygr/hy/py）强置顶（保持你原逻辑）
+            if (isAcronymLikeQwerty(inputLower)) {
                 promoteChineseCandidateByAcronym(currentCandidates, inputLower)
             }
 
@@ -460,20 +451,29 @@ class CandidateController(
                     if (w == inputLower || w in variants) w else QwertyPreviewBuilder.build(inputLower)
                 }
 
-                // 2) 首候选是缩写命中：预览显示逐字母 t'h'a / h'h'z...
-                top != null && !top.pinyin.isNullOrEmpty() -> {
-                    val ac = PinyinUtil.acronymOfPinyin(top.pinyin!!)
-                    val lenOk = (top.word.length == inputLower.length) ||
-                            (top.syllables > 0 && top.syllables == inputLower.length)
-                    if (lenOk && ac == inputLower) {
+                else -> {
+                    val defaultPreview = QwertyPreviewBuilder.build(inputLower)
+                    val defaultPartsCount = defaultPreview
+                        .split("'")
+                        .asSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .count()
+
+                    val canStrictlyProveTopIsAcronymHit =
+                        top != null &&
+                            top.acronym != null &&
+                            top.acronym.lowercase() == inputLower &&
+                            top.word.length == inputLower.length &&
+                            inputLower.length in 2..12 &&
+                            inputLower.all { it in 'a'..'z' }
+
+                    if (canStrictlyProveTopIsAcronymHit && defaultPartsCount < inputLower.length) {
                         inputLower.map { it.toString() }.joinToString("'")
                     } else {
-                        QwertyPreviewBuilder.build(inputLower)
+                        defaultPreview
                     }
                 }
-
-                // 3) 其它：用“拼音前缀切分”，用于 s'tu、ho'm、以及完整音节 luo
-                else -> QwertyPreviewBuilder.build(inputLower)
             }
 
             s.setQwertyPreviewText(preview)

@@ -158,8 +158,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 && norm.length in 2..6
                 && norm.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
 
-        // 中文 QWERTY：英文精确匹配只看长度（>=4）与“是否无元音缩写”
-        // 不再用“像拼音前缀 remainder=1”去屏蔽 year 这类常见英文
         val allowEnglishExactInChineseQwerty =
             !isT9 && isAsciiLetters && !isAcronymLikeQwerty && norm.length >= 4
 
@@ -191,7 +189,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         }
         addUnique(exactEn)
 
-        // 中文 QWERTY 的英文变体（仍沿用你现有 s/es；如你已接入 babies 的规则可自行替换）
         if (allowEnglishExactInChineseQwerty && isAsciiLetters && norm.length in 2..32) {
             addUnique(
                 queryExactEnglish(
@@ -213,7 +210,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             )
         }
 
-        // 1) 中文 T9：整串 digits + 单字回退
         if (isT9) {
             val exactDigits = queryDb(
                 db = db,
@@ -238,7 +234,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 2) 中文 QWERTY：完整拼音音节串 -> 严格等值 + 音节回退
         val syllables = splitConcatPinyinToSyllables(norm)
         val isCompletePinyin = syllables.isNotEmpty() && syllables.joinToString("") == norm
 
@@ -290,7 +285,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 3) 非完整拼音：避免长词联想，同时保留缩写词组（yg/ygr/hy/py）
         val partial = splitPartialPinyinPrefix(norm)
         if (partial != null) {
             val fullSyllablePrefix = partial.fullSyllables.joinToString("")
@@ -318,7 +312,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 3.B) 只有“较长英文词”（例如 year）才启用清爽模式；2~3 字母缩写不要走这里
         if (exactEn.isNotEmpty() && isAsciiLetters && norm.length >= 4) {
             val first = bestPinyinPrefix(norm)
             if (first.isNotEmpty()) {
@@ -327,14 +320,12 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 3.C) 缩写词组：按“输入长度 = 词长”匹配
         if (isAsciiLetters && norm.length >= 2) {
             addUnique(queryAcronymPrefixByWordLenEq(db, prefix = norm, wordLen = norm.length, limit = 160))
         }
 
         addUnique(queryChinesePrefixWithMaxWordLen(db, prefix = norm, maxWordLen = 2, limit = 120))
 
-        // 单字回退：用“最长拼音前缀”而不是固定首字母（hom -> ho，而不是 h）
         val fallbackPrefix = bestPinyinPrefix(norm)
         if (fallbackPrefix.isNotEmpty()) {
             addUnique(querySingleCharByInputPrefix(db, fallbackPrefix).take(200))
@@ -417,7 +408,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         try {
             val acronymPrefix = parts.joinToString("") { it.take(1) }
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -431,6 +422,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     val freq = it.getInt(1)
                     val pinyin = it.getString(2)
                     val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+                    val acronym = try { it.getString(4) } catch (_: Exception) { null }
 
                     list.add(
                         Candidate(
@@ -440,7 +432,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                             matchedLength = 0,
                             pinyinCount = 0,
                             pinyin = pinyin,
-                            syllables = syllables
+                            syllables = syllables,
+                            acronym = acronym
                         )
                     )
                 }
@@ -455,7 +448,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -470,6 +463,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     val freq = it.getInt(1)
                     val pinyin = it.getString(2)
                     val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+                    val acronym = try { it.getString(4) } catch (_: Exception) { null }
 
                     list.add(
                         Candidate(
@@ -479,7 +473,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                             matchedLength = prefix.length,
                             pinyinCount = 0,
                             pinyin = pinyin,
-                            syllables = syllables
+                            syllables = syllables,
+                            acronym = acronym
                         )
                     )
                 }
@@ -493,7 +488,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE (${DictionaryDbHelper.COL_INPUT} LIKE ? OR ${DictionaryDbHelper.COL_ACRONYM} LIKE ?)
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -508,6 +503,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     val freq = it.getInt(1)
                     val pinyin = it.getString(2)
                     val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+                    val acronym = try { it.getString(4) } catch (_: Exception) { null }
 
                     list.add(
                         Candidate(
@@ -517,7 +513,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                             matchedLength = prefix.length,
                             pinyinCount = 0,
                             pinyin = pinyin,
-                            syllables = syllables
+                            syllables = syllables,
+                            acronym = acronym
                         )
                     )
                 }
@@ -531,7 +528,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE (${DictionaryDbHelper.COL_INPUT} LIKE ? OR ${DictionaryDbHelper.COL_ACRONYM} LIKE ?)
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -546,6 +543,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     val freq = it.getInt(1)
                     val pinyin = it.getString(2)
                     val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+                    val acronym = try { it.getString(4) } catch (_: Exception) { null }
 
                     list.add(
                         Candidate(
@@ -555,7 +553,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                             matchedLength = prefix.length,
                             pinyinCount = 0,
                             pinyin = pinyin,
-                            syllables = syllables
+                            syllables = syllables,
+                            acronym = acronym
                         )
                     )
                 }
@@ -569,7 +568,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_INPUT} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -581,7 +580,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, prefix, freq, matchedLength = prefix.length, pinyinCount = 0))
+                    val acronym = try { it.getString(2) } catch (_: Exception) { null }
+                    list.add(Candidate(word, prefix, freq, matchedLength = prefix.length, pinyinCount = 0, acronym = acronym))
                 }
             }
         } catch (e: Exception) {
@@ -594,7 +594,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_INPUT} = ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -607,7 +607,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    list.add(Candidate(word, input, freq, matchedLength = input.length, pinyinCount = 0))
+                    val acronym = try { it.getString(2) } catch (_: Exception) { null }
+                    list.add(Candidate(word, input, freq, matchedLength = input.length, pinyinCount = 0, acronym = acronym))
                 }
             }
         } catch (_: Exception) {
@@ -619,7 +620,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_T9} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -634,6 +635,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     val freq = it.getInt(1)
                     val pinyin = it.getString(2)
                     val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+                    val acronym = try { it.getString(4) } catch (_: Exception) { null }
 
                     list.add(
                         Candidate(
@@ -643,7 +645,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                             matchedLength = digitsPrefix.length,
                             pinyinCount = 0,
                             pinyin = pinyin,
-                            syllables = syllables
+                            syllables = syllables,
+                            acronym = acronym
                         )
                     )
                 }
@@ -721,7 +724,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     DictionaryDbHelper.COL_WORD,
                     DictionaryDbHelper.COL_FREQ,
                     DictionaryDbHelper.COL_INPUT,
-                    DictionaryDbHelper.COL_SYLLABLES
+                    DictionaryDbHelper.COL_SYLLABLES,
+                    DictionaryDbHelper.COL_ACRONYM
                 ),
                 selection,
                 argsList.toTypedArray(),
@@ -735,6 +739,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     val freq = it.getInt(1)
                     val pinyin = it.getString(2)
                     val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+                    val acronym = try { it.getString(4) } catch (_: Exception) { null }
 
                     list.add(
                         Candidate(
@@ -744,7 +749,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                             matchedLength = matchedLen,
                             pinyinCount = 0,
                             pinyin = if (lang == 0) pinyin else null,
-                            syllables = if (lang == 0) syllables else 0
+                            syllables = if (lang == 0) syllables else 0,
+                            acronym = if (lang == 0) acronym else null
                         )
                     )
                 }
@@ -802,7 +808,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                             matchedLength = input.length,
                             pinyinCount = 0,
                             pinyin = null,
-                            syllables = 0
+                            syllables = 0,
+                            acronym = null
                         )
                     )
                 }

@@ -9,7 +9,9 @@ data class Candidate(
     // NEW: 数据库里的拼音 input（中文模式特别有用；英文可为空）
     val pinyin: String? = null,
     // NEW: 数据库字段（如果词库里有填）；没有就为 0
-    val syllables: Int = 0
+    val syllables: Int = 0,
+    // NEW: 数据库里的 acronym（缩写），用于严格对齐预览（tha -> t'h'a）
+    val acronym: String? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
