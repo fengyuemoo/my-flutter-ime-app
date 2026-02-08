@@ -30,7 +30,11 @@ class CandidateController(
     // Handler computed composing preview override (CN-Qwerty segmentation / CN-T9 preview line)
     private var composingPreviewOverride: String? = null
 
+    // Handler computed enter-commit override (CN-T9 preview letters commit)
+    private var enterCommitTextOverride: String? = null
+
     fun getComposingPreviewOverride(): String? = composingPreviewOverride
+    fun getEnterCommitTextOverride(): String? = enterCommitTextOverride
 
     private fun session(): ComposingSession = sessions.current()
 
@@ -77,6 +81,7 @@ class CandidateController(
 
         if (!s.isComposing()) {
             composingPreviewOverride = null
+            enterCommitTextOverride = null
             ui.showIdleState()
             keyboardController.updateSidebar(emptyList())
 
@@ -97,6 +102,7 @@ class CandidateController(
         )
 
         composingPreviewOverride = out.composingPreviewText
+        enterCommitTextOverride = out.enterCommitText
 
         keyboardController.updateSidebar(out.pinyinSidebar)
         currentCandidates = out.candidates

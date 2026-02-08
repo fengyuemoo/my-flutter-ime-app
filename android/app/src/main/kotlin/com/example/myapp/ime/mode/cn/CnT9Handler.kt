@@ -15,14 +15,12 @@ object CnT9Handler : ImeModeHandler {
         singleCharMode: Boolean
     ): ImeModeHandler.Output {
 
-        // 1) Sidebar: 仅 CN + T9 + digits 非空
         val sidebar = if (dictEngine.isLoaded && session.rawT9Digits.isNotEmpty()) {
             dictEngine.getPinyinPossibilities(session.rawT9Digits)
         } else {
             emptyList()
         }
 
-        // 2) Candidates
         val candidates = ArrayList<Candidate>()
         if (dictEngine.isLoaded) {
             if (session.pinyinStack.isNotEmpty()) {
@@ -37,14 +35,12 @@ object CnT9Handler : ImeModeHandler {
             }
         }
 
-        // 3) Single char filter
         val filtered = if (singleCharMode) {
             candidates.filter { it.word.length == 1 }
         } else {
             candidates
         }
 
-        // 4) Fallback
         val finalList =
             if (filtered.isEmpty() && session.rawT9Digits.isNotEmpty()) {
                 arrayListOf(Candidate(session.rawT9Digits, session.rawT9Digits, 0, 0, 0))
@@ -52,7 +48,6 @@ object CnT9Handler : ImeModeHandler {
                 ArrayList(filtered)
             }
 
-        // 5) Preview + promote-by-preview
         val t9PreviewText =
             if (session.rawT9Digits.isNotEmpty()) {
                 T9PreviewBuilder.buildPreview(session.rawT9Digits, finalList)
@@ -60,12 +55,9 @@ object CnT9Handler : ImeModeHandler {
                 null
             }
 
-        // 仍保留：Enter 走 session.t9PreviewCommitText() 时需要这个状态
-        session.setT9PreviewText(t9PreviewText)
-
         promoteCandidateMatchingPreview(finalList, t9PreviewText)
 
-        // NEW: 统一由 handler 输出 composingPreviewText（包含 committedPrefix + stack + preview）
+        // CN-T9: UI composing preview line (includes committedPrefix + stack + preview)
         val stackUi = session.pinyinStack.joinToString("'") { it.lowercase() }
         val previewUi = t9PreviewText ?: ""
         val composingPreviewText = buildString {
@@ -77,10 +69,17 @@ object CnT9Handler : ImeModeHandler {
             }
         }.takeIf { it.isNotBlank() }
 
+        // CN-T9: Enter commits preview letters only (keep old behavior of t9PreviewCommitText)
+        val enterCommitText = t9PreviewText
+            ?.lowercase()
+            ?.filter { it in 'a'..'z' }
+            ?.takeIf { it.isNotEmpty() }
+
         return ImeModeHandler.Output(
             candidates = finalList,
             pinyinSidebar = sidebar,
-            composingPreviewText = composingPreviewText
+            composingPreviewText = composingPreviewText,
+            enterCommitText = enterCommitText
         )
     }
 

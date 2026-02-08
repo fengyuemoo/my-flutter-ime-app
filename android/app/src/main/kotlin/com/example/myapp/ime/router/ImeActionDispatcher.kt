@@ -264,6 +264,17 @@ class ImeActionDispatcher(
 
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
+            val mode = mainMode()
+
+            // CN-T9: commit handler-provided preview letters on Enter
+            if (mode.isChinese && mode.useT9Layout && ::candidateController.isInitialized) {
+                val enterCommit = candidateController.getEnterCommitTextOverride()
+                if (!enterCommit.isNullOrEmpty()) {
+                    commitAndReset(enterCommit)
+                    return
+                }
+            }
+
             val result = currentStrategy().onEnter(inputConnection())
             if (result !is StrategyResult.Noop) {
                 handleStrategyResult(result)

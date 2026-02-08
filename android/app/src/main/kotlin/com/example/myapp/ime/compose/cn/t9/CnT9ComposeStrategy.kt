@@ -49,14 +49,7 @@ class CnT9ComposeStrategy(
     override fun onEnter(ic: InputConnection?): StrategyResult {
         @Suppress("UNUSED_PARAMETER")
         val ignored = ic
-
-        if (!session().isComposing()) return StrategyResult.Noop
-
-        val previewCommit = session().t9PreviewCommitText()
-        return if (!previewCommit.isNullOrEmpty()) {
-            StrategyResult.DirectCommit(previewCommit)
-        } else {
-            StrategyResult.Noop
-        }
+        // CN-T9 Enter commit handled by ImeActionDispatcher using handler Output.enterCommitText
+        return StrategyResult.Noop
     }
 }

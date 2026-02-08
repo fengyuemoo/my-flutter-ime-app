@@ -10,29 +10,13 @@ class ComposingSession {
     private var _qwertyInput = ""
     private var _committedPrefix = ""
 
-    // 由候选/词频驱动的 T9 预览（例如 yi'ge / yi'g / w）
-    private var _t9PreviewText: String? = null
-
     val pinyinStack: List<String> get() = _pinyinStack
     val rawT9Digits: String get() = _rawT9Digits
     val qwertyInput: String get() = _qwertyInput
     val committedPrefix: String get() = _committedPrefix
 
     fun setT9PreviewText(text: String?) {
-        _t9PreviewText = text?.trim()?.lowercase().takeUnless { it.isNullOrEmpty() }
-    }
-
-    /**
-     * 中文 T9：把预览拼音转换为可直接上屏的字母串（小写、无分词符）。
-     * 例如 "yi'ge" -> "yige"；"w" -> "w"。
-     */
-    fun t9PreviewCommitText(): String? {
-        val raw = _t9PreviewText ?: return null
-        val sb = StringBuilder()
-        for (ch in raw.lowercase()) {
-            if (ch in 'a'..'z') sb.append(ch)
-        }
-        return sb.toString().takeUnless { it.isEmpty() }
+        // no-op
     }
 
     private sealed class PickRecord {
@@ -54,7 +38,6 @@ class ComposingSession {
         _rawT9Digits = ""
         _qwertyInput = ""
         _committedPrefix = ""
-        _t9PreviewText = null
         pickHistory.clear()
     }
 
@@ -100,7 +83,6 @@ class ComposingSession {
 
         val previewUi = when {
             _rawT9Digits.isEmpty() -> ""
-            !_t9PreviewText.isNullOrEmpty() -> _t9PreviewText!!
             _rawT9Digits.length == 1 -> repLetter(_rawT9Digits[0])
             else -> "…"
         }

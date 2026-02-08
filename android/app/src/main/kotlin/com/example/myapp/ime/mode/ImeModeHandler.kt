@@ -10,10 +10,15 @@ interface ImeModeHandler {
         val candidates: ArrayList<Candidate>,
         val pinyinSidebar: List<String> = emptyList(),
         /**
-         * Optional UI composing preview override (mainly for CN-Qwerty preedit segmentation).
+         * Optional UI composing preview override (mainly for CN preedit segmentation / T9 preview line).
          * When null, UI should fall back to session.displayText(...).
          */
-        val composingPreviewText: String? = null
+        val composingPreviewText: String? = null,
+        /**
+         * Optional direct-commit text on Enter for specific modes (CN-T9 preview letters commit).
+         * When null, Enter falls back to strategy.onEnter()/default behavior.
+         */
+        val enterCommitText: String? = null
     )
 
     fun build(
