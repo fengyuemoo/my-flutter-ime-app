@@ -22,17 +22,9 @@ class ComposingSession {
         _t9PreviewText = text?.trim()?.lowercase().takeUnless { it.isNullOrEmpty() }
     }
 
-    @Deprecated(
-        message = "CN-Qwerty preview moved to ImeModeHandler.Output.composingPreviewText; remove all call sites.",
-        level = DeprecationLevel.ERROR
-    )
-    fun setQwertyPreviewText(@Suppress("UNUSED_PARAMETER") text: String?) {
-        // no-op
-    }
-
     /**
      * 中文 T9：把预览拼音转换为可直接上屏的字母串（小写、无分词符）。
-     * 例如 \"yi'ge\" -> \"yige\"；\"w\" -> \"w\"。
+     * 例如 "yi'ge" -> "yige"；"w" -> "w"。
      */
     fun t9PreviewCommitText(): String? {
         val raw = _t9PreviewText ?: return null
