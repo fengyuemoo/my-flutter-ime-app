@@ -1,7 +1,7 @@
 package com.example.myapp.ime.candidate
 
+import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
-import com.example.myapp.ime.compose.common.CandidateComposer
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
@@ -16,7 +16,7 @@ import com.example.myapp.ime.ui.api.UiStateActions
 class CandidateController(
     private val ui: ImeUi,
     private val keyboardController: KeyboardController,
-    private val candidateComposer: CandidateComposer,
+    private val dictEngine: Dictionary,
     private val sessions: ComposingSessionHub,
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
@@ -88,7 +88,7 @@ class CandidateController(
         val handler = resolveHandler()
         val out = handler.build(
             session = s,
-            candidateComposer = candidateComposer,
+            dictEngine = dictEngine,
             singleCharMode = isSingleCharMode
         )
 

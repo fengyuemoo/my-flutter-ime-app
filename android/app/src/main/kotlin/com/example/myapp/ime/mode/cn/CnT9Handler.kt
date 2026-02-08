@@ -1,9 +1,9 @@
 package com.example.myapp.ime.mode.cn
 
+import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.impl.PinyinTable
 import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
-import com.example.myapp.ime.compose.common.CandidateComposer
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.mode.ImeModeHandler
 
@@ -11,23 +11,51 @@ object CnT9Handler : ImeModeHandler {
 
     override fun build(
         session: ComposingSession,
-        candidateComposer: CandidateComposer,
+        dictEngine: Dictionary,
         singleCharMode: Boolean
     ): ImeModeHandler.Output {
 
-        val r = candidateComposer.compose(
-            session = session,
-            isChinese = true,
-            useT9Layout = true,
-            isT9Keyboard = true,
-            singleCharMode = singleCharMode
-        )
+        // 1) Sidebar: 仅 CN + T9 + digits 非空
+        val sidebar = if (dictEngine.isLoaded && session.rawT9Digits.isNotEmpty()) {
+            dictEngine.getPinyinPossibilities(session.rawT9Digits)
+        } else {
+            emptyList()
+        }
 
-        val candidates = ArrayList(r.candidates)
+        // 2) Candidates
+        val candidates = ArrayList<Candidate>()
+        if (dictEngine.isLoaded) {
+            if (session.pinyinStack.isNotEmpty()) {
+                candidates.addAll(
+                    dictEngine.getSuggestionsFromPinyinStack(session.pinyinStack, session.rawT9Digits)
+                )
+            } else {
+                val input = session.rawT9Digits
+                if (input.isNotEmpty()) {
+                    candidates.addAll(dictEngine.getSuggestions(input, isT9 = true, isChineseMode = true))
+                }
+            }
+        }
 
+        // 3) Single char filter
+        val filtered = if (singleCharMode) {
+            candidates.filter { it.word.length == 1 }
+        } else {
+            candidates
+        }
+
+        // 4) Fallback
+        val finalList =
+            if (filtered.isEmpty() && session.rawT9Digits.isNotEmpty()) {
+                arrayListOf(Candidate(session.rawT9Digits, session.rawT9Digits, 0, 0, 0))
+            } else {
+                ArrayList(filtered)
+            }
+
+        // 5) Preview + promote-by-preview
         val t9PreviewText =
             if (session.rawT9Digits.isNotEmpty()) {
-                T9PreviewBuilder.buildPreview(session.rawT9Digits, candidates)
+                T9PreviewBuilder.buildPreview(session.rawT9Digits, finalList)
             } else {
                 null
             }
@@ -35,11 +63,11 @@ object CnT9Handler : ImeModeHandler {
         session.setT9PreviewText(t9PreviewText)
         session.setQwertyPreviewText(null)
 
-        promoteCandidateMatchingPreview(candidates, t9PreviewText)
+        promoteCandidateMatchingPreview(finalList, t9PreviewText)
 
         return ImeModeHandler.Output(
-            candidates = candidates,
-            pinyinSidebar = r.pinyinSidebar
+            candidates = finalList,
+            pinyinSidebar = sidebar
         )
     }
 

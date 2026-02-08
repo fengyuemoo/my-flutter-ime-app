@@ -1,7 +1,7 @@
 package com.example.myapp.ime.mode
 
+import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
-import com.example.myapp.ime.compose.common.CandidateComposer
 import com.example.myapp.ime.compose.common.ComposingSession
 
 interface ImeModeHandler {
@@ -13,7 +13,7 @@ interface ImeModeHandler {
 
     fun build(
         session: ComposingSession,
-        candidateComposer: CandidateComposer,
+        dictEngine: Dictionary,
         singleCharMode: Boolean
     ): Output
 }

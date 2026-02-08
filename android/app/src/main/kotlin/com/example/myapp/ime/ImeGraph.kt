@@ -74,7 +74,7 @@ class ImeGraph(
                 mainHandler = Handler(Looper.getMainLooper())
             )
 
-            // 4) Candidate composer
+            // 4) Candidate composer (kept for compatibility; handlers will use dict directly)
             val candidateComposer = CandidateComposer(dictManager.dictionary)
 
             // 5) Keyboard registry + controller
@@ -93,11 +93,11 @@ class ImeGraph(
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
-            // 7) Candidate controller
+            // 7) Candidate controller (inject dictEngine)
             val candidateController = CandidateController(
                 ui = ui,
                 keyboardController = keyboardController,
-                candidateComposer = candidateComposer,
+                dictEngine = dictManager.dictionary,
                 sessions = sessions,
                 commitRaw = { text -> inputConnectionProvider()?.commitText(text, 1) },
                 clearComposing = { dispatcher.clearComposing() },
@@ -161,7 +161,7 @@ class ImeGraph(
                 fontController = fontController
             )
 
-            // 初始化时也应用一次已保存字体/字号（和 fontController.load/apply 一致）
+            // 初始化时也应用一次已保存字体/字号
             ui.applySavedFontNow()
 
             return ImeGraph(
