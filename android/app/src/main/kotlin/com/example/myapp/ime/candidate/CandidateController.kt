@@ -36,10 +36,6 @@ class CandidateController(
             return sb.toString()
         }
 
-        /**
-         * 把完整拼音（如 yige / yinggai / yiger）尽量切成更多音节（yi + ge，ying + gai，yi + ge + ren）。
-         * 如果无法完全切分，返回 emptyList。
-         */
         fun splitToSyllablesBest(letters: String): List<String> {
             val s = normalizeLetters(letters)
             if (s.isEmpty()) return emptyList()
@@ -57,7 +53,6 @@ class CandidateController(
                     if (!pinyinSet.contains(sub)) continue
                     val cand = base + sub
                     val old = dp[i + l]
-                    // 优先音节更多（更符合 yg/ygr 这种缩写）
                     if (old == null || cand.size > old.size) {
                         dp[i + l] = cand
                     }
@@ -190,8 +185,12 @@ class CandidateController(
         if (inputLower.length !in 2..6) return false
         if (!inputLower.all { it in 'a'..'z' }) return false
         if (inputLower == "zh" || inputLower == "ch" || inputLower == "sh") return false
-        // 无元音：更像 yg/ygr/hy/py 这类缩写，而不是 year/near 这类英文词
         return inputLower.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
+    }
+
+    private fun isAsciiWord(word: String): Boolean {
+        if (word.isEmpty()) return false
+        return word.all { it in 'a'..'z' || it in 'A'..'Z' }
     }
 
     private fun promoteChineseCandidateByAcronym(
@@ -206,15 +205,10 @@ class CandidateController(
 
         for (i in candidates.indices) {
             val c = candidates[i]
-            val py = c.pinyin ?: continue // 只提升中文（有拼音信息）的候选
+            val py = c.pinyin ?: continue
             val ac = PinyinUtil.acronymOfPinyin(py)
             if (ac != acronymKey) continue
 
-            // 更强置顶策略：
-            // - 完全缩写匹配：必选集合
-            // - 词长 == 缩写长度：更像“一个(2)/一个人(3)”这种短语
-            // - syllables == 缩写长度：如果词库提供更可靠（没有也不影响）
-            // - priority(freq)：仍然作为主要排序依据
             val wordLenBoost = if (c.word.length == acronymKey.length) 200_000_000L else 0L
             val syllablesBoost = if (c.syllables > 0 && c.syllables == acronymKey.length) 100_000_000L else 0L
             val freqScore = c.priority.toLong()
@@ -301,6 +295,7 @@ class CandidateController(
             ui.showIdleState()
             keyboardController.updateSidebar(emptyList())
             s.setT9PreviewText(null)
+            s.setQwertyPreviewText(null)
 
             if (isExpanded) {
                 isExpanded = false
@@ -325,21 +320,49 @@ class CandidateController(
 
         currentCandidates = ArrayList(r.candidates)
 
-        // T9 预览（用于悬浮）
-        val previewText =
+        // --- T9 预览（用于悬浮） ---
+        val t9PreviewText =
             if (mainMode.isChinese && mainMode.useT9Layout && s.rawT9Digits.isNotEmpty()) {
                 T9PreviewBuilder.buildPreview(s.rawT9Digits, currentCandidates)
             } else {
                 null
             }
-        s.setT9PreviewText(previewText)
+        s.setT9PreviewText(t9PreviewText)
 
-        // 中文 T9：把与预览一致的中文候选提升到第 1 位
         if (mainMode.isChinese && mainMode.useT9Layout) {
-            promoteCandidateMatchingPreview(currentCandidates, previewText)
+            promoteCandidateMatchingPreview(currentCandidates, t9PreviewText)
         }
 
-        // 中文全键盘：缩写词组（yg/ygr/hy/py）进一步强置顶（确保“一个/一个人...”稳定排第 1）
+        // --- 中文全键盘：根据候选修正“预览分隔符/英文词显示” ---
+        if (mainMode.isChinese && !mainMode.useT9Layout) {
+            val key = s.qwertyInput.lowercase()
+
+            if (isAcronymLikeQwerty(key)) {
+                // 1) 预览强制 y'g'r
+                s.setQwertyPreviewText(key.toCharArray().joinToString("'") { it.toString() })
+
+                // 2) 把“等于原输入的 ASCII 候选”去掉（yg 这种不想要的占位）
+                currentCandidates.removeAll { c ->
+                    isAsciiWord(c.word) && c.word.equals(key, ignoreCase = true)
+                }
+            } else {
+                // 有英文精确词（例如 year），预览直接显示 year，不再 split 成 yea'r
+                val isLetters = key.isNotEmpty() && key.all { it in 'a'..'z' }
+                val hasExactEnglish = isLetters && key.length >= 4 && currentCandidates.any { c ->
+                    isAsciiWord(c.word) && c.word.equals(key, ignoreCase = true)
+                }
+
+                if (hasExactEnglish) {
+                    s.setQwertyPreviewText(key)
+                } else {
+                    s.setQwertyPreviewText(null) // 走默认拼音切分逻辑（例如 yi'ge）
+                }
+            }
+        } else {
+            s.setQwertyPreviewText(null)
+        }
+
+        // 中文全键盘：缩写词组进一步强置顶（一个/一个人...）
         if (mainMode.isChinese && !mainMode.useT9Layout) {
             val key = s.qwertyInput.lowercase()
             if (isAcronymLikeQwerty(key)) {
@@ -348,6 +371,9 @@ class CandidateController(
         }
 
         ui.setCandidates(currentCandidates)
+
+        // NEW: 这里主动刷新一次预览（让悬浮拼音立即更新成 y'g / year）
+        ui.setComposingPreview(s.displayText(mainMode.useT9Layout))
     }
 
     fun handleSpaceKey() {

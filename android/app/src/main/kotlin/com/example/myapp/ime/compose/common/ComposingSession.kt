@@ -10,8 +10,12 @@ class ComposingSession {
     private var _qwertyInput = ""
     private var _committedPrefix = ""
 
-    // NEW: 由候选/词频驱动的 T9 预览（例如 yi'ge / yi'g / w）
+    // 由候选/词频驱动的 T9 预览（例如 yi'ge / yi'g / w）
     private var _t9PreviewText: String? = null
+
+    // NEW: 中文全键盘也允许由候选驱动“预览覆盖文本”
+    // 例如：yg -> y'g；ygr -> y'g'r；year -> year（不分割）
+    private var _qwertyPreviewText: String? = null
 
     val pinyinStack: List<String> get() = _pinyinStack
     val rawT9Digits: String get() = _rawT9Digits
@@ -20,6 +24,11 @@ class ComposingSession {
 
     fun setT9PreviewText(text: String?) {
         _t9PreviewText = text?.trim()?.lowercase().takeUnless { it.isNullOrEmpty() }
+    }
+
+    // NEW
+    fun setQwertyPreviewText(text: String?) {
+        _qwertyPreviewText = text?.trim()?.takeUnless { it.isNullOrEmpty() }
     }
 
     /**
@@ -55,6 +64,7 @@ class ComposingSession {
         _qwertyInput = ""
         _committedPrefix = ""
         _t9PreviewText = null
+        _qwertyPreviewText = null
         pickHistory.clear()
     }
 
@@ -151,9 +161,15 @@ class ComposingSession {
         if (!isComposing()) return null
 
         if (!useT9Layout) {
-            val syllables = splitPinyinForDisplay(_qwertyInput)
-            val pinyinUi = syllables.joinToString("'")
-            return _committedPrefix + pinyinUi
+            val qwertyUi = _qwertyPreviewText ?: run {
+                val syllables = splitPinyinForDisplay(_qwertyInput)
+                syllables.joinToString("'")
+            }
+
+            val sb = StringBuilder()
+            sb.append(_committedPrefix)
+            sb.append(qwertyUi)
+            return sb.toString()
         }
 
         val stackUi = _pinyinStack.joinToString("'") { it.lowercase() }
