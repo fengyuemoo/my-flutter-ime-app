@@ -86,7 +86,7 @@ class CandidateComposer(private val dictEngine: Dictionary) {
         // 1) 分组：中文 vs 英文（英文这里定义为“纯ASCII字母”）
         val (english, nonEnglish) = list.partition { isAsciiWord(it.word) }
 
-        // 2) 英文精确词与少量变体置顶（只提非常少的词，避免 yearn/yearly 等跑到汉字前面）
+        // 2) 英文精确词与少量变体置顶（但只对“较长输入”启用，避免 yo/aiy/aiya 这类短串置顶）
         val englishExact = ArrayList<Candidate>()
         val englishVariants = ArrayList<Candidate>()
         val englishOthers = ArrayList<Candidate>()
@@ -102,22 +102,14 @@ class CandidateComposer(private val dictEngine: Dictionary) {
             }
         }
 
-        // 保持词典原有顺序：只做“相对分组”移动，不在分组内重新排序
-        // 规则：
-        // - 若存在精确英文词：把 (精确 + 变体最多2个) 放到最前
-        // - 否则：不提升任何英文词，中文候选优先
-        val promotedEnglish = if (englishExact.isNotEmpty()) {
-            // 变体只取前两个，避免太多英文挤前排
+        val shouldPromoteEnglish = inputLower.length >= 4
+
+        val promotedEnglish = if (shouldPromoteEnglish && englishExact.isNotEmpty()) {
             englishExact + englishVariants.take(2)
         } else {
             emptyList()
         }
 
-        // 3) 中文优先：非英文（通常是汉字/中文候选）放在中间
-        // 4) 英文扩展压后并限量，避免刷屏
-        val tailEnglish = (englishOthers).take(5)
-
-        // 注意：如果 promotedEnglish 里包含的项也出现在 englishOthers/englishVariants 里，需要去重
         val promotedSet = promotedEnglish.toHashSet()
 
         val nonEnglishKept = nonEnglish.filter { it !in promotedSet }

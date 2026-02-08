@@ -137,6 +137,26 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 && norm.length in 2..6
                 && norm.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
 
+        // ---- NEW: 中文 QWERTY 下，判断是否“像中文拼音/拼音前缀” ----
+        // - 完整拼音（aiya -> ai'ya）：不置顶英文
+        // - 拼音前缀且 remainder 只有 1 个字母（aiy -> ai'y）：不置顶英文（避免 aiy/aiya 这类英文噪声压过中文）
+        val syllablesForGuard = if (!isT9) splitConcatPinyinToSyllables(norm) else emptyList()
+        val isCompletePinyinForGuard =
+            !isT9 && syllablesForGuard.isNotEmpty() && syllablesForGuard.joinToString("") == norm
+
+        val partialForGuard = if (!isT9) splitPartialPinyinPrefix(norm) else null
+        val looksLikePinyinPrefixWith1LetterRemainder =
+            !isT9 && partialForGuard != null && partialForGuard.remainder.length == 1
+
+        // 中文 QWERTY：只允许“较长且不像拼音”的英文精确匹配
+        val allowEnglishExactInChineseQwerty =
+            !isT9
+                    && isAsciiLetters
+                    && !isAcronymLikeQwerty
+                    && norm.length >= 4
+                    && !isCompletePinyinForGuard
+                    && !looksLikePinyinPrefixWith1LetterRemainder
+
         // 0) 中文模式：英文精确匹配
         val exactEn = if (isT9) {
             if (norm.length >= 4) {
@@ -151,9 +171,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 emptyList()
             }
         } else {
-            if (isAcronymLikeQwerty) {
-                emptyList()
-            } else {
+            if (allowEnglishExactInChineseQwerty) {
                 queryExactEnglish(
                     db = db,
                     input = norm,
@@ -161,12 +179,14 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     minWordLen = 1,
                     exactWordLen = null
                 )
+            } else {
+                emptyList()
             }
         }
         addUnique(exactEn)
 
-        // 中文 QWERTY 的英文变体（s / es）
-        if (!isAcronymLikeQwerty && isAsciiLetters && norm.length in 2..32) {
+        // 中文 QWERTY 的英文变体（s / es）：只在允许英文精确词时才加入
+        if (allowEnglishExactInChineseQwerty && norm.length in 2..32) {
             addUnique(
                 queryExactEnglish(
                     db = db,
@@ -213,8 +233,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         }
 
         // 2) 中文 QWERTY：完整拼音音节串 -> 严格等值 + 音节回退
-        val syllables = splitConcatPinyinToSyllables(norm)
-        val isCompletePinyin = syllables.isNotEmpty() && syllables.joinToString("") == norm
+        val syllables = syllablesForGuard
+        val isCompletePinyin = isCompletePinyinForGuard
 
         if (isCompletePinyin) {
             addUnique(
@@ -265,7 +285,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         }
 
         // 3) 非完整拼音：避免长词联想，同时保留缩写词组（yg/ygr/hy/py）
-        val partial = splitPartialPinyinPrefix(norm)
+        val partial = partialForGuard
         if (partial != null) {
             val fullSyllablePrefix = partial.fullSyllables.joinToString("")
             val desiredWordLen = partial.fullSyllables.size + 1
@@ -381,7 +401,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return result
     }
 
-    // NEW: 把 input/syllables 带出来，写入 Candidate.pinyin/syllables
+    // 把 input/syllables 带出来，写入 Candidate.pinyin/syllables
     private fun queryMultiCharByAcronymPrefix(db: SQLiteDatabase, parts: List<String>, wordLen: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
@@ -421,7 +441,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    // NEW: 把 input/syllables 带出来，写入 Candidate.pinyin/syllables（用于 yg/ygr 强置顶）
     private fun queryAcronymPrefixByWordLenEq(db: SQLiteDatabase, prefix: String, wordLen: Int, limit: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
@@ -460,7 +479,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
-    // NEW: 同样带出 pinyin/syllables（不影响现有行为，只让 Candidate 信息更完整）
     private fun queryChinesePrefixWithWordLenEq(db: SQLiteDatabase, prefix: String, wordLen: Int, limit: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
