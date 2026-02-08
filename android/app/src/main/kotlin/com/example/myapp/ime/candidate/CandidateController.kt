@@ -71,6 +71,89 @@ class CandidateController(
         }
     }
 
+    private object QwertyPreviewBuilder {
+        private val all = PinyinTable.allPinyins.map { it.lowercase() }
+        private val syllableSet: Set<String> = all.toHashSet()
+        private val maxLen: Int = all.maxOfOrNull { it.length } ?: 8
+
+        private val prefixSet: Set<String> by lazy {
+            val set = HashSet<String>(all.size * 3)
+            for (py in all) {
+                for (i in 1..py.length) set.add(py.substring(0, i))
+            }
+            set
+        }
+
+        private fun normalizeLetters(s: String): String {
+            val sb = StringBuilder()
+            for (ch in s.lowercase()) if (ch in 'a'..'z') sb.append(ch)
+            return sb.toString()
+        }
+
+        private fun splitBestExactPrefix(s: String): Pair<List<String>, Int> {
+            if (s.isEmpty()) return emptyList<String>() to 0
+
+            val dp = arrayOfNulls<List<String>>(s.length + 1)
+            dp[0] = emptyList()
+
+            for (i in 0..s.length) {
+                val base = dp[i] ?: continue
+                val remain = s.length - i
+                val tryMax = minOf(maxLen, remain)
+                for (l in 1..tryMax) {
+                    val sub = s.substring(i, i + l)
+                    if (!syllableSet.contains(sub)) continue
+                    val cand = base + sub
+                    val old = dp[i + l]
+                    if (old == null || cand.size > old.size) dp[i + l] = cand
+                }
+            }
+
+            var bestCut = 0
+            for (k in s.length downTo 0) {
+                if (dp[k] != null) {
+                    bestCut = k
+                    break
+                }
+            }
+            return (dp[bestCut] ?: emptyList()) to bestCut
+        }
+
+        private fun longestPrefix(rem: String): String {
+            if (rem.isEmpty()) return ""
+            val max = minOf(maxLen, rem.length)
+            for (l in max downTo 1) {
+                val sub = rem.substring(0, l)
+                if (prefixSet.contains(sub)) return sub
+            }
+            return rem.take(1)
+        }
+
+        fun build(rawLower: String): String {
+            val s = rawLower.trim().lowercase()
+            if (s.isEmpty()) return s
+            if (s.contains("'")) return s
+
+            val letters = normalizeLetters(s)
+            if (letters.isEmpty() || letters != s) return s
+
+            val (parts, cut) = splitBestExactPrefix(letters)
+            val out = ArrayList<String>()
+            out.addAll(parts)
+
+            if (cut < letters.length) {
+                val rem = letters.substring(cut)
+                val p = longestPrefix(rem)
+                out.add(p)
+                val rest = rem.substring(p.length)
+                if (rest.isNotEmpty()) out.add(rest)
+            }
+
+            if (out.isEmpty()) out.add(letters)
+            return out.joinToString("'")
+        }
+    }
+
     private object T9PreviewBuilder {
         private val pinyinSet: Set<String> = PinyinTable.allPinyins.map { it.lowercase() }.toHashSet()
         private val maxPyLen: Int = PinyinTable.allPinyins.maxOfOrNull { it.length } ?: 8
@@ -195,27 +278,9 @@ class CandidateController(
 
     private fun englishVariantsFor(inputLower: String): Set<String> {
         if (inputLower.length < 2) return emptySet()
-
-        fun isVowel(c: Char): Boolean = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u'
-
-        // y -> ies
-        if (inputLower.endsWith("y") && inputLower.length >= 2) {
-            val prev = inputLower[inputLower.length - 2]
-            if (!isVowel(prev)) return setOf(inputLower.dropLast(1) + "ies")
-        }
-
         val out = LinkedHashSet<String>()
         out.add("${inputLower}s")
-
-        val needEs =
-            inputLower.endsWith("s")
-                    || inputLower.endsWith("x")
-                    || inputLower.endsWith("z")
-                    || inputLower.endsWith("ch")
-                    || inputLower.endsWith("sh")
-                    || inputLower.endsWith("o")
-
-        if (needEs) out.add("${inputLower}es")
+        out.add("${inputLower}es")
         return out
     }
 
@@ -343,7 +408,6 @@ class CandidateController(
         )
 
         keyboardController.updateSidebar(r.pinyinSidebar)
-
         currentCandidates = ArrayList(r.candidates)
 
         // --- T9 预览（用于悬浮） ---
@@ -359,32 +423,39 @@ class CandidateController(
             promoteCandidateMatchingPreview(currentCandidates, t9PreviewText)
         }
 
-        // --- 中文全键盘：让预览和“首候选”一致或可匹配 ---
+        // --- 中文全键盘：预览与首候选保持一致/可解释 ---
         if (mainMode.isChinese && !mainMode.useT9Layout) {
             val inputLower = s.qwertyInput.lowercase()
             val top = currentCandidates.firstOrNull()
 
-            if (top != null && isAsciiWord(top.word)) {
-                val topLower = top.word.lowercase()
-                val variants = englishVariantsFor(inputLower)
-                if (topLower == inputLower || topLower in variants) {
-                    // 首候选是英文精确词/变体：预览就显示英文本身（无分词符）
-                    s.setQwertyPreviewText(topLower)
-                } else {
-                    // 其它英文（非精确/变体）：不覆盖，让预览走拼音分词
-                    s.setQwertyPreviewText(null)
+            val preview = when {
+                inputLower.contains("'") -> inputLower
+
+                // 1) 首候选是英文精确词或变体：预览显示英文（不带分词符）
+                top != null && isAsciiWord(top.word) -> {
+                    val w = top.word.lowercase()
+                    val variants = englishVariantsFor(inputLower)
+                    if (w == inputLower || w in variants) w else QwertyPreviewBuilder.build(inputLower)
                 }
-            } else {
-                // 首候选是中文：不覆盖，让预览走拼音分词（例如 year -> ye'a'r）
-                s.setQwertyPreviewText(null)
+
+                // 2) 首候选是缩写命中（tha -> 桃花庵）：预览显示 t'h'a
+                top != null && !top.pinyin.isNullOrEmpty()
+                        && inputLower.length in 2..6
+                        && PinyinUtil.acronymOfPinyin(top.pinyin!!) == inputLower -> {
+                    inputLower.map { it.toString() }.joinToString("'")
+                }
+
+                // 3) 其它：用“拼音前缀切分”，用于 s'tu、ho'm 等
+                else -> QwertyPreviewBuilder.build(inputLower)
             }
 
-            // 缩写词组（yg/ygr/hy/py）强置顶（确保“一个/一个人...”稳定排第 1）
+            s.setQwertyPreviewText(preview)
+
+            // 缩写词组（yg/ygr/hy/py）强置顶
             if (isAcronymLikeQwerty(inputLower)) {
                 promoteChineseCandidateByAcronym(currentCandidates, inputLower)
             }
         } else {
-            // 非中文QWERTY：保持不覆盖
             s.setQwertyPreviewText(null)
         }
 
