@@ -123,12 +123,6 @@ class ImeActionDispatcher(
         return !mode.isChinese
     }
 
-    private fun formatChinesePreeditForUi(raw: String): String {
-        return raw
-            .trim()
-            .replace(' ', '\'')
-    }
-
     fun refreshComposingView() {
         if (!::ui.isInitialized) return
 
@@ -152,8 +146,7 @@ class ImeActionDispatcher(
 
         val rawUiText = overrideText ?: displayText
 
-        val uiText = if (mode.isChinese) formatChinesePreeditForUi(rawUiText) else rawUiText
-        ui.setComposingPreview(uiText)
+        ui.setComposingPreview(rawUiText)
 
         if (shouldWriteComposingToEditor(mode)) {
             ic?.setComposingText(displayText, 1)
