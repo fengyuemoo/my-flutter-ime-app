@@ -137,9 +137,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 && norm.length in 2..6
                 && norm.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
 
-        // ---- NEW: 中文 QWERTY 下，判断是否“像中文拼音/拼音前缀” ----
-        // - 完整拼音（aiya -> ai'ya）：不置顶英文
-        // - 拼音前缀且 remainder 只有 1 个字母（aiy -> ai'y）：不置顶英文（避免 aiy/aiya 这类英文噪声压过中文）
+        // ---- 中文 QWERTY 下，判断是否“像中文拼音/拼音前缀” ----
         val syllablesForGuard = if (!isT9) splitConcatPinyinToSyllables(norm) else emptyList()
         val isCompletePinyinForGuard =
             !isT9 && syllablesForGuard.isNotEmpty() && syllablesForGuard.joinToString("") == norm
@@ -185,26 +183,19 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         }
         addUnique(exactEn)
 
-        // 中文 QWERTY 的英文变体（s / es）：只在允许英文精确词时才加入
-        if (allowEnglishExactInChineseQwerty && norm.length in 2..32) {
-            addUnique(
-                queryExactEnglish(
-                    db = db,
-                    input = "${norm}s",
-                    isT9 = false,
-                    minWordLen = 1,
-                    exactWordLen = null
+        // 中文 QWERTY 的英文变体：按规则生成（避免 baby -> babys）
+        if (allowEnglishExactInChineseQwerty) {
+            for (v in englishVariantsFor(norm)) {
+                addUnique(
+                    queryExactEnglish(
+                        db = db,
+                        input = v,
+                        isT9 = false,
+                        minWordLen = 1,
+                        exactWordLen = null
+                    )
                 )
-            )
-            addUnique(
-                queryExactEnglish(
-                    db = db,
-                    input = "${norm}es",
-                    isT9 = false,
-                    minWordLen = 1,
-                    exactWordLen = null
-                )
-            )
+            }
         }
 
         // 1) 中文 T9：整串 digits + 单字回退
@@ -312,7 +303,7 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             return resultList
         }
 
-        // 3.B) 只有“较长英文词”（例如 year）才启用清爽模式；2~3 字母缩写(yg/hy/py)不要走这里
+        // 3.B) 只有“较长英文词”（例如 year）才启用清爽模式
         if (exactEn.isNotEmpty() && isAsciiLetters && norm.length >= 4) {
             val first = norm.take(1)
             if (first.isNotEmpty()) {
@@ -330,6 +321,39 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         addUnique(querySingleCharByInputPrefix(db, norm.take(1)).take(200))
 
         return resultList
+    }
+
+    private fun englishVariantsFor(inputLower: String): List<String> {
+        if (inputLower.length < 2) return emptyList()
+
+        fun isVowel(c: Char): Boolean = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u'
+
+        val out = ArrayList<String>()
+
+        // 复数：y -> ies（baby -> babies），仅当前一位是辅音时启用
+        if (inputLower.endsWith("y") && inputLower.length >= 2) {
+            val prev = inputLower[inputLower.length - 2]
+            if (!isVowel(prev)) {
+                out.add(inputLower.dropLast(1) + "ies")
+                return out
+            }
+        }
+
+        // 常规：+s
+        out.add("${inputLower}s")
+
+        // 某些：+es（box -> boxes, class -> classes, watch -> watches, dish -> dishes, hero -> heroes）
+        val needEs =
+            inputLower.endsWith("s")
+                    || inputLower.endsWith("x")
+                    || inputLower.endsWith("z")
+                    || inputLower.endsWith("ch")
+                    || inputLower.endsWith("sh")
+                    || inputLower.endsWith("o")
+
+        if (needEs) out.add("${inputLower}es")
+
+        return out
     }
 
     private data class PartialPinyinPrefix(
@@ -401,7 +425,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return result
     }
 
-    // 把 input/syllables 带出来，写入 Candidate.pinyin/syllables
     private fun queryMultiCharByAcronymPrefix(db: SQLiteDatabase, parts: List<String>, wordLen: Int): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
@@ -759,8 +782,15 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
             val selectionSb = StringBuilder()
             val args = ArrayList<String>()
 
-            selectionSb.append("lower($col) = ?")
-            args.add(input.lowercase())
+            if (isT9) {
+                selectionSb.append("lower($col) = ?")
+                args.add(input.lowercase())
+            } else {
+                // NEW: 兼容词库里 input/word 不一致（year 这类词更稳）
+                selectionSb.append("(lower($col) = ? OR lower(${DictionaryDbHelper.COL_WORD}) = ?)")
+                args.add(input.lowercase())
+                args.add(input.lowercase())
+            }
 
             selectionSb.append(" AND ${DictionaryDbHelper.COL_LANG} = 1")
             selectionSb.append(" AND ${DictionaryDbHelper.COL_WORD_LEN} >= ?")

@@ -56,7 +56,7 @@ class CandidateComposer(private val dictEngine: Dictionary) {
             filtered
         }
 
-        // 5) 兜底：没有候选时，展示原始输入（行为沿用 SimpleIME 里的做法）
+        // 5) 兜底：没有候选时，展示原始输入
         val finalList =
             if (finalCandidates.isEmpty() && rawInput.isNotEmpty()) {
                 listOf(Candidate(rawInput, rawInput, 0, 0, 0))
@@ -74,24 +74,20 @@ class CandidateComposer(private val dictEngine: Dictionary) {
         if (list.isEmpty()) return list
         if (rawInput.isEmpty()) return list
 
-        // 只在“纯英文字母输入”时启用该策略，避免影响包含符号/数字的输入
         val isAlphaInput = rawInput.all { it in 'a'..'z' || it in 'A'..'Z' }
         if (!isAlphaInput) {
-            // 非纯字母：直接按“中文优先”把英文压后（如果能识别）
             return groupChineseFirst(list, englishTailLimit = 5)
         }
 
         val inputLower = rawInput.lowercase()
 
-        // 1) 分组：中文 vs 英文（英文这里定义为“纯ASCII字母”）
         val (english, nonEnglish) = list.partition { isAsciiWord(it.word) }
 
-        // 2) 英文精确词与少量变体置顶（但只对“较长输入”启用，避免 yo/aiy/aiya 这类短串置顶）
         val englishExact = ArrayList<Candidate>()
         val englishVariants = ArrayList<Candidate>()
         val englishOthers = ArrayList<Candidate>()
 
-        val variantWhitelist = setOf("${inputLower}s", "${inputLower}es")
+        val variantWhitelist = englishVariantsFor(inputLower).toHashSet()
 
         for (c in english) {
             val w = c.word.lowercase()
@@ -122,6 +118,36 @@ class CandidateComposer(private val dictEngine: Dictionary) {
         return promotedEnglish + nonEnglishKept + tail
     }
 
+    private fun englishVariantsFor(inputLower: String): List<String> {
+        if (inputLower.length < 2) return emptyList()
+
+        fun isVowel(c: Char): Boolean = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u'
+
+        val out = ArrayList<String>()
+
+        if (inputLower.endsWith("y") && inputLower.length >= 2) {
+            val prev = inputLower[inputLower.length - 2]
+            if (!isVowel(prev)) {
+                out.add(inputLower.dropLast(1) + "ies")
+                return out
+            }
+        }
+
+        out.add("${inputLower}s")
+
+        val needEs =
+            inputLower.endsWith("s")
+                    || inputLower.endsWith("x")
+                    || inputLower.endsWith("z")
+                    || inputLower.endsWith("ch")
+                    || inputLower.endsWith("sh")
+                    || inputLower.endsWith("o")
+
+        if (needEs) out.add("${inputLower}es")
+
+        return out
+    }
+
     private fun groupChineseFirst(list: List<Candidate>, englishTailLimit: Int): List<Candidate> {
         val (english, nonEnglish) = list.partition { isAsciiWord(it.word) }
         return nonEnglish + english.take(englishTailLimit)
@@ -129,7 +155,6 @@ class CandidateComposer(private val dictEngine: Dictionary) {
 
     private fun isAsciiWord(word: String): Boolean {
         if (word.isEmpty()) return false
-        // “英文候选”判定：全部是 ASCII 字母（A-Z/a-z）
         return word.all { it in 'a'..'z' || it in 'A'..'Z' }
     }
 }

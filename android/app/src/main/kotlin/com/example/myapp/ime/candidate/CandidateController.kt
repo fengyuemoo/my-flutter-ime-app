@@ -185,8 +185,38 @@ class CandidateController(
         if (inputLower.length !in 2..6) return false
         if (!inputLower.all { it in 'a'..'z' }) return false
         if (inputLower == "zh" || inputLower == "ch" || inputLower == "sh") return false
-        // 无元音：更像 yg/ygr/hy/py 这类缩写，而不是 year/near 这类英文词
         return inputLower.none { it == 'a' || it == 'e' || it == 'i' || it == 'o' || it == 'u' || it == 'v' }
+    }
+
+    private fun isAsciiWord(word: String): Boolean {
+        if (word.isEmpty()) return false
+        return word.all { it in 'a'..'z' || it in 'A'..'Z' }
+    }
+
+    private fun englishVariantsFor(inputLower: String): Set<String> {
+        if (inputLower.length < 2) return emptySet()
+
+        fun isVowel(c: Char): Boolean = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u'
+
+        // y -> ies
+        if (inputLower.endsWith("y") && inputLower.length >= 2) {
+            val prev = inputLower[inputLower.length - 2]
+            if (!isVowel(prev)) return setOf(inputLower.dropLast(1) + "ies")
+        }
+
+        val out = LinkedHashSet<String>()
+        out.add("${inputLower}s")
+
+        val needEs =
+            inputLower.endsWith("s")
+                    || inputLower.endsWith("x")
+                    || inputLower.endsWith("z")
+                    || inputLower.endsWith("ch")
+                    || inputLower.endsWith("sh")
+                    || inputLower.endsWith("o")
+
+        if (needEs) out.add("${inputLower}es")
+        return out
     }
 
     private fun promoteChineseCandidateByAcronym(
@@ -201,7 +231,7 @@ class CandidateController(
 
         for (i in candidates.indices) {
             val c = candidates[i]
-            val py = c.pinyin ?: continue // 只提升中文（有拼音信息）的候选
+            val py = c.pinyin ?: continue
             val ac = PinyinUtil.acronymOfPinyin(py)
             if (ac != acronymKey) continue
 
@@ -291,7 +321,6 @@ class CandidateController(
             ui.showIdleState()
             keyboardController.updateSidebar(emptyList())
             s.setT9PreviewText(null)
-            // 本方案：QWERTY 预览不再由候选覆盖，始终置空
             s.setQwertyPreviewText(null)
 
             if (isExpanded) {
@@ -330,20 +359,36 @@ class CandidateController(
             promoteCandidateMatchingPreview(currentCandidates, t9PreviewText)
         }
 
-        // --- 中文全键盘：不再用候选覆盖预览分隔；预览完全交给 ComposingSession.splitPinyinForDisplay() ---
-        s.setQwertyPreviewText(null)
-
-        // 中文全键盘：缩写词组（yg/ygr/hy/py）强置顶（确保“一个/一个人...”稳定排第 1）
+        // --- 中文全键盘：让预览和“首候选”一致或可匹配 ---
         if (mainMode.isChinese && !mainMode.useT9Layout) {
-            val key = s.qwertyInput.lowercase()
-            if (isAcronymLikeQwerty(key)) {
-                promoteChineseCandidateByAcronym(currentCandidates, key)
+            val inputLower = s.qwertyInput.lowercase()
+            val top = currentCandidates.firstOrNull()
+
+            if (top != null && isAsciiWord(top.word)) {
+                val topLower = top.word.lowercase()
+                val variants = englishVariantsFor(inputLower)
+                if (topLower == inputLower || topLower in variants) {
+                    // 首候选是英文精确词/变体：预览就显示英文本身（无分词符）
+                    s.setQwertyPreviewText(topLower)
+                } else {
+                    // 其它英文（非精确/变体）：不覆盖，让预览走拼音分词
+                    s.setQwertyPreviewText(null)
+                }
+            } else {
+                // 首候选是中文：不覆盖，让预览走拼音分词（例如 year -> ye'a'r）
+                s.setQwertyPreviewText(null)
             }
+
+            // 缩写词组（yg/ygr/hy/py）强置顶（确保“一个/一个人...”稳定排第 1）
+            if (isAcronymLikeQwerty(inputLower)) {
+                promoteChineseCandidateByAcronym(currentCandidates, inputLower)
+            }
+        } else {
+            // 非中文QWERTY：保持不覆盖
+            s.setQwertyPreviewText(null)
         }
 
         ui.setCandidates(currentCandidates)
-
-        // 刷新一次预览（使用 session.displayText() 的分隔规则）
         ui.setComposingPreview(s.displayText(mainMode.useT9Layout))
     }
 

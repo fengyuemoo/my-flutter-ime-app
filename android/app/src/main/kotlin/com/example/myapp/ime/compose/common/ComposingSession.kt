@@ -1,5 +1,6 @@
 package com.example.myapp.ime.compose.common
 
+import com.example.myapp.dict.impl.PinyinTable
 import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
 
@@ -13,7 +14,7 @@ class ComposingSession {
     // 由候选/词频驱动的 T9 预览（例如 yi'ge / yi'g / w）
     private var _t9PreviewText: String? = null
 
-    // 中文全键盘允许预览覆盖文本（保留接口，但本次方案不再由 CandidateController 写入）
+    // 中文全键盘允许预览覆盖文本（由 CandidateController 按“首候选”决定是否覆盖）
     private var _qwertyPreviewText: String? = null
 
     val pinyinStack: List<String> get() = _pinyinStack
@@ -91,6 +92,55 @@ class ComposingSession {
         return ch == 'a' || ch == 'e' || ch == 'i' || ch == 'o' || ch == 'u' || ch == 'v' || ch == 'ü'
     }
 
+    private object PinyinDisplaySplitter {
+        private val pinyinSet: Set<String> = PinyinTable.allPinyins.map { it.lowercase() }.toHashSet()
+        private val maxPyLen: Int = PinyinTable.allPinyins.maxOfOrNull { it.length } ?: 8
+
+        fun normalizeLetters(s: String): String {
+            val sb = StringBuilder()
+            for (ch in s.lowercase()) if (ch in 'a'..'z') sb.append(ch)
+            return sb.toString()
+        }
+
+        /**
+         * DP：尽可能多地从开头匹配拼音音节，取“覆盖最长”的切分；覆盖相同则取“音节数最多”。
+         * 返回 (parts, coveredLen)；coveredLen==0 表示完全不匹配。
+         */
+        fun splitBestPrefix(lettersRaw: String): Pair<List<String>, Int> {
+            val s = normalizeLetters(lettersRaw)
+            if (s.isEmpty()) return emptyList<String>() to 0
+
+            val dp = arrayOfNulls<List<String>>(s.length + 1)
+            dp[0] = emptyList()
+
+            for (i in 0..s.length) {
+                val base = dp[i] ?: continue
+                val remain = s.length - i
+                val tryMax = minOf(maxPyLen, remain)
+                for (l in 1..tryMax) {
+                    val sub = s.substring(i, i + l)
+                    if (!pinyinSet.contains(sub)) continue
+                    val cand = base + sub
+                    val old = dp[i + l]
+                    if (old == null || cand.size > old.size) {
+                        dp[i + l] = cand
+                    }
+                }
+            }
+
+            var bestCut = 0
+            for (k in s.length downTo 0) {
+                if (dp[k] != null) {
+                    bestCut = k
+                    break
+                }
+            }
+
+            val parts = dp[bestCut] ?: emptyList()
+            return parts to bestCut
+        }
+    }
+
     private fun splitPinyinForDisplay(raw: String): List<String> {
         val s = raw.trim().lowercase()
         if (s.isEmpty()) return emptyList()
@@ -112,63 +162,23 @@ class ComposingSession {
             }
         }
 
-        // 3) 启发式拼音分段（用于 nihao -> ni'hao 这种 UI 预览）
-        val initials = arrayOf(
-            "zh", "ch", "sh",
-            "b", "p", "m", "f",
-            "d", "t", "n", "l",
-            "g", "k", "h",
-            "j", "q", "x",
-            "r",
-            "z", "c", "s",
-            "y", "w"
-        )
+        // 3) 用拼音表做 DP 切分（更“像拼音”的预览），并且避免把纯英文误拆：
+        // - 如果从 0 开始完全匹配不到任何拼音前缀：直接返回原串（home -> home，不再 ho'me）
+        // - 如果能匹配到：返回 “拼音音节 + 余串”，余串原样附加（year -> ye'a'r，baby -> ba'by）
+        val (parts, cut) = PinyinDisplaySplitter.splitBestPrefix(s)
+        if (cut <= 0) return listOf(s)
 
-        fun matchInitialAt(str: String, index: Int): Int {
-            for (ini in initials) {
-                if (index + ini.length <= str.length && str.regionMatches(index, ini, 0, ini.length)) {
-                    return ini.length
-                }
-            }
-            return 0
+        val out = ArrayList<String>()
+        out.addAll(parts)
+
+        val normalized = PinyinDisplaySplitter.normalizeLetters(s)
+        if (cut < normalized.length) {
+            out.add(normalized.substring(cut))
         }
 
-        val result = ArrayList<String>()
-        var start = 0
-        var hasVowel = false
-        var i = 0
-
-        while (i < s.length) {
-            val ch = s[i]
-            if (isVowel(ch)) hasVowel = true
-
-            val next = i + 1
-            if (hasVowel && next < s.length) {
-                val initLen = matchInitialAt(s, next)
-                if (initLen > 0) {
-                    val part = s.substring(start, next).trim()
-                    if (part.isNotEmpty()) result.add(part)
-                    start = next
-                    hasVowel = false
-                    i = start
-                    continue
-                }
-            }
-            i++
-        }
-
-        val tail = s.substring(start).trim()
-        if (tail.isNotEmpty()) result.add(tail)
-
-        // 4) 避免把英文词拆成 “yea'r” 这种末尾单辅音假分隔：year/near/... 都保持原样
-        if (s.length >= 4 && result.size >= 2) {
-            val last = result.last()
-            if (last.length == 1 && !isVowel(last[0])) {
-                return listOf(s)
-            }
-        }
-
-        return result
+        // 如果只切出了 1 个音节且余串很长，通常更像英文（例如 "ba" + "by" 仍算可接受）；
+        // 这里不额外强制回退，后续会由 CandidateController 根据“首候选是英文/中文”决定是否覆盖预览。
+        return out
     }
 
     private fun repLetter(d: Char): String {
