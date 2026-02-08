@@ -8,7 +8,6 @@ import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.candidate.CandidateController
-import com.example.myapp.ime.compose.common.CandidateComposer
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.dict.DictionaryManager
 import com.example.myapp.ime.keyboard.KeyboardController
@@ -28,7 +27,6 @@ class ImeGraph(
     val sessions: ComposingSessionHub,
     val dispatcher: ImeActionDispatcher,
     val dictManager: DictionaryManager,
-    val candidateComposer: CandidateComposer,
     val keyboardController: KeyboardController,
     val candidateController: CandidateController,
     val themeController: ThemeController,
@@ -74,10 +72,7 @@ class ImeGraph(
                 mainHandler = Handler(Looper.getMainLooper())
             )
 
-            // 4) Candidate composer (kept for compatibility; handlers will use dict directly)
-            val candidateComposer = CandidateComposer(dictManager.dictionary)
-
-            // 5) Keyboard registry + controller
+            // 4) Keyboard registry + controller
             val keyboardRegistry = DefaultKeyboardRegistry(
                 context,
                 dispatcher as ImeActions
@@ -89,11 +84,11 @@ class ImeGraph(
                 keyboardRegistry
             )
 
-            // 6) Mode binding
+            // 5) Mode binding
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
-            // 7) Candidate controller (inject dictEngine)
+            // 6) Candidate controller (inject dictEngine)
             val candidateController = CandidateController(
                 ui = ui,
                 keyboardController = keyboardController,
@@ -104,13 +99,13 @@ class ImeGraph(
                 updateComposingView = { dispatcher.refreshComposingView() }
             )
 
-            // 8) Toolbar
+            // 7) Toolbar
             val toolbarController = ToolbarController(
                 rootView = rootView,
                 keyboardControllerProvider = { keyboardController }
             )
 
-            // 9) Attach dispatcher
+            // 8) Attach dispatcher
             dispatcher.attach(
                 ui = ui,
                 keyboardController = keyboardController,
@@ -118,7 +113,7 @@ class ImeGraph(
                 onToolbarUpdate = { host.onToolbarUpdate() }
             )
 
-            // 10) Theme/Layout
+            // 9) Theme/Layout
             val themeController = ThemeController(
                 context = context,
                 uiProvider = { ui },
@@ -132,7 +127,7 @@ class ImeGraph(
                 keyboardControllerProvider = { keyboardController }
             )
 
-            // NEW: Font controller（ImeUiBinder 需要这个参数）
+            // 10) Font controller（ImeUiBinder 需要这个参数）
             val fontController = FontController(
                 context = context,
                 uiProvider = { ui },
@@ -141,7 +136,7 @@ class ImeGraph(
             fontController.load()
             fontController.apply()
 
-            // NEW: 让 KeyboardController 在切键盘/主题后能自动保持字体/字号
+            // 让 KeyboardController 在切键盘/主题后能自动保持字体/字号
             keyboardController.fontConfigProvider = { fontController.fontFamily to fontController.fontScale }
 
             // 每次键盘 view 切换/重建后，UI 再应用一次（覆盖新 view）
@@ -151,7 +146,7 @@ class ImeGraph(
                 ui.applySavedFontNow()
             }
 
-            // 11) UI binder（注意：这里必须传 fontController）
+            // 11) UI binder
             val uiBinder = ImeUiBinder(
                 rootView = rootView,
                 ui = ui,
@@ -169,7 +164,6 @@ class ImeGraph(
                 sessions = sessions,
                 dispatcher = dispatcher,
                 dictManager = dictManager,
-                candidateComposer = candidateComposer,
                 keyboardController = keyboardController,
                 candidateController = candidateController,
                 themeController = themeController,
