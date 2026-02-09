@@ -6,7 +6,8 @@ import com.example.myapp.ime.compose.common.ComposeStrategy
 import com.example.myapp.ime.compose.common.StrategyResult
 
 class CnT9ComposeStrategy(
-    private val sessionProvider: () -> ComposingSession
+    private val sessionProvider: () -> ComposingSession,
+    private val enterCommitProvider: () -> String?
 ) : ComposeStrategy {
 
     private fun session(): ComposingSession = sessionProvider()
@@ -49,7 +50,13 @@ class CnT9ComposeStrategy(
     override fun onEnter(ic: InputConnection?): StrategyResult {
         @Suppress("UNUSED_PARAMETER")
         val ignored = ic
-        // CN-T9 Enter commit handled by ImeActionDispatcher using handler Output.enterCommitText
-        return StrategyResult.Noop
+
+        // CN-T9: commit handler-provided preview letters on Enter (provided by CandidateController)
+        val commit = enterCommitProvider()
+        return if (!commit.isNullOrEmpty()) {
+            StrategyResult.DirectCommit(commit)
+        } else {
+            StrategyResult.Noop
+        }
     }
 }

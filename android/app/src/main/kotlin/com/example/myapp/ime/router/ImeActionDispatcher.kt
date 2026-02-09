@@ -54,7 +54,14 @@ class ImeActionDispatcher(
 
     private val cnT9Strategy: ComposeStrategy =
         CnT9ComposeStrategy(
-            sessionProvider = { sessions.cnT9 }
+            sessionProvider = { sessions.cnT9 },
+            enterCommitProvider = {
+                if (::candidateController.isInitialized) {
+                    candidateController.getEnterCommitTextOverride()
+                } else {
+                    null
+                }
+            }
         )
 
     private val enQwertyStrategy: ComposeStrategy =
@@ -170,7 +177,6 @@ class ImeActionDispatcher(
                 candidateController.getComposingPreviewOverride()
             } else {
                 null
-
             }
 
         val rawUiText = overrideText ?: displayText
@@ -234,9 +240,7 @@ class ImeActionDispatcher(
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
-        // 只允许 CN-T9 响应 sidebar，避免其它模式误触导致 session 状态被改坏
-        val mode = mainMode()
-        if (!(mode.isChinese && mode.useT9Layout)) return
+        beforeModeSwitch()
 
         currentStrategy().onPinyinSidebarClick(pinyin)
         afterSessionMutated()
@@ -291,17 +295,6 @@ class ImeActionDispatcher(
 
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
-            val mode = mainMode()
-
-            // CN-T9: commit handler-provided preview letters on Enter
-            if (mode.isChinese && mode.useT9Layout && ::candidateController.isInitialized) {
-                val enterCommit = candidateController.getEnterCommitTextOverride()
-                if (!enterCommit.isNullOrEmpty()) {
-                    commitAndReset(enterCommit)
-                    return
-                }
-            }
-
             val result = currentStrategy().onEnter(inputConnection())
             if (result !is StrategyResult.Noop) {
                 handleStrategyResult(result)
