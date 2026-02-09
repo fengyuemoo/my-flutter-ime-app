@@ -26,7 +26,7 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     private lateinit var graph: ImeGraph
     private lateinit var bootstrapper: ImeBootstrapper
 
-    // CHANGED: index-based candidate click.
+    // Index-based candidate click.
     private var onCandidateIndexClick: (Int) -> Unit = {}
 
     // --- floating preedit overlay (WindowManager) ---
@@ -34,7 +34,7 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     private var preeditOverlayParams: WindowManager.LayoutParams? = null
     private val wm: WindowManager by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
 
-    // NEW: cache for overlay typeface
+    // cache for overlay typeface
     private val typefaceCache = HashMap<String, Typeface>()
 
     override fun onToolbarUpdate() {
@@ -48,8 +48,11 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     override fun onCreateInputView(): View {
         ui = ImeUi()
 
-        // CHANGED: use index-based inflate overload.
-        mainView = ui.inflate(layoutInflater) { index -> onCandidateIndexClick(index) }
+        // Disambiguate overload: use named arg to choose (Int) -> Unit version.
+        mainView = ui.inflate(
+            inflater = layoutInflater,
+            onCandidateIndexClick = { index -> onCandidateIndexClick(index) }
+        )
         bodyFrame = ui.bodyFrame
 
         ui.setComposingPreviewListener { text ->
@@ -65,7 +68,6 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
             inputConnectionProvider = { currentInputConnection }
         )
 
-        // CHANGED: commit by index (decouples UI click from Candidate object identity).
         onCandidateIndexClick = { index -> graph.candidateController.commitCandidateAt(index) }
 
         graph.uiBinder.bind()
