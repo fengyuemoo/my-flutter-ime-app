@@ -95,7 +95,71 @@ val generateDictDbBuildInfo = tasks.register("generateDictDbBuildInfo") {
     }
 }
 
-// 确保在编译前先生成
+// === Compose mode isolation guard (build-time) ===
+// Ensure CN/EN and Qwerty/T9 implementations do not cross-import each other.
+val checkComposeIsolation = tasks.register("checkComposeIsolation") {
+    doLast {
+        val composeRoot = file("src/main/kotlin/com/example/myapp/ime/compose")
+        if (!composeRoot.exists()) return@doLast
+
+        val violations = mutableListOf<String>()
+
+        fun record(file: File, msg: String) {
+            violations += "${file.path}: $msg"
+        }
+
+        fun importsOf(text: String): List<String> {
+            return text.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("import ") }
+                .map { it.removePrefix("import ").trim() }
+                .toList()
+        }
+
+        composeRoot
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .forEach { f ->
+                val path = f.invariantSeparatorsPath
+                val text = f.readText()
+                val imports = importsOf(text)
+
+                val isCn = path.contains("/compose/cn/")
+                val isEn = path.contains("/compose/en/")
+                val isQwerty = path.contains("/qwerty/")
+                val isT9 = path.contains("/t9/")
+
+                // CN <-> EN isolation
+                if (isCn) {
+                    imports.filter { it.startsWith("com.example.myapp.ime.compose.en") }
+                        .forEach { imp -> record(f, "CN file must not import EN: $imp") }
+                }
+                if (isEn) {
+                    imports.filter { it.startsWith("com.example.myapp.ime.compose.cn") }
+                        .forEach { imp -> record(f, "EN file must not import CN: $imp") }
+                }
+
+                // Qwerty <-> T9 isolation (within same language tree)
+                if (isQwerty) {
+                    imports.filter { it.contains(".t9.") }
+                        .forEach { imp -> record(f, "QWERTY file must not import T9: $imp") }
+                }
+                if (isT9) {
+                    imports.filter { it.contains(".qwerty.") }
+                        .forEach { imp -> record(f, "T9 file must not import QWERTY: $imp") }
+                }
+            }
+
+        if (violations.isNotEmpty()) {
+            throw GradleException(
+                "Compose mode isolation violated:\n" + violations.joinToString("\n")
+            )
+        }
+    }
+}
+
+// 确保在编译前先生成 + 做隔离校验
 tasks.named("preBuild") {
     dependsOn(generateDictDbBuildInfo)
+    dependsOn(checkComposeIsolation)
 }
