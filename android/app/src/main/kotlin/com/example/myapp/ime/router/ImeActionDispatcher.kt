@@ -143,10 +143,9 @@ class ImeActionDispatcher(
 
         // 只 guard 中文模式下的“非空预览写入”；清空预览（null）允许在任何地方发生。
         if (ENABLE_CN_PREVIEW_GUARD && isDebuggableApp() && mode.isChinese && text != null && !inRefreshComposingView) {
-            Log.w(
-                "ImeActionDispatcher",
-                "CN composing preview updated outside refreshComposingView: from=$from, text=$text"
-            )
+            val msg = "CN composing preview updated outside refreshComposingView: from=$from, text=$text"
+            Log.wtf("ImeActionDispatcher", msg)
+            throw AssertionError(msg)
         }
 
         ui.setComposingPreview(text)
@@ -171,6 +170,7 @@ class ImeActionDispatcher(
                 candidateController.getComposingPreviewOverride()
             } else {
                 null
+
             }
 
         val rawUiText = overrideText ?: displayText
