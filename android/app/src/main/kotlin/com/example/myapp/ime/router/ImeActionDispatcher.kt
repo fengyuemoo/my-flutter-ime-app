@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
-import com.example.myapp.BuildConfig
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.candidate.CandidateController
 import com.example.myapp.ime.compose.cn.qwerty.CnQwertyComposeStrategy
@@ -125,7 +124,10 @@ class ImeActionDispatcher(
         return !mode.isChinese
     }
 
-    // --- CN composing preview guard (Debug only) ---
+    // --- CN composing preview guard ---
+
+    // 不依赖 BuildConfig，避免多模块/namespace 导致的引用问题；需要关闭就改成 false。
+    private val ENABLE_CN_PREVIEW_GUARD: Boolean = true
 
     private var inRefreshComposingView: Boolean = false
 
@@ -134,8 +136,8 @@ class ImeActionDispatcher(
 
         val mode = mainMode()
 
-        // Only guard Chinese preview with non-null text; clearing (null) is allowed everywhere.
-        if (BuildConfig.DEBUG && mode.isChinese && text != null && !inRefreshComposingView) {
+        // 只 guard 中文模式下的“非空预览写入”；清空预览（null）允许在任何地方发生。
+        if (ENABLE_CN_PREVIEW_GUARD && mode.isChinese && text != null && !inRefreshComposingView) {
             Log.w(
                 "ImeActionDispatcher",
                 "CN composing preview updated outside refreshComposingView: from=$from, text=$text"
