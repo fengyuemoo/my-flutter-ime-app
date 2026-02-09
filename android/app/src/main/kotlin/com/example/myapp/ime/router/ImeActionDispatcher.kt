@@ -1,12 +1,14 @@
 package com.example.myapp.ime.router
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.candidate.CandidateController
 import com.example.myapp.ime.compose.cn.qwerty.CnQwertyInputEngine
 import com.example.myapp.ime.compose.cn.t9.CnT9InputEngine
+import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.compose.en.qwerty.EnQwertyInputEngine
 import com.example.myapp.ime.compose.en.t9.EnT9InputEngine
@@ -37,6 +39,38 @@ class ImeActionDispatcher(
     private lateinit var enT9Engine: ModeInputEngine
 
     private var lastKnownMainMode: KeyboardMode? = null
+
+    // --- Debug assertions for B semantic ---
+
+    private val ENABLE_MODE_SWITCH_ASSERT: Boolean = true
+
+    private fun isDebuggableApp(): Boolean {
+        return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
+
+    private fun sessionByMode(mode: KeyboardMode): ComposingSession {
+        return when {
+            mode.isChinese && !mode.useT9Layout -> sessions.cnQwerty
+            mode.isChinese && mode.useT9Layout -> sessions.cnT9
+            !mode.isChinese && !mode.useT9Layout -> sessions.enQwerty
+            else -> sessions.enT9
+        }
+    }
+
+    private fun assertSessionCleared(mode: KeyboardMode, from: String) {
+        if (!ENABLE_MODE_SWITCH_ASSERT || !isDebuggableApp()) return
+
+        val s = sessionByMode(mode)
+        val display = s.displayText(mode.useT9Layout)
+
+        if (s.isComposing() || !display.isNullOrEmpty()) {
+            val msg =
+                "Mode switch must clear composing: from=$from, mode=$mode, isComposing=${s.isComposing()}, display=$display"
+            throw AssertionError(msg)
+        }
+    }
+
+    // --- helpers ---
 
     private fun enginesReady(): Boolean =
         ::ui.isInitialized && ::keyboardController.isInitialized && ::candidateController.isInitialized &&
@@ -156,6 +190,10 @@ class ImeActionDispatcher(
         oldEngine.clearComposing()
         newEngine.clearComposing()
         newEngine.afterModeSwitch()
+
+        // Debug assert: both sessions must be cleared after switching.
+        assertSessionCleared(oldMode, from = "handleMainModeChanged-old")
+        assertSessionCleared(newMode, from = "handleMainModeChanged-new")
 
         // If symbol panel is open, its content may depend on isChineseMainMode.
         syncSymbolPanelUi()

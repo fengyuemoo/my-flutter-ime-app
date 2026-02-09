@@ -97,6 +97,12 @@ abstract class CnBaseInputEngine(
         session.clear()
         setComposingPreviewSafely(null, from = "clearSessionAndEditorComposing")
         inputConnectionProvider()?.setComposingText("", 0)
+
+        if (isDebuggableApp()) {
+            check(!session.isComposing()) {
+                "CN session must be cleared after clearSessionAndEditorComposing()"
+            }
+        }
     }
 
     private fun commitAndReset(text: String) {
