@@ -144,8 +144,8 @@ class ImeUi {
         )
     }
 
-    // New: index-based click (preferred).
-    fun inflate(
+    // New: index-based click (preferred). NOTE: Different name to avoid JVM signature clash.
+    fun inflateWithIndex(
         inflater: LayoutInflater,
         onCandidateIndexClick: (Int) -> Unit
     ): View {

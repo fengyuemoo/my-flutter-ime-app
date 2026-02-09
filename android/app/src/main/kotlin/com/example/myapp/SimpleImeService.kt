@@ -48,8 +48,8 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     override fun onCreateInputView(): View {
         ui = ImeUi()
 
-        // Disambiguate overload: use named arg to choose (Int) -> Unit version.
-        mainView = ui.inflate(
+        // Use index-based inflate API.
+        mainView = ui.inflateWithIndex(
             inflater = layoutInflater,
             onCandidateIndexClick = { index -> onCandidateIndexClick(index) }
         )
