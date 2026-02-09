@@ -1,7 +1,6 @@
 package com.example.myapp.ime.router
 
 import android.content.Context
-import android.content.pm.ApplicationInfo
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
 import com.example.myapp.ime.api.ImeActions
@@ -46,12 +45,6 @@ class ImeActionDispatcher(
 
     // --- Debug assertions for B semantic ---
 
-    private val ENABLE_MODE_SWITCH_ASSERT: Boolean = true
-
-    private fun isDebuggableApp(): Boolean {
-        return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    }
-
     private fun sessionByMode(mode: KeyboardMode): ComposingSession {
         return when {
             mode.isChinese && !mode.useT9Layout -> sessions.cnQwerty
@@ -62,7 +55,7 @@ class ImeActionDispatcher(
     }
 
     private fun assertSessionCleared(mode: KeyboardMode, from: String) {
-        if (!ENABLE_MODE_SWITCH_ASSERT || !isDebuggableApp()) return
+        if (!DebugFlags.MODE_SWITCH_ASSERT || !DebugFlags.isDebuggable(context)) return
 
         val s = sessionByMode(mode)
         val display = s.displayText(mode.useT9Layout)

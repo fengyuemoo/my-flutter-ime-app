@@ -15,6 +15,26 @@ import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.ui.ImeUi
 
 /**
+ * Centralized debug flags for IME refactor assertions/guards.
+ *
+ * Keep all debug-only asserts toggles here to avoid scattering constants across classes.
+ */
+internal object DebugFlags {
+    /** Guard: CN composing preview can only be updated inside refreshComposingView(). */
+    const val CN_PREVIEW_GUARD: Boolean = true
+
+    /** Assert: after mode switch, old+new sessions must be cleared (B semantic). */
+    const val MODE_SWITCH_ASSERT: Boolean = true
+
+    /** Assert: after CN clearSessionAndEditorComposing(), session must not be composing. */
+    const val CN_CLEAR_ASSERT: Boolean = true
+
+    fun isDebuggable(context: Context): Boolean {
+        return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
+}
+
+/**
  * Mode input engine abstraction.
  *
  * Implementations live in 4 mode files (CN/EN × Qwerty/T9) and bind to fixed sessions.
@@ -66,15 +86,15 @@ abstract class CnBaseInputEngine(
     private val strategy: ComposeStrategy
 ) : ModeInputEngine() {
 
-    private val ENABLE_CN_PREVIEW_GUARD: Boolean = true
     private var inRefreshComposingView: Boolean = false
 
-    private fun isDebuggableApp(): Boolean {
-        return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    }
-
     private fun setComposingPreviewSafely(text: String?, from: String) {
-        if (ENABLE_CN_PREVIEW_GUARD && isDebuggableApp() && text != null && !inRefreshComposingView) {
+        if (
+            DebugFlags.CN_PREVIEW_GUARD &&
+            DebugFlags.isDebuggable(context) &&
+            text != null &&
+            !inRefreshComposingView
+        ) {
             val msg = "CN composing preview updated outside refreshComposingView: from=$from, text=$text"
             Log.wtf(logTag, msg)
             throw AssertionError(msg)
@@ -98,7 +118,7 @@ abstract class CnBaseInputEngine(
         setComposingPreviewSafely(null, from = "clearSessionAndEditorComposing")
         inputConnectionProvider()?.setComposingText("", 0)
 
-        if (isDebuggableApp()) {
+        if (DebugFlags.CN_CLEAR_ASSERT && DebugFlags.isDebuggable(context)) {
             check(!session.isComposing()) {
                 "CN session must be cleared after clearSessionAndEditorComposing()"
             }
