@@ -95,10 +95,16 @@ abstract class CnBaseInputEngine(
             text != null &&
             !inRefreshComposingView
         ) {
-            val msg = "CN composing preview updated outside refreshComposingView: from=$from, text=$text"
-            Log.wtf(logTag, msg)
-            throw AssertionError(msg)
+            val sessionDisplay = session.displayText(useT9Layout = useT9Layout)
+            val msg =
+                "CN composing preview must be updated inside refreshComposingView(): " +
+                    "engine=$logTag, from=$from, text=$text, sessionDisplay=$sessionDisplay, useT9Layout=$useT9Layout"
+
+            // Use regular error log + check; avoid Log.wtf() to reduce noisy fatal logs.
+            Log.e(logTag, msg)
+            check(false) { msg }
         }
+
         ui.setComposingPreview(text)
     }
 
