@@ -51,16 +51,17 @@ class CandidateController(
         }
     }
 
-    private fun state(): ModeState {
-        val key = currentModeKey()
+    private fun stateFor(key: ModeKey): ModeState {
         return states.getOrPut(key) { ModeState() }
     }
 
+    private fun currentState(): ModeState = stateFor(currentModeKey())
+
     // Handler computed composing preview override (CN-Qwerty segmentation / CN-T9 preview line)
-    fun getComposingPreviewOverride(): String? = state().composingPreviewOverride
+    fun getComposingPreviewOverride(): String? = currentState().composingPreviewOverride
 
     // Handler computed enter-commit override (CN-T9 preview letters commit)
-    fun getEnterCommitTextOverride(): String? = state().enterCommitTextOverride
+    fun getEnterCommitTextOverride(): String? = currentState().enterCommitTextOverride
 
     private fun session(): ComposingSession = sessions.current()
 
@@ -77,34 +78,73 @@ class CandidateController(
     }
 
     fun syncFilterButton() {
-        ui.setFilterButton(state().isSingleCharMode)
+        ui.setFilterButton(currentState().isSingleCharMode)
     }
 
     private fun toggleSingleCharModeInternal() {
-        val st = state()
+        val key = currentModeKey()
+        val st = stateFor(key)
+
         st.isSingleCharMode = !st.isSingleCharMode
         ui.setFilterButton(st.isSingleCharMode)
         updateCandidates()
     }
 
     fun toggleExpand() {
-        val st = state()
+        val key = currentModeKey()
+        val st = stateFor(key)
+
         st.isExpanded = !st.isExpanded
         ui.setExpanded(st.isExpanded, session().isComposing())
     }
 
-    private fun resolveHandler(): ImeModeHandler {
-        val mainMode = keyboardController.getMainMode()
-        return when {
-            mainMode.isChinese && mainMode.useT9Layout -> CnT9Handler
-            mainMode.isChinese && !mainMode.useT9Layout -> CnQwertyHandler
-            !mainMode.isChinese && mainMode.useT9Layout -> EnT9Handler
-            else -> EnQwertyHandler
+    // --- Per-mode build paths (split) ---
+
+    private fun buildCnQwertyOutput(s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
+        return CnQwertyHandler.build(
+            session = s,
+            dictEngine = dictEngine,
+            singleCharMode = singleCharMode
+        )
+    }
+
+    private fun buildCnT9Output(s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
+        return CnT9Handler.build(
+            session = s,
+            dictEngine = dictEngine,
+            singleCharMode = singleCharMode
+        )
+    }
+
+    private fun buildEnQwertyOutput(s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
+        return EnQwertyHandler.build(
+            session = s,
+            dictEngine = dictEngine,
+            singleCharMode = singleCharMode
+        )
+    }
+
+    private fun buildEnT9Output(s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
+        return EnT9Handler.build(
+            session = s,
+            dictEngine = dictEngine,
+            singleCharMode = singleCharMode
+        )
+    }
+
+    private fun buildOutputForMode(key: ModeKey, s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
+        return when (key) {
+            ModeKey.CN_QWERTY -> buildCnQwertyOutput(s, singleCharMode)
+            ModeKey.CN_T9 -> buildCnT9Output(s, singleCharMode)
+            ModeKey.EN_QWERTY -> buildEnQwertyOutput(s, singleCharMode)
+            ModeKey.EN_T9 -> buildEnT9Output(s, singleCharMode)
         }
     }
 
     fun updateCandidates() {
-        val st = state()
+        // Freeze mode key for this update pass to avoid cross-mode state pollution.
+        val key = currentModeKey()
+        val st = stateFor(key)
         val s = session()
 
         // Ensure UI toggles reflect current mode state.
@@ -129,24 +169,23 @@ class CandidateController(
 
         ui.showComposingState(st.isExpanded)
 
-        val handler = resolveHandler()
-        val out = handler.build(
-            session = s,
-            dictEngine = dictEngine,
+        val out = buildOutputForMode(
+            key = key,
+            s = s,
             singleCharMode = st.isSingleCharMode
         )
 
         st.composingPreviewOverride = out.composingPreviewText
         st.enterCommitTextOverride = out.enterCommitText
         st.pinyinSidebar = out.pinyinSidebar
-        st.currentCandidates = out.candidates
+        st.currentCandidates = ArrayList(out.candidates)
 
         keyboardController.updateSidebar(st.pinyinSidebar)
         ui.setCandidates(st.currentCandidates)
     }
 
     fun handleSpaceKey() {
-        val st = state()
+        val st = currentState()
         if (st.currentCandidates.isNotEmpty()) {
             commitCandidate(st.currentCandidates[0])
         } else {
@@ -155,7 +194,7 @@ class CandidateController(
     }
 
     fun commitFirstCandidateOnEnter(): Boolean {
-        val st = state()
+        val st = currentState()
         if (st.currentCandidates.isEmpty()) return false
         commitCandidate(st.currentCandidates[0])
         return true
