@@ -1,5 +1,7 @@
 package com.example.myapp.ime.candidate
 
+import android.content.pm.ApplicationInfo
+import android.util.Log
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.common.ComposingSession
@@ -40,6 +42,10 @@ class CandidateController(
     )
 
     private val states: MutableMap<ModeKey, ModeState> = mutableMapOf()
+
+    private fun isDebuggableApp(): Boolean {
+        return (ui.rootView.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
 
     private fun currentModeKey(): ModeKey {
         val mainMode = keyboardController.getMainMode()
@@ -175,7 +181,6 @@ class CandidateController(
     }
 
     private fun updateCandidatesForSnapshot(key: ModeKey, st: ModeState, s: ComposingSession) {
-        // Keep UI toggle consistent with this mode even if caller forgot to sync it.
         renderFilterButton(st)
 
         st.currentCandidates.clear()
@@ -203,14 +208,12 @@ class CandidateController(
         st.enterCommitTextOverride = out.enterCommitText
         st.pinyinSidebar = out.pinyinSidebar
 
-        // Copy to avoid accidental cross-mode mutation.
         st.currentCandidates = ArrayList(out.candidates)
 
         renderComposingUi(st, out)
     }
 
     fun updateCandidates() {
-        // Freeze mode key & session for this update pass to avoid cross-mode state pollution.
         val key = currentModeKey()
         val st = stateFor(key)
         val s = session()
@@ -247,6 +250,16 @@ class CandidateController(
         val useT9Layout = useT9Layout(key)
         val isChinese = isChinese(key)
 
+        // Hard guard: candidate must come from current mode's list.
+        if (!st.currentCandidates.contains(cand)) {
+            val msg = "Candidate not in current mode list: mode=$key, cand=$cand, size=${st.currentCandidates.size}"
+            if (isDebuggableApp()) {
+                Log.wtf("CandidateController", msg)
+                throw AssertionError(msg)
+            }
+            return
+        }
+
         when (val r = s.pickCandidate(
             cand,
             useT9Layout,
@@ -258,7 +271,6 @@ class CandidateController(
             }
 
             is ComposingSession.PickResult.Updated -> {
-                // Refresh using the same frozen mode/session snapshot.
                 updateCandidatesForSnapshot(key, st, s)
                 updateComposingView()
             }
