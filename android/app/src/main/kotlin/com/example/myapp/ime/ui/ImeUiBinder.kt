@@ -20,29 +20,26 @@ class ImeUiBinder(
     private val keyboardController: KeyboardController
 ) {
     companion object {
-        // 主键盘的 Enter 特殊键 label（英文全键盘里就是 ⏎）
         private const val ENTER_LABEL = "⏎"
     }
 
     fun bind() {
         ui.getExpandButton().setOnClickListener { uiStateActions.toggleCandidatesExpanded() }
 
-        rootView.findViewById<View>(R.id.expandpanelclose)
+        ui.rootView.findViewById<View>(R.id.expandpanelclose)
             .setOnClickListener { uiStateActions.toggleCandidatesExpanded() }
 
-        // 回退键：始终是退格
-        rootView.findViewById<View>(R.id.expandpaneldel)
+        ui.rootView.findViewById<View>(R.id.expandpaneldel)
             .setOnClickListener { imeActions.handleBackspace() }
 
-        // 右侧两颗键（重输/过滤）需要随中英模式变化
+        // First time bind + keep refreshed on mode changes.
         refreshExpandedPanelRightButtons(keyboardController.getMainMode())
         hookModeChangeRefresh()
 
-        rootView.findViewById<View>(R.id.btntoollayout)
+        ui.rootView.findViewById<View>(R.id.btntoollayout)
             .setOnClickListener { layoutController.toggle() }
 
-        // 字体/字号按钮
-        rootView.findViewById<View>(R.id.btntoolfont)
+        ui.rootView.findViewById<View>(R.id.btntoolfont)
             .setOnClickListener { fontController.showPickerDialog() }
     }
 
@@ -59,20 +56,20 @@ class ImeUiBinder(
         val btnFilter = ui.getFilterButton()
 
         if (mode.isChinese) {
-            // 中文模式：保持原有“重输 + 全部/单字切换”
+            // CN: keep original behaviors.
+            ui.setExpandedPanelFilterOverride(null)
+
             btnReenter.text = "重输"
             btnReenter.setOnClickListener { imeActions.clearComposing() }
 
             uiStateActions.syncFilterButtonState()
             btnFilter.setOnClickListener { uiStateActions.toggleSingleCharMode() }
         } else {
-            // 英文模式（全键盘/T9 都一样）：
-            // - “重输”显示 Clear，行为仍是 clearComposing
-            // - “全部/单字”键改为换行键：显示 ⏎，点击走 handleSpecialKey(⏎)
+            // EN (Qwerty/T9): Clear + Enter.
             btnReenter.text = "Clear"
             btnReenter.setOnClickListener { imeActions.clearComposing() }
 
-            btnFilter.text = ENTER_LABEL
+            ui.setExpandedPanelFilterOverride(ENTER_LABEL)
             btnFilter.setOnClickListener { imeActions.handleSpecialKey(ENTER_LABEL) }
         }
     }

@@ -83,12 +83,7 @@ class ImeUi {
     private lateinit var expandedPanel: LinearLayout
     private lateinit var btnExpand: ImageButton
     private lateinit var btnExpandedClose: ImageButton
-
-    // Expanded panel right-side buttons.
-    private lateinit var btnDel: Button
-    private lateinit var btnReenter: Button
     private lateinit var btnFilter: Button
-
     private lateinit var tvComposingPreview: TextView
 
     private lateinit var recyclerHorizontal: RecyclerView
@@ -103,15 +98,15 @@ class ImeUi {
     private var currentFontFamily: String = "sans-serif-light"
     private var currentFontScale: Float = 1.0f
 
+    // NEW: when non-null, btnFilter's text is "locked" to this value and setFilterButton() won't override it.
+    private var expandedPanelFilterOverrideText: CharSequence? = null
+
     fun setComposingPreviewListener(listener: ((String?) -> Unit)?) {
         composingPreviewListener = listener
     }
 
     fun getExpandButton(): ImageButton = btnExpand
     fun getFilterButton(): Button = btnFilter
-    fun getDeleteButton(): Button = btnDel
-    fun getReenterButton(): Button = btnReenter
-
     fun getThemeButton(): Button = rootView.findViewById(R.id.btntooltheme)
     fun getLayoutButton(): Button = rootView.findViewById(R.id.btntoollayout)
     fun getFontButton(): ImageButton = btnToolFont
@@ -138,6 +133,15 @@ class ImeUi {
                 // no-op
             }
         })
+    }
+
+    // NEW: lock/unlock the expanded panel filter button label.
+    fun setExpandedPanelFilterOverride(text: CharSequence?) {
+        expandedPanelFilterOverrideText = text
+        if (text != null) {
+            btnFilter.text = text
+            FontApplier.apply(btnFilter, currentFontFamily, currentFontScale)
+        }
     }
 
     // Backward-compatible: old signature (Candidate payload).
@@ -179,11 +183,7 @@ class ImeUi {
         btnExpand = rootView.findViewById(R.id.btnexpandcandidates)
         btnExpandedClose = rootView.findViewById(R.id.expandpanelclose)
         tvComposingPreview = rootView.findViewById(R.id.tvcomposingpreview)
-
-        btnDel = rootView.findViewById(R.id.expandpaneldel)
-        btnReenter = rootView.findViewById(R.id.expandpanelreenter)
         btnFilter = rootView.findViewById(R.id.expandpanelfilter)
-
         btnToolFont = rootView.findViewById(R.id.btntoolfont)
 
         btnToolFont.setImageResource(R.drawable.ic_tool_font)
@@ -294,6 +294,14 @@ class ImeUi {
     }
 
     fun setFilterButton(singleCharMode: Boolean) {
+        // NEW: if overridden (EN mode), keep the override and do not render CN filter UI.
+        val override = expandedPanelFilterOverrideText
+        if (override != null) {
+            btnFilter.text = override
+            FontApplier.apply(btnFilter, currentFontFamily, currentFontScale)
+            return
+        }
+
         val text = "全部/单字"
         val spannable = SpannableString(text)
 
@@ -331,28 +339,6 @@ class ImeUi {
 
         btnFilter.text = spannable
         FontApplier.apply(btnFilter, currentFontFamily, currentFontScale)
-    }
-
-    /**
-     * 刷新“展开候选面板”右侧两颗键的文案：
-     * - 中文模式：保持“重输” + “全部/单字”（并继续用 setFilterButton 渲染强调）。
-     * - 英文模式：重输显示 Clear；过滤键改成“换行键”的显示（符号由调用方传入，确保与主键盘一致）。
-     *
-     * 注意：这里仅负责“显示”，不在 ImeUi 内硬编码点击行为。
-     */
-    fun updateExpandedPanelRightKeyLabels(
-        isChineseMode: Boolean,
-        singleCharMode: Boolean,
-        enterKeyLabel: CharSequence
-    ) {
-        if (isChineseMode) {
-            btnReenter.text = "重输"
-            setFilterButton(singleCharMode)
-        } else {
-            btnReenter.text = "Clear"
-            btnFilter.text = enterKeyLabel
-            FontApplier.apply(btnFilter, currentFontFamily, currentFontScale)
-        }
     }
 
     fun setThemeMode(themeMode: Int) {

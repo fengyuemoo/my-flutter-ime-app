@@ -45,6 +45,20 @@ class ImeActionDispatcher(
     private var inHandleMainModeChanged: Boolean = false
     private var deferredMainMode: KeyboardMode? = null
 
+    // --- EN-QWERTY predict preference (default ON) ---
+    private val prefs by lazy { context.getSharedPreferences("ime_settings", Context.MODE_PRIVATE) }
+
+    companion object {
+        private const val KEY_EN_QWERTY_PREDICT_ENABLED = "en_qwerty_predict_enabled"
+    }
+
+    private fun loadEnQwertyPredictPref(): Boolean =
+        prefs.getBoolean(KEY_EN_QWERTY_PREDICT_ENABLED, true)
+
+    private fun saveEnQwertyPredictPref(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_EN_QWERTY_PREDICT_ENABLED, enabled).apply()
+    }
+
     // --- Debug assertions for B semantic ---
 
     private fun sessionByMode(mode: KeyboardMode): ComposingSession {
@@ -93,6 +107,14 @@ class ImeActionDispatcher(
     }
 
     private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
+
+    private fun applyEnQwertyPredictPrefIfNeeded(mode: KeyboardMode) {
+        // Only apply default/pref when entering English QWERTY.
+        if (!mode.isChinese && !mode.useT9Layout) {
+            engineByModeOrNull(mode)?.setEnglishPredict(loadEnQwertyPredictPref())
+        }
+        // EN-T9: do nothing ("不管") — its strategy keeps its own in-memory state (default true).
+    }
 
     fun attach(
         ui: ImeUi,
@@ -155,6 +177,9 @@ class ImeActionDispatcher(
             handleMainModeChanged(newMode)
         }
 
+        // If we are already in EN-QWERTY when attached, apply pref once.
+        applyEnQwertyPredictPrefIfNeeded(mainMode())
+
         currentEngineOrNull()?.syncEnglishPredictUi()
         syncSymbolPanelUi()
     }
@@ -195,6 +220,9 @@ class ImeActionDispatcher(
                         oldEngine.clearComposing()
                         newEngine.clearComposing()
                         newEngine.afterModeSwitch()
+
+                        // NEW: only EN-QWERTY auto-apply predict pref; EN-T9 not touched.
+                        applyEnQwertyPredictPrefIfNeeded(target)
 
                         // Debug assert: both sessions must be cleared after switching.
                         assertSessionCleared(oldMode, from = "handleMainModeChanged ${oldMode} -> ${target} (old)")
@@ -393,14 +421,30 @@ class ImeActionDispatcher(
     }
 
     override fun getEnglishPredictEnabled(): Boolean {
-        return currentEngineOrNull()?.getEnglishPredictEnabled() ?: false
+        val mode = mainMode()
+        val engineValue = currentEngineOrNull()?.getEnglishPredictEnabled()
+
+        // Only EN-QWERTY uses preference as the "default" source; other modes return engine state.
+        return if (!mode.isChinese && !mode.useT9Layout) {
+            engineValue ?: loadEnQwertyPredictPref()
+        } else {
+            engineValue ?: false
+        }
     }
 
     override fun setEnglishPredict(enabled: Boolean) {
+        val mode = mainMode()
+
+        // Only persist user's choice for EN-QWERTY; EN-T9 不管（不写偏好）。
+        if (!mode.isChinese && !mode.useT9Layout) {
+            saveEnQwertyPredictPref(enabled)
+        }
+
         currentEngineOrNull()?.setEnglishPredict(enabled)
     }
 
     override fun toggleEnglishPredict() {
-        currentEngineOrNull()?.toggleEnglishPredict()
+        val next = !getEnglishPredictEnabled()
+        setEnglishPredict(next)
     }
 }
