@@ -99,8 +99,6 @@ class ImeActionDispatcher(
 
     private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
 
-    private fun currentEngine(): ModeInputEngine = requireNotNull(currentEngineOrNull())
-
     fun attach(
         ui: ImeUi,
         keyboardController: KeyboardController,
@@ -204,8 +202,8 @@ class ImeActionDispatcher(
                         newEngine.afterModeSwitch()
 
                         // Debug assert: both sessions must be cleared after switching.
-                        assertSessionCleared(oldMode, from = "handleMainModeChanged-old")
-                        assertSessionCleared(target, from = "handleMainModeChanged-new")
+                        assertSessionCleared(oldMode, from = "handleMainModeChanged ${oldMode} -> ${target} (old)")
+                        assertSessionCleared(target, from = "handleMainModeChanged ${oldMode} -> ${target} (new)")
 
                         // If symbol panel is open, its content may depend on isChineseMainMode.
                         syncSymbolPanelUi()
