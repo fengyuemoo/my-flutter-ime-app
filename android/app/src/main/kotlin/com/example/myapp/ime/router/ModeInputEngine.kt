@@ -52,7 +52,7 @@ abstract class ModeInputEngine {
  * - CN composing preview should only be updated inside refreshComposingView().
  * - CN does not write composing text into editor (except clearing via setComposingText("", 0)).
  */
-internal abstract class CnBaseInputEngine(
+abstract class CnBaseInputEngine(
     private val context: Context,
     private val ui: ImeUi,
     private val keyboardController: KeyboardController,
