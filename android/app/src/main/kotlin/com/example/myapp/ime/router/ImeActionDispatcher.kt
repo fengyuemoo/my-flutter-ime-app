@@ -38,13 +38,25 @@ class ImeActionDispatcher(
     private var symbolPage: Int = 0
     private var symbolLocked: Boolean = false
 
-    private fun session(): ComposingSession = sessions.current()
-
     private fun mainMode(): KeyboardMode {
         if (!::keyboardController.isInitialized) {
             return KeyboardMode(isChinese = true, useT9Layout = false)
         }
         return keyboardController.getMainMode()
+    }
+
+    /**
+     * Strong-isolation: NEVER use sessions.current().
+     * Always pick the fixed session by current main mode.
+     */
+    private fun currentSession(): ComposingSession {
+        val mode = mainMode()
+        return when {
+            mode.isChinese && !mode.useT9Layout -> sessions.cnQwerty
+            mode.isChinese && mode.useT9Layout -> sessions.cnT9
+            !mode.isChinese && !mode.useT9Layout -> sessions.enQwerty
+            else -> sessions.enT9
+        }
     }
 
     private val cnQwertyStrategy: ComposeStrategy =
@@ -134,9 +146,7 @@ class ImeActionDispatcher(
 
     // --- CN composing preview guard ---
 
-    // 额外的手动开关：需要临时关闭 guard 就改成 false。
     private val ENABLE_CN_PREVIEW_GUARD: Boolean = true
-
     private var inRefreshComposingView: Boolean = false
 
     private fun isDebuggableApp(): Boolean {
@@ -148,7 +158,6 @@ class ImeActionDispatcher(
 
         val mode = mainMode()
 
-        // 只 guard 中文模式下的“非空预览写入”；清空预览（null）允许在任何地方发生。
         if (ENABLE_CN_PREVIEW_GUARD && isDebuggableApp() && mode.isChinese && text != null && !inRefreshComposingView) {
             val msg = "CN composing preview updated outside refreshComposingView: from=$from, text=$text"
             Log.wtf("ImeActionDispatcher", msg)
@@ -164,7 +173,7 @@ class ImeActionDispatcher(
         val mode = mainMode()
         val ic = inputConnection()
 
-        val displayText = session().displayText(mode.useT9Layout)
+        val displayText = currentSession().displayText(mode.useT9Layout)
 
         if (displayText.isNullOrEmpty()) {
             setComposingPreviewSafely(null, from = "refreshComposingView-empty")
@@ -181,7 +190,6 @@ class ImeActionDispatcher(
 
         val rawUiText = overrideText ?: displayText
 
-        // Important: do not post-process CN preview here; handler output should be displayed as-is.
         inRefreshComposingView = true
         try {
             setComposingPreviewSafely(rawUiText, from = "refreshComposingView")
@@ -207,9 +215,9 @@ class ImeActionDispatcher(
 
     override fun inputConnection(): InputConnection? = inputConnectionProvider()
 
-    private fun clearSessionAndEditorComposing() {
-        session().clear()
-        setComposingPreviewSafely(null, from = "clearSessionAndEditorComposing")
+    private fun clearCurrentSessionAndEditorComposing() {
+        currentSession().clear()
+        setComposingPreviewSafely(null, from = "clearCurrentSessionAndEditorComposing")
         inputConnection()?.setComposingText("", 0)
     }
 
@@ -220,12 +228,12 @@ class ImeActionDispatcher(
 
     private fun commitAndReset(text: String) {
         inputConnection()?.commitText(text, 1)
-        clearSessionAndEditorComposing()
+        clearCurrentSessionAndEditorComposing()
         afterCommitOrClear()
     }
 
     private fun clearAndReset() {
-        clearSessionAndEditorComposing()
+        clearCurrentSessionAndEditorComposing()
         afterCommitOrClear()
     }
 
@@ -275,9 +283,9 @@ class ImeActionDispatcher(
             return
         }
 
-        val consumedBySession = session().backspace(mainMode().useT9Layout)
+        val consumedBySession = currentSession().backspace(mainMode().useT9Layout)
         if (consumedBySession) {
-            if (!session().isComposing()) {
+            if (!currentSession().isComposing()) {
                 clearComposing()
             } else {
                 afterSessionMutated()
@@ -418,15 +426,12 @@ class ImeActionDispatcher(
             is StrategyResult.ComposingUpdate -> {
                 val mode = mainMode()
 
-                // Chinese modes: composing preview must come from handler Output (CandidateController override),
-                // so never set UI preview directly here.
                 if (mode.isChinese) {
                     refreshCandidates()
                     refreshComposingView()
                     return
                 }
 
-                // Non-Chinese: keep existing behavior.
                 val uiText = result.composingText
                 setComposingPreviewSafely(uiText, from = "handleStrategyResult-ComposingUpdate")
 
