@@ -10,7 +10,6 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
-import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.ImeGraph
 import com.example.myapp.ime.bootstrap.ImeBootstrapper
 import com.example.myapp.ime.keyboard.KeyboardHost
@@ -27,7 +26,8 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     private lateinit var graph: ImeGraph
     private lateinit var bootstrapper: ImeBootstrapper
 
-    private var onCandidateClick: (Candidate) -> Unit = {}
+    // CHANGED: index-based candidate click.
+    private var onCandidateIndexClick: (Int) -> Unit = {}
 
     // --- floating preedit overlay (WindowManager) ---
     private var preeditOverlayView: TextView? = null
@@ -47,7 +47,9 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
 
     override fun onCreateInputView(): View {
         ui = ImeUi()
-        mainView = ui.inflate(layoutInflater) { cand -> onCandidateClick(cand) }
+
+        // CHANGED: use index-based inflate overload.
+        mainView = ui.inflate(layoutInflater) { index -> onCandidateIndexClick(index) }
         bodyFrame = ui.bodyFrame
 
         ui.setComposingPreviewListener { text ->
@@ -63,7 +65,8 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
             inputConnectionProvider = { currentInputConnection }
         )
 
-        onCandidateClick = { cand -> graph.candidateController.commitCandidate(cand) }
+        // CHANGED: commit by index (decouples UI click from Candidate object identity).
+        onCandidateIndexClick = { index -> graph.candidateController.commitCandidateAt(index) }
 
         graph.uiBinder.bind()
 
