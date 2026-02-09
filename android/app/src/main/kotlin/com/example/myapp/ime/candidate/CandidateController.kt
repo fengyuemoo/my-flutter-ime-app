@@ -51,9 +51,8 @@ class CandidateController(
         }
     }
 
-    private fun stateFor(key: ModeKey): ModeState {
-        return states.getOrPut(key) { ModeState() }
-    }
+    private fun stateFor(key: ModeKey): ModeState =
+        states.getOrPut(key) { ModeState() }
 
     private fun currentState(): ModeState = stateFor(currentModeKey())
 
@@ -64,6 +63,8 @@ class CandidateController(
     fun getEnterCommitTextOverride(): String? = currentState().enterCommitTextOverride
 
     private fun session(): ComposingSession = sessions.current()
+
+    // --- UiStateActions ---
 
     override fun toggleCandidatesExpanded() {
         toggleExpand()
@@ -77,25 +78,28 @@ class CandidateController(
         toggleSingleCharModeInternal()
     }
 
-    fun syncFilterButton() {
-        ui.setFilterButton(currentState().isSingleCharMode)
-    }
+    // --- UI render helpers (centralized) ---
 
-    private fun toggleSingleCharModeInternal() {
-        val key = currentModeKey()
-        val st = stateFor(key)
-
-        st.isSingleCharMode = !st.isSingleCharMode
+    private fun renderFilterButton(st: ModeState) {
         ui.setFilterButton(st.isSingleCharMode)
-        updateCandidates()
     }
 
-    fun toggleExpand() {
-        val key = currentModeKey()
-        val st = stateFor(key)
+    private fun renderIdleUi() {
+        ui.showIdleState()
+        // Ensure expand UI is reset in idle; showIdleState() does not reset expand arrow rotation.
+        ui.setExpanded(false, isComposing = false)
+        keyboardController.updateSidebar(emptyList())
+    }
 
-        st.isExpanded = !st.isExpanded
-        ui.setExpanded(st.isExpanded, session().isComposing())
+    private fun renderComposingUi(st: ModeState, out: ImeModeHandler.Output) {
+        renderFilterButton(st)
+
+        ui.showComposingState(isExpanded = st.isExpanded)
+        // Ensure expanded panel visibility + arrow rotation matches state for THIS mode.
+        ui.setExpanded(st.isExpanded, isComposing = true)
+
+        keyboardController.updateSidebar(out.pinyinSidebar)
+        ui.setCandidates(st.currentCandidates)
     }
 
     // --- Per-mode build paths (split) ---
@@ -141,14 +145,37 @@ class CandidateController(
         }
     }
 
+    // --- Public behaviors ---
+
+    fun syncFilterButton() {
+        renderFilterButton(currentState())
+    }
+
+    private fun toggleSingleCharModeInternal() {
+        val key = currentModeKey()
+        val st = stateFor(key)
+
+        st.isSingleCharMode = !st.isSingleCharMode
+        renderFilterButton(st)
+        updateCandidates()
+    }
+
+    fun toggleExpand() {
+        val key = currentModeKey()
+        val st = stateFor(key)
+
+        st.isExpanded = !st.isExpanded
+        ui.setExpanded(st.isExpanded, session().isComposing())
+    }
+
     fun updateCandidates() {
         // Freeze mode key for this update pass to avoid cross-mode state pollution.
         val key = currentModeKey()
         val st = stateFor(key)
         val s = session()
 
-        // Ensure UI toggles reflect current mode state.
-        ui.setFilterButton(st.isSingleCharMode)
+        // Keep UI toggle consistent with this mode even if caller forgot to sync it.
+        renderFilterButton(st)
 
         st.currentCandidates.clear()
 
@@ -157,17 +184,13 @@ class CandidateController(
             st.enterCommitTextOverride = null
             st.pinyinSidebar = emptyList()
 
-            ui.showIdleState()
-            keyboardController.updateSidebar(emptyList())
-
             if (st.isExpanded) {
                 st.isExpanded = false
-                ui.setExpanded(false, isComposing = false)
             }
+
+            renderIdleUi()
             return
         }
-
-        ui.showComposingState(st.isExpanded)
 
         val out = buildOutputForMode(
             key = key,
@@ -178,10 +201,11 @@ class CandidateController(
         st.composingPreviewOverride = out.composingPreviewText
         st.enterCommitTextOverride = out.enterCommitText
         st.pinyinSidebar = out.pinyinSidebar
+
+        // Copy to avoid accidental cross-mode mutation.
         st.currentCandidates = ArrayList(out.candidates)
 
-        keyboardController.updateSidebar(st.pinyinSidebar)
-        ui.setCandidates(st.currentCandidates)
+        renderComposingUi(st, out)
     }
 
     fun handleSpaceKey() {
