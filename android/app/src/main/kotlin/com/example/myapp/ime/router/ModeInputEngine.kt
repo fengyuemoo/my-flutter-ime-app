@@ -8,6 +8,8 @@ import android.view.inputmethod.InputConnection
 import com.example.myapp.ime.candidate.CandidateController
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposeStrategy
+import com.example.myapp.ime.compose.common.EnglishComposeStrategy
+import com.example.myapp.ime.compose.common.PendingCommitStrategy
 import com.example.myapp.ime.compose.common.StrategyResult
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.ui.ImeUi
@@ -206,6 +208,158 @@ abstract class CnBaseInputEngine(
             is StrategyResult.ComposingUpdate -> {
                 refreshCandidates()
                 refreshComposingView()
+            }
+            is StrategyResult.Noop -> {}
+        }
+    }
+}
+
+/**
+ * Shared EN engine implementation (EN-Qwerty and EN-T9).
+ *
+ * Notes:
+ * - EN writes composing into editor (setComposingText) for preview.
+ * - If strategy implements PendingCommitStrategy (EN-T9 multi-tap), base handles flush/backspace-in-buffer.
+ */
+abstract class EnBaseInputEngine(
+    private val ui: ImeUi,
+    private val keyboardController: KeyboardController,
+    private val candidateController: CandidateController,
+    private val session: ComposingSession,
+    private val inputConnectionProvider: () -> InputConnection?,
+    private val useT9Layout: Boolean,
+    private val strategy: EnglishComposeStrategy
+) : ModeInputEngine() {
+
+    private fun pending(): PendingCommitStrategy? = strategy as? PendingCommitStrategy
+
+    private fun afterSessionMutated() {
+        refreshCandidates()
+        refreshComposingView()
+        syncEnglishPredictUi()
+    }
+
+    private fun afterCommitOrClear() {
+        refreshCandidates()
+        syncEnglishPredictUi()
+    }
+
+    private fun clearSessionAndEditorComposing() {
+        session.clear()
+        ui.setComposingPreview(null)
+        inputConnectionProvider()?.setComposingText("", 0)
+    }
+
+    private fun commitAndReset(text: String) {
+        inputConnectionProvider()?.commitText(text, 1)
+        clearSessionAndEditorComposing()
+        afterCommitOrClear()
+    }
+
+    override fun refreshCandidates() {
+        candidateController.updateCandidates()
+    }
+
+    override fun refreshComposingView() {
+        val ic = inputConnectionProvider()
+        val displayText = session.displayText(useT9Layout = useT9Layout)
+
+        if (displayText.isNullOrEmpty()) {
+            ui.setComposingPreview(null)
+            ic?.setComposingText("", 0)
+            return
+        }
+
+        ui.setComposingPreview(displayText)
+        ic?.setComposingText(displayText, 1)
+    }
+
+    override fun clearComposing() {
+        clearSessionAndEditorComposing()
+        afterCommitOrClear()
+    }
+
+    override fun handleComposingInput(text: String) {
+        handleStrategyResult(strategy.onComposingInput(text))
+    }
+
+    override fun handleT9Input(digit: String) {
+        handleStrategyResult(strategy.onT9Input(digit))
+    }
+
+    override fun onPinyinSidebarClick(pinyin: String) {
+        @Suppress("UNUSED_PARAMETER")
+        val ignored = pinyin
+    }
+
+    override fun handleBackspace() {
+        if (pending()?.handleBackspaceInOwnBuffer(inputConnectionProvider()) == true) return
+
+        val consumedBySession = session.backspace(useT9Layout = useT9Layout)
+        if (consumedBySession) {
+            if (!session.isComposing()) {
+                clearComposing()
+            } else {
+                afterSessionMutated()
+            }
+            return
+        }
+
+        val ic = inputConnectionProvider() ?: return
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+    }
+
+    override fun handleSpaceKey() {
+        if (strategy.isPredicting()) {
+            candidateController.handleSpaceKey()
+        } else {
+            inputConnectionProvider()?.commitText(" ", 1)
+        }
+    }
+
+    override fun handleEnter(ic: InputConnection?): Boolean {
+        val result = strategy.onEnter(ic)
+        return if (result is StrategyResult.Noop) {
+            false
+        } else {
+            handleStrategyResult(result)
+            true
+        }
+    }
+
+    override fun beforeModeSwitch() {
+        val p = pending() ?: return
+        val result = p.flushPendingCommit()
+        if (result !is StrategyResult.Noop) {
+            handleStrategyResult(result)
+        }
+    }
+
+    override fun afterModeSwitch() {
+        refreshCandidates()
+        syncEnglishPredictUi()
+    }
+
+    override fun getEnglishPredictEnabled(): Boolean = strategy.getEnglishPredictEnabled()
+
+    override fun setEnglishPredict(enabled: Boolean) {
+        strategy.setEnglishPredictEnabled(enabled)
+        afterSessionMutated()
+    }
+
+    override fun syncEnglishPredictUi() {
+        keyboardController.updateEnglishPredictUi(getEnglishPredictEnabled())
+    }
+
+    private fun handleStrategyResult(result: StrategyResult) {
+        when (result) {
+            is StrategyResult.SessionMutated -> afterSessionMutated()
+            is StrategyResult.DirectCommit -> commitAndReset(result.text)
+            is StrategyResult.ComposingUpdate -> {
+                ui.setComposingPreview(result.composingText)
+                inputConnectionProvider()?.setComposingText(result.composingText, 1)
+                refreshCandidates()
             }
             is StrategyResult.Noop -> {}
         }
