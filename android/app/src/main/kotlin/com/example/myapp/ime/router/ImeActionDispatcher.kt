@@ -67,6 +67,8 @@ class ImeActionDispatcher(
     private lateinit var enQwertyEngine: ModeInputEngine
     private lateinit var enT9Engine: ModeInputEngine
 
+    private var lastKnownMainMode: KeyboardMode? = null
+
     private fun enginesReady(): Boolean =
         ::ui.isInitialized && ::keyboardController.isInitialized && ::candidateController.isInitialized &&
             ::cnQwertyEngine.isInitialized
@@ -78,29 +80,17 @@ class ImeActionDispatcher(
         return keyboardController.getMainMode()
     }
 
-    private enum class ModeKey {
-        CN_QWERTY, CN_T9, EN_QWERTY, EN_T9
-    }
-
-    private fun currentModeKey(): ModeKey {
-        val mode = mainMode()
-        return when {
-            mode.isChinese && !mode.useT9Layout -> ModeKey.CN_QWERTY
-            mode.isChinese && mode.useT9Layout -> ModeKey.CN_T9
-            !mode.isChinese && !mode.useT9Layout -> ModeKey.EN_QWERTY
-            else -> ModeKey.EN_T9
-        }
-    }
-
-    private fun currentEngineOrNull(): ModeInputEngine? {
+    private fun engineByModeOrNull(mode: KeyboardMode): ModeInputEngine? {
         if (!enginesReady()) return null
-        return when (currentModeKey()) {
-            ModeKey.CN_QWERTY -> cnQwertyEngine
-            ModeKey.CN_T9 -> cnT9Engine
-            ModeKey.EN_QWERTY -> enQwertyEngine
-            ModeKey.EN_T9 -> enT9Engine
+        return when {
+            mode.isChinese && !mode.useT9Layout -> cnQwertyEngine
+            mode.isChinese && mode.useT9Layout -> cnT9Engine
+            !mode.isChinese && !mode.useT9Layout -> enQwertyEngine
+            else -> enT9Engine
         }
     }
+
+    private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
 
     private fun currentEngine(): ModeInputEngine = requireNotNull(currentEngineOrNull())
 
@@ -149,12 +139,56 @@ class ImeActionDispatcher(
             inputConnectionProvider = { inputConnectionProvider() }
         )
 
+        lastKnownMainMode = keyboardController.getMainMode()
+
+        // Chain callbacks (avoid breaking any existing hooks).
+        val oldOnKeyboardChanged = keyboardController.onKeyboardChanged
         keyboardController.onKeyboardChanged = {
+            oldOnKeyboardChanged?.invoke()
             currentEngineOrNull()?.syncEnglishPredictUi()
             syncSymbolPanelUi()
         }
 
+        val oldOnModeChanged = keyboardController.onModeChanged
+        keyboardController.onModeChanged = { newMode ->
+            oldOnModeChanged?.invoke(newMode)
+            handleMainModeChanged(newMode)
+        }
+
         currentEngineOrNull()?.syncEnglishPredictUi()
+        syncSymbolPanelUi()
+    }
+
+    /**
+     * B semantic: whenever main mode changes (language OR layout), clear composing for both
+     * old and new mode sessions, and run per-mode before/after hooks.
+     *
+     * This catches layout switching even if it is triggered outside ImeActions.
+     */
+    private fun handleMainModeChanged(newMode: KeyboardMode) {
+        if (!enginesReady()) {
+            lastKnownMainMode = newMode
+            return
+        }
+
+        val oldMode = lastKnownMainMode
+        lastKnownMainMode = newMode
+
+        if (oldMode == null) return
+        if (oldMode == newMode) return
+
+        val oldEngine = engineByModeOrNull(oldMode)
+        val newEngine = engineByModeOrNull(newMode)
+        if (oldEngine == null || newEngine == null) return
+
+        oldEngine.beforeModeSwitch()
+
+        // B: switching clears composing (clear old + clear new).
+        oldEngine.clearComposing()
+        newEngine.clearComposing()
+        newEngine.afterModeSwitch()
+
+        // If symbol panel is open, its content may depend on isChineseMainMode.
         syncSymbolPanelUi()
     }
 
@@ -246,34 +280,16 @@ class ImeActionDispatcher(
     }
 
     override fun switchToEnglishMode() {
-        val oldEngine = currentEngineOrNull()
-        oldEngine?.beforeModeSwitch()
-        // B: switching clears composing (clear old + clear new).
-        oldEngine?.clearComposing()
-
         if (!::keyboardController.isInitialized) return
+        // Clearing + hooks are handled in onModeChanged (B).
         keyboardController.setLanguage(false)
-
-        val newEngine = currentEngineOrNull()
-        newEngine?.clearComposing()
-        newEngine?.afterModeSwitch()
-
         syncSymbolPanelUi()
     }
 
     override fun switchToChineseMode() {
-        val oldEngine = currentEngineOrNull()
-        oldEngine?.beforeModeSwitch()
-        // B: switching clears composing (clear old + clear new).
-        oldEngine?.clearComposing()
-
         if (!::keyboardController.isInitialized) return
+        // Clearing + hooks are handled in onModeChanged (B).
         keyboardController.setLanguage(true)
-
-        val newEngine = currentEngineOrNull()
-        newEngine?.clearComposing()
-        newEngine?.afterModeSwitch()
-
         syncSymbolPanelUi()
     }
 
