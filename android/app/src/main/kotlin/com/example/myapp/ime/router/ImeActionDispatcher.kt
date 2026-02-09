@@ -40,6 +40,10 @@ class ImeActionDispatcher(
 
     private var lastKnownMainMode: KeyboardMode? = null
 
+    // --- Prevent re-entrance for mode switching ---
+    private var inHandleMainModeChanged: Boolean = false
+    private var deferredMainMode: KeyboardMode? = null
+
     // --- Debug assertions for B semantic ---
 
     private val ENABLE_MODE_SWITCH_ASSERT: Boolean = true
@@ -174,29 +178,52 @@ class ImeActionDispatcher(
             return
         }
 
-        val oldMode = lastKnownMainMode
-        lastKnownMainMode = newMode
+        // Prevent re-entrance: remember only the latest mode requested while handling.
+        if (inHandleMainModeChanged) {
+            deferredMainMode = newMode
+            return
+        }
 
-        if (oldMode == null) return
-        if (oldMode == newMode) return
+        inHandleMainModeChanged = true
+        try {
+            var target = newMode
 
-        val oldEngine = engineByModeOrNull(oldMode)
-        val newEngine = engineByModeOrNull(newMode)
-        if (oldEngine == null || newEngine == null) return
+            while (true) {
+                val oldMode = lastKnownMainMode
+                lastKnownMainMode = target
 
-        oldEngine.beforeModeSwitch()
+                if (oldMode != null && oldMode != target) {
+                    val oldEngine = engineByModeOrNull(oldMode)
+                    val newEngine = engineByModeOrNull(target)
+                    if (oldEngine != null && newEngine != null) {
+                        oldEngine.beforeModeSwitch()
 
-        // B: switching clears composing (clear old + clear new).
-        oldEngine.clearComposing()
-        newEngine.clearComposing()
-        newEngine.afterModeSwitch()
+                        // B: switching clears composing (clear old + clear new).
+                        oldEngine.clearComposing()
+                        newEngine.clearComposing()
+                        newEngine.afterModeSwitch()
 
-        // Debug assert: both sessions must be cleared after switching.
-        assertSessionCleared(oldMode, from = "handleMainModeChanged-old")
-        assertSessionCleared(newMode, from = "handleMainModeChanged-new")
+                        // Debug assert: both sessions must be cleared after switching.
+                        assertSessionCleared(oldMode, from = "handleMainModeChanged-old")
+                        assertSessionCleared(target, from = "handleMainModeChanged-new")
 
-        // If symbol panel is open, its content may depend on isChineseMainMode.
-        syncSymbolPanelUi()
+                        // If symbol panel is open, its content may depend on isChineseMainMode.
+                        syncSymbolPanelUi()
+                    }
+                }
+
+                val next = deferredMainMode
+                if (next == null || next == target) {
+                    deferredMainMode = null
+                    break
+                }
+
+                deferredMainMode = null
+                target = next
+            }
+        } finally {
+            inHandleMainModeChanged = false
+        }
     }
 
     private fun syncSymbolPanelUi() {
