@@ -51,6 +51,12 @@ class CandidateController(
         }
     }
 
+    private fun isChinese(key: ModeKey): Boolean =
+        key == ModeKey.CN_QWERTY || key == ModeKey.CN_T9
+
+    private fun useT9Layout(key: ModeKey): Boolean =
+        key == ModeKey.CN_T9 || key == ModeKey.EN_T9
+
     private fun stateFor(key: ModeKey): ModeState =
         states.getOrPut(key) { ModeState() }
 
@@ -168,12 +174,7 @@ class CandidateController(
         ui.setExpanded(st.isExpanded, session().isComposing())
     }
 
-    fun updateCandidates() {
-        // Freeze mode key for this update pass to avoid cross-mode state pollution.
-        val key = currentModeKey()
-        val st = stateFor(key)
-        val s = session()
-
+    private fun updateCandidatesForSnapshot(key: ModeKey, st: ModeState, s: ComposingSession) {
         // Keep UI toggle consistent with this mode even if caller forgot to sync it.
         renderFilterButton(st)
 
@@ -208,6 +209,14 @@ class CandidateController(
         renderComposingUi(st, out)
     }
 
+    fun updateCandidates() {
+        // Freeze mode key & session for this update pass to avoid cross-mode state pollution.
+        val key = currentModeKey()
+        val st = stateFor(key)
+        val s = session()
+        updateCandidatesForSnapshot(key, st, s)
+    }
+
     fun handleSpaceKey() {
         val st = currentState()
         if (st.currentCandidates.isNotEmpty()) {
@@ -231,12 +240,17 @@ class CandidateController(
             return
         }
 
-        val mainMode = keyboardController.getMainMode()
+        // Freeze everything needed for this commit path.
+        val key = currentModeKey()
+        val st = stateFor(key)
+        val s = session()
+        val useT9Layout = useT9Layout(key)
+        val isChinese = isChinese(key)
 
-        when (val r = session().pickCandidate(
+        when (val r = s.pickCandidate(
             cand,
-            mainMode.useT9Layout,
-            mainMode.isChinese
+            useT9Layout,
+            isChinese
         )) {
             is ComposingSession.PickResult.Commit -> {
                 commitRaw(r.text)
@@ -244,8 +258,8 @@ class CandidateController(
             }
 
             is ComposingSession.PickResult.Updated -> {
-                // 先更新候选/override，再刷新 composing preview，避免短暂显示旧 preview
-                updateCandidates()
+                // Refresh using the same frozen mode/session snapshot.
+                updateCandidatesForSnapshot(key, st, s)
                 updateComposingView()
             }
         }
