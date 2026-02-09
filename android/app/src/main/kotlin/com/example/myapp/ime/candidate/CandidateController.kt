@@ -23,18 +23,44 @@ class CandidateController(
     private val updateComposingView: () -> Unit,
 ) : UiStateActions {
 
-    private var isExpanded = false
-    private var isSingleCharMode = false
-    private var currentCandidates: ArrayList<Candidate> = ArrayList()
+    private enum class ModeKey {
+        CN_QWERTY,
+        CN_T9,
+        EN_QWERTY,
+        EN_T9
+    }
+
+    private data class ModeState(
+        var isExpanded: Boolean = false,
+        var isSingleCharMode: Boolean = false,
+        var currentCandidates: ArrayList<Candidate> = ArrayList(),
+        var composingPreviewOverride: String? = null,
+        var enterCommitTextOverride: String? = null,
+        var pinyinSidebar: List<String> = emptyList()
+    )
+
+    private val states: MutableMap<ModeKey, ModeState> = mutableMapOf()
+
+    private fun currentModeKey(): ModeKey {
+        val mainMode = keyboardController.getMainMode()
+        return when {
+            mainMode.isChinese && mainMode.useT9Layout -> ModeKey.CN_T9
+            mainMode.isChinese && !mainMode.useT9Layout -> ModeKey.CN_QWERTY
+            !mainMode.isChinese && mainMode.useT9Layout -> ModeKey.EN_T9
+            else -> ModeKey.EN_QWERTY
+        }
+    }
+
+    private fun state(): ModeState {
+        val key = currentModeKey()
+        return states.getOrPut(key) { ModeState() }
+    }
 
     // Handler computed composing preview override (CN-Qwerty segmentation / CN-T9 preview line)
-    private var composingPreviewOverride: String? = null
+    fun getComposingPreviewOverride(): String? = state().composingPreviewOverride
 
     // Handler computed enter-commit override (CN-T9 preview letters commit)
-    private var enterCommitTextOverride: String? = null
-
-    fun getComposingPreviewOverride(): String? = composingPreviewOverride
-    fun getEnterCommitTextOverride(): String? = enterCommitTextOverride
+    fun getEnterCommitTextOverride(): String? = state().enterCommitTextOverride
 
     private fun session(): ComposingSession = sessions.current()
 
@@ -51,18 +77,20 @@ class CandidateController(
     }
 
     fun syncFilterButton() {
-        ui.setFilterButton(isSingleCharMode)
+        ui.setFilterButton(state().isSingleCharMode)
     }
 
     private fun toggleSingleCharModeInternal() {
-        isSingleCharMode = !isSingleCharMode
-        ui.setFilterButton(isSingleCharMode)
+        val st = state()
+        st.isSingleCharMode = !st.isSingleCharMode
+        ui.setFilterButton(st.isSingleCharMode)
         updateCandidates()
     }
 
     fun toggleExpand() {
-        isExpanded = !isExpanded
-        ui.setExpanded(isExpanded, session().isComposing())
+        val st = state()
+        st.isExpanded = !st.isExpanded
+        ui.setExpanded(st.isExpanded, session().isComposing())
     }
 
     private fun resolveHandler(): ImeModeHandler {
@@ -76,51 +104,60 @@ class CandidateController(
     }
 
     fun updateCandidates() {
+        val st = state()
         val s = session()
-        currentCandidates.clear()
+
+        // Ensure UI toggles reflect current mode state.
+        ui.setFilterButton(st.isSingleCharMode)
+
+        st.currentCandidates.clear()
 
         if (!s.isComposing()) {
-            composingPreviewOverride = null
-            enterCommitTextOverride = null
+            st.composingPreviewOverride = null
+            st.enterCommitTextOverride = null
+            st.pinyinSidebar = emptyList()
+
             ui.showIdleState()
             keyboardController.updateSidebar(emptyList())
 
-            if (isExpanded) {
-                isExpanded = false
+            if (st.isExpanded) {
+                st.isExpanded = false
                 ui.setExpanded(false, isComposing = false)
             }
             return
         }
 
-        ui.showComposingState(isExpanded)
+        ui.showComposingState(st.isExpanded)
 
         val handler = resolveHandler()
         val out = handler.build(
             session = s,
             dictEngine = dictEngine,
-            singleCharMode = isSingleCharMode
+            singleCharMode = st.isSingleCharMode
         )
 
-        composingPreviewOverride = out.composingPreviewText
-        enterCommitTextOverride = out.enterCommitText
+        st.composingPreviewOverride = out.composingPreviewText
+        st.enterCommitTextOverride = out.enterCommitText
+        st.pinyinSidebar = out.pinyinSidebar
+        st.currentCandidates = out.candidates
 
-        keyboardController.updateSidebar(out.pinyinSidebar)
-        currentCandidates = out.candidates
-
-        ui.setCandidates(currentCandidates)
+        keyboardController.updateSidebar(st.pinyinSidebar)
+        ui.setCandidates(st.currentCandidates)
     }
 
     fun handleSpaceKey() {
-        if (currentCandidates.isNotEmpty()) {
-            commitCandidate(currentCandidates[0])
+        val st = state()
+        if (st.currentCandidates.isNotEmpty()) {
+            commitCandidate(st.currentCandidates[0])
         } else {
             commitRaw(" ")
         }
     }
 
     fun commitFirstCandidateOnEnter(): Boolean {
-        if (currentCandidates.isEmpty()) return false
-        commitCandidate(currentCandidates[0])
+        val st = state()
+        if (st.currentCandidates.isEmpty()) return false
+        commitCandidate(st.currentCandidates[0])
         return true
     }
 
