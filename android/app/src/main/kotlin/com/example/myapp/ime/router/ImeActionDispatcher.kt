@@ -1,6 +1,7 @@
 package com.example.myapp.ime.router
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.util.Log
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
@@ -126,10 +127,14 @@ class ImeActionDispatcher(
 
     // --- CN composing preview guard ---
 
-    // 不依赖 BuildConfig，避免多模块/namespace 导致的引用问题；需要关闭就改成 false。
+    // 额外的手动开关：需要临时关闭 guard 就改成 false。
     private val ENABLE_CN_PREVIEW_GUARD: Boolean = true
 
     private var inRefreshComposingView: Boolean = false
+
+    private fun isDebuggableApp(): Boolean {
+        return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
 
     private fun setComposingPreviewSafely(text: String?, from: String) {
         if (!::ui.isInitialized) return
@@ -137,7 +142,7 @@ class ImeActionDispatcher(
         val mode = mainMode()
 
         // 只 guard 中文模式下的“非空预览写入”；清空预览（null）允许在任何地方发生。
-        if (ENABLE_CN_PREVIEW_GUARD && mode.isChinese && text != null && !inRefreshComposingView) {
+        if (ENABLE_CN_PREVIEW_GUARD && isDebuggableApp() && mode.isChinese && text != null && !inRefreshComposingView) {
             Log.w(
                 "ImeActionDispatcher",
                 "CN composing preview updated outside refreshComposingView: from=$from, text=$text"
