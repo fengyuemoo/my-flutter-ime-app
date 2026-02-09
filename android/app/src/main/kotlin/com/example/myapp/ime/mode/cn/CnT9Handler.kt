@@ -61,6 +61,18 @@ object CnT9Handler : ImeModeHandler {
 
         promoteCandidateMatchingPreview(finalList, t9PreviewText)
 
+        // NEW: In CN-T9, suppress English exact candidates when the preview is a full pinyin sequence
+        // AND we do have corresponding Chinese candidates.
+        if (shouldSuppressEnglishExactCandidates(
+                previewText = t9PreviewText,
+                candidates = finalList
+            )
+        ) {
+            val suppressed = finalList.filterNot { isEnglishExactCandidate(it) }
+            finalList.clear()
+            finalList.addAll(suppressed)
+        }
+
         // CN-T9: UI composing preview line (includes committedPrefix + stack + preview)
         val stackUi = session.pinyinStack.joinToString("'") { it.lowercase() }
         val previewUi = t9PreviewText ?: ""
@@ -85,6 +97,59 @@ object CnT9Handler : ImeModeHandler {
             composingPreviewText = composingPreviewText,
             enterCommitText = enterCommitText
         )
+    }
+
+    private fun shouldSuppressEnglishExactCandidates(
+        previewText: String?,
+        candidates: List<Candidate>
+    ): Boolean {
+        if (previewText.isNullOrBlank()) return false
+
+        // 1) preview must be a full pinyin sequence (e.g. yong / zhuang / zhuan / zhong'guo ...)
+        if (!T9PreviewBuilder.isFullPinyinSequence(previewText)) return false
+
+        // 2) must have corresponding Chinese candidates (avoid suppressing when no CN candidates exist)
+        val key = T9PreviewBuilder.normalizePreviewLetters(previewText)
+        if (key.isEmpty()) return false
+
+        val hasMatchingChinese = candidates.any { c ->
+            val w = c.word
+            if (!containsCjk(w)) return@any false
+            val py = c.pinyin ?: return@any false
+            val pyLetters = T9PreviewBuilder.normalizePinyinLetters(py)
+            pyLetters.startsWith(key)
+        }
+
+        return hasMatchingChinese
+    }
+
+    private fun isEnglishExactCandidate(c: Candidate): Boolean {
+        val w = c.word.trim()
+        if (w.isEmpty()) return false
+
+        // Pure ASCII a-z word, and not the raw digits fallback.
+        // This matches items like "wong/yong/zong/year/home" in your report.
+        if (!isAsciiLettersOnly(w)) return false
+
+        // Avoid misclassifying rare mixed scripts.
+        if (containsCjk(w)) return false
+
+        return true
+    }
+
+    private fun isAsciiLettersOnly(s: String): Boolean {
+        for (ch in s) {
+            val c = ch.lowercaseChar()
+            if (c !in 'a'..'z') return false
+        }
+        return true
+    }
+
+    private fun containsCjk(s: String): Boolean {
+        for (ch in s) {
+            if (ch in '\u4E00'..'\u9FFF') return true
+        }
+        return false
     }
 
     private object T9PreviewBuilder {
@@ -194,6 +259,26 @@ object CnT9Handler : ImeModeHandler {
                 if (ch in 'a'..'z') sb.append(ch)
             }
             return sb.toString()
+        }
+
+        // NEW: preview must be fully segmentable into valid pinyins (no leftover tail).
+        fun isFullPinyinSequence(previewText: String): Boolean {
+            val raw = previewText.trim().lowercase()
+            if (raw.isEmpty()) return false
+
+            val parts = raw.split("'").filter { it.isNotBlank() }
+            if (parts.isEmpty()) return false
+
+            // All parts must be valid pinyin.
+            for (p in parts) {
+                if (!pinyinSet.contains(p)) return false
+            }
+
+            // Also ensure the normalized letters length matches concatenation length (sanity check).
+            val joined = parts.joinToString("")
+            val normalized = normalizePreviewLetters(raw)
+            if (normalized.isEmpty()) return false
+            return normalized == joined
         }
     }
 
