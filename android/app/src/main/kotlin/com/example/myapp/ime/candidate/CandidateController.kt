@@ -1,17 +1,13 @@
 package com.example.myapp.ime.candidate
 
-import android.content.pm.ApplicationInfo
-import android.util.Log
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
-import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
-import com.example.myapp.ime.mode.ImeModeHandler
-import com.example.myapp.ime.mode.cn.CnQwertyHandler
-import com.example.myapp.ime.mode.cn.CnT9Handler
-import com.example.myapp.ime.mode.en.EnQwertyHandler
-import com.example.myapp.ime.mode.en.EnT9Handler
+import com.example.myapp.ime.mode.cn.CnQwertyCandidateEngine
+import com.example.myapp.ime.mode.cn.CnT9CandidateEngine
+import com.example.myapp.ime.mode.en.EnQwertyCandidateEngine
+import com.example.myapp.ime.mode.en.EnT9CandidateEngine
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.ime.ui.api.UiStateActions
 
@@ -25,26 +21,55 @@ class CandidateController(
     private val updateComposingView: () -> Unit,
 ) : UiStateActions {
 
+    private val cnQwertyEngine = CnQwertyCandidateEngine(
+        ui = ui,
+        keyboardController = keyboardController,
+        dictEngine = dictEngine,
+        session = sessions.cnQwerty,
+        commitRaw = commitRaw,
+        clearComposing = clearComposing,
+        updateComposingView = updateComposingView,
+        isRawCommitMode = { keyboardController.isRawCommitMode() }
+    )
+
+    private val cnT9Engine = CnT9CandidateEngine(
+        ui = ui,
+        keyboardController = keyboardController,
+        dictEngine = dictEngine,
+        session = sessions.cnT9,
+        commitRaw = commitRaw,
+        clearComposing = clearComposing,
+        updateComposingView = updateComposingView,
+        isRawCommitMode = { keyboardController.isRawCommitMode() }
+    )
+
+    private val enQwertyEngine = EnQwertyCandidateEngine(
+        ui = ui,
+        keyboardController = keyboardController,
+        dictEngine = dictEngine,
+        session = sessions.enQwerty,
+        commitRaw = commitRaw,
+        clearComposing = clearComposing,
+        updateComposingView = updateComposingView,
+        isRawCommitMode = { keyboardController.isRawCommitMode() }
+    )
+
+    private val enT9Engine = EnT9CandidateEngine(
+        ui = ui,
+        keyboardController = keyboardController,
+        dictEngine = dictEngine,
+        session = sessions.enT9,
+        commitRaw = commitRaw,
+        clearComposing = clearComposing,
+        updateComposingView = updateComposingView,
+        isRawCommitMode = { keyboardController.isRawCommitMode() }
+    )
+
     private enum class ModeKey {
         CN_QWERTY,
         CN_T9,
         EN_QWERTY,
         EN_T9
-    }
-
-    private data class ModeState(
-        var isExpanded: Boolean = false,
-        var isSingleCharMode: Boolean = false,
-        var currentCandidates: ArrayList<Candidate> = ArrayList(),
-        var composingPreviewOverride: String? = null,
-        var enterCommitTextOverride: String? = null,
-        var pinyinSidebar: List<String> = emptyList()
-    )
-
-    private val states: MutableMap<ModeKey, ModeState> = mutableMapOf()
-
-    private fun isDebuggableApp(): Boolean {
-        return (ui.rootView.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     }
 
     private fun currentModeKey(): ModeKey {
@@ -57,24 +82,25 @@ class CandidateController(
         }
     }
 
-    private fun isChinese(key: ModeKey): Boolean =
-        key == ModeKey.CN_QWERTY || key == ModeKey.CN_T9
-
-    private fun useT9Layout(key: ModeKey): Boolean =
-        key == ModeKey.CN_T9 || key == ModeKey.EN_T9
-
-    private fun stateFor(key: ModeKey): ModeState =
-        states.getOrPut(key) { ModeState() }
-
-    private fun currentState(): ModeState = stateFor(currentModeKey())
-
     // Handler computed composing preview override (CN-Qwerty segmentation / CN-T9 preview line)
-    fun getComposingPreviewOverride(): String? = currentState().composingPreviewOverride
+    fun getComposingPreviewOverride(): String? {
+        return when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.getComposingPreviewOverride()
+            ModeKey.CN_T9 -> cnT9Engine.getComposingPreviewOverride()
+            ModeKey.EN_QWERTY -> enQwertyEngine.getComposingPreviewOverride()
+            ModeKey.EN_T9 -> enT9Engine.getComposingPreviewOverride()
+        }
+    }
 
     // Handler computed enter-commit override (CN-T9 preview letters commit)
-    fun getEnterCommitTextOverride(): String? = currentState().enterCommitTextOverride
-
-    private fun session(): ComposingSession = sessions.current()
+    fun getEnterCommitTextOverride(): String? {
+        return when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.getEnterCommitTextOverride()
+            ModeKey.CN_T9 -> cnT9Engine.getEnterCommitTextOverride()
+            ModeKey.EN_QWERTY -> enQwertyEngine.getEnterCommitTextOverride()
+            ModeKey.EN_T9 -> enT9Engine.getEnterCommitTextOverride()
+        }
+    }
 
     // --- UiStateActions ---
 
@@ -90,231 +116,84 @@ class CandidateController(
         toggleSingleCharModeInternal()
     }
 
-    // --- UI render helpers (centralized) ---
-
-    private fun renderFilterButton(st: ModeState) {
-        ui.setFilterButton(st.isSingleCharMode)
-    }
-
-    private fun renderIdleUi() {
-        ui.showIdleState()
-        // Ensure expand UI is reset in idle; showIdleState() does not reset expand arrow rotation.
-        ui.setExpanded(false, isComposing = false)
-        keyboardController.updateSidebar(emptyList())
-    }
-
-    private fun renderComposingUi(st: ModeState, out: ImeModeHandler.Output) {
-        renderFilterButton(st)
-
-        ui.showComposingState(isExpanded = st.isExpanded)
-        // Ensure expanded panel visibility + arrow rotation matches state for THIS mode.
-        ui.setExpanded(st.isExpanded, isComposing = true)
-
-        keyboardController.updateSidebar(out.pinyinSidebar)
-        ui.setCandidates(st.currentCandidates)
-    }
-
-    // --- Per-mode build paths (split) ---
-
-    private fun buildCnQwertyOutput(s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
-        return CnQwertyHandler.build(
-            session = s,
-            dictEngine = dictEngine,
-            singleCharMode = singleCharMode
-        )
-    }
-
-    private fun buildCnT9Output(s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
-        return CnT9Handler.build(
-            session = s,
-            dictEngine = dictEngine,
-            singleCharMode = singleCharMode
-        )
-    }
-
-    private fun buildEnQwertyOutput(s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
-        return EnQwertyHandler.build(
-            session = s,
-            dictEngine = dictEngine,
-            singleCharMode = singleCharMode
-        )
-    }
-
-    private fun buildEnT9Output(s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
-        return EnT9Handler.build(
-            session = s,
-            dictEngine = dictEngine,
-            singleCharMode = singleCharMode
-        )
-    }
-
-    private fun buildOutputForMode(key: ModeKey, s: ComposingSession, singleCharMode: Boolean): ImeModeHandler.Output {
-        return when (key) {
-            ModeKey.CN_QWERTY -> buildCnQwertyOutput(s, singleCharMode)
-            ModeKey.CN_T9 -> buildCnT9Output(s, singleCharMode)
-            ModeKey.EN_QWERTY -> buildEnQwertyOutput(s, singleCharMode)
-            ModeKey.EN_T9 -> buildEnT9Output(s, singleCharMode)
-        }
-    }
-
     // --- Public behaviors ---
 
     fun syncFilterButton() {
-        renderFilterButton(currentState())
+        when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.syncFilterButton()
+            ModeKey.CN_T9 -> cnT9Engine.syncFilterButton()
+            ModeKey.EN_QWERTY -> enQwertyEngine.syncFilterButton()
+            ModeKey.EN_T9 -> enT9Engine.syncFilterButton()
+        }
     }
 
     private fun toggleSingleCharModeInternal() {
-        val key = currentModeKey()
-        val st = stateFor(key)
-
-        st.isSingleCharMode = !st.isSingleCharMode
-        renderFilterButton(st)
-        updateCandidates()
+        when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.toggleSingleCharMode()
+            ModeKey.CN_T9 -> cnT9Engine.toggleSingleCharMode()
+            ModeKey.EN_QWERTY -> enQwertyEngine.toggleSingleCharMode()
+            ModeKey.EN_T9 -> enT9Engine.toggleSingleCharMode()
+        }
     }
 
     fun toggleExpand() {
-        val key = currentModeKey()
-        val st = stateFor(key)
-
-        st.isExpanded = !st.isExpanded
-        ui.setExpanded(st.isExpanded, session().isComposing())
-    }
-
-    private fun updateCandidatesForSnapshot(key: ModeKey, st: ModeState, s: ComposingSession) {
-        renderFilterButton(st)
-
-        st.currentCandidates.clear()
-
-        if (!s.isComposing()) {
-            st.composingPreviewOverride = null
-            st.enterCommitTextOverride = null
-            st.pinyinSidebar = emptyList()
-
-            if (st.isExpanded) {
-                st.isExpanded = false
-            }
-
-            renderIdleUi()
-            return
+        when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.toggleExpand()
+            ModeKey.CN_T9 -> cnT9Engine.toggleExpand()
+            ModeKey.EN_QWERTY -> enQwertyEngine.toggleExpand()
+            ModeKey.EN_T9 -> enT9Engine.toggleExpand()
         }
-
-        val out = buildOutputForMode(
-            key = key,
-            s = s,
-            singleCharMode = st.isSingleCharMode
-        )
-
-        st.composingPreviewOverride = out.composingPreviewText
-        st.enterCommitTextOverride = out.enterCommitText
-        st.pinyinSidebar = out.pinyinSidebar
-
-        st.currentCandidates = ArrayList(out.candidates)
-
-        renderComposingUi(st, out)
     }
 
     fun updateCandidates() {
-        val key = currentModeKey()
-        val st = stateFor(key)
-        val s = session()
-        updateCandidatesForSnapshot(key, st, s)
+        when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.updateCandidates()
+            ModeKey.CN_T9 -> cnT9Engine.updateCandidates()
+            ModeKey.EN_QWERTY -> enQwertyEngine.updateCandidates()
+            ModeKey.EN_T9 -> enT9Engine.updateCandidates()
+        }
     }
 
     fun handleSpaceKey() {
-        val st = currentState()
-        if (st.currentCandidates.isNotEmpty()) {
-            commitCandidateAt(0)
-        } else {
-            commitRaw(" ")
+        when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.handleSpaceKey()
+            ModeKey.CN_T9 -> cnT9Engine.handleSpaceKey()
+            ModeKey.EN_QWERTY -> enQwertyEngine.handleSpaceKey()
+            ModeKey.EN_T9 -> enT9Engine.handleSpaceKey()
         }
     }
 
     fun commitFirstCandidateOnEnter(): Boolean {
-        val st = currentState()
-        if (st.currentCandidates.isEmpty()) return false
-        commitCandidateAt(0)
-        return true
+        return when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.commitFirstCandidateOnEnter()
+            ModeKey.CN_T9 -> cnT9Engine.commitFirstCandidateOnEnter()
+            ModeKey.EN_QWERTY -> enQwertyEngine.commitFirstCandidateOnEnter()
+            ModeKey.EN_T9 -> enT9Engine.commitFirstCandidateOnEnter()
+        }
     }
 
     /**
-     * New: index-driven commit, used to decouple UI click from Candidate object identity.
+     * Index-driven commit (preferred).
      */
     fun commitCandidateAt(index: Int) {
-        if (keyboardController.isRawCommitMode()) {
-            val st = currentState()
-            if (index !in 0 until st.currentCandidates.size) return
-            commitRaw(st.currentCandidates[index].word)
-            clearComposing()
-            return
+        when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.commitCandidateAt(index)
+            ModeKey.CN_T9 -> cnT9Engine.commitCandidateAt(index)
+            ModeKey.EN_QWERTY -> enQwertyEngine.commitCandidateAt(index)
+            ModeKey.EN_T9 -> enT9Engine.commitCandidateAt(index)
         }
-
-        val key = currentModeKey()
-        val st = stateFor(key)
-        val s = session()
-        val useT9Layout = useT9Layout(key)
-        val isChinese = isChinese(key)
-
-        if (index !in 0 until st.currentCandidates.size) {
-            val msg = "Candidate index out of range: mode=$key, index=$index, size=${st.currentCandidates.size}"
-            if (isDebuggableApp()) {
-                Log.wtf("CandidateController", msg)
-                throw AssertionError(msg)
-            }
-            return
-        }
-
-        val cand = st.currentCandidates[index]
-        commitCandidateInSnapshot(key, st, s, useT9Layout, isChinese, cand)
     }
 
+    /**
+     * Backward-compatible: Candidate payload commit.
+     * (UI 已改为 index 驱动后，这个方法应尽量少用。)
+     */
     fun commitCandidate(cand: Candidate) {
-        if (keyboardController.isRawCommitMode()) {
-            commitRaw(cand.word)
-            clearComposing()
-            return
-        }
-
-        val key = currentModeKey()
-        val st = stateFor(key)
-        val s = session()
-        val useT9Layout = useT9Layout(key)
-        val isChinese = isChinese(key)
-
-        // Hard guard: candidate must come from current mode's list.
-        if (!st.currentCandidates.contains(cand)) {
-            val msg = "Candidate not in current mode list: mode=$key, cand=$cand, size=${st.currentCandidates.size}"
-            if (isDebuggableApp()) {
-                Log.wtf("CandidateController", msg)
-                throw AssertionError(msg)
-            }
-            return
-        }
-
-        commitCandidateInSnapshot(key, st, s, useT9Layout, isChinese, cand)
-    }
-
-    private fun commitCandidateInSnapshot(
-        key: ModeKey,
-        st: ModeState,
-        s: ComposingSession,
-        useT9Layout: Boolean,
-        isChinese: Boolean,
-        cand: Candidate
-    ) {
-        when (val r = s.pickCandidate(
-            cand,
-            useT9Layout,
-            isChinese
-        )) {
-            is ComposingSession.PickResult.Commit -> {
-                commitRaw(r.text)
-                clearComposing()
-            }
-
-            is ComposingSession.PickResult.Updated -> {
-                updateCandidatesForSnapshot(key, st, s)
-                updateComposingView()
-            }
+        when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine.commitCandidate(cand)
+            ModeKey.CN_T9 -> cnT9Engine.commitCandidate(cand)
+            ModeKey.EN_QWERTY -> enQwertyEngine.commitCandidate(cand)
+            ModeKey.EN_T9 -> enT9Engine.commitCandidate(cand)
         }
     }
 }
