@@ -146,6 +146,7 @@ class ImeActionDispatcher(
 
         val rawUiText = overrideText ?: displayText
 
+        // Important: do not post-process CN preview here; handler output should be displayed as-is.
         ui.setComposingPreview(rawUiText)
 
         if (shouldWriteComposingToEditor(mode)) {
@@ -373,8 +374,6 @@ class ImeActionDispatcher(
         currentEnglishStrategy()?.setEnglishPredictEnabled(enabled)
         afterSessionMutated()
     }
-
-
 
     override fun toggleEnglishPredict() {
         currentEnglishStrategy()?.toggleEnglishPredict()
