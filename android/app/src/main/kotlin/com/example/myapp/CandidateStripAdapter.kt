@@ -19,7 +19,7 @@ import com.example.myapp.dict.model.Candidate
 import kotlin.math.roundToInt
 
 class CandidateStripAdapter(
-    private val onItemClick: (Candidate) -> Unit
+    private val onItemClick: (Int) -> Unit
 ) : RecyclerView.Adapter<CandidateStripAdapter.ViewHolder>() {
 
     private val items = ArrayList<Candidate>()
@@ -34,6 +34,8 @@ class CandidateStripAdapter(
         items.addAll(newItems)
         notifyDataSetChanged()
     }
+
+    fun getItem(position: Int): Candidate? = items.getOrNull(position)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val ctx = parent.context
@@ -77,7 +79,12 @@ class CandidateStripAdapter(
         val isPrimary = position == 0
         tv.background = buildChipBackground(tv.context, isDark, isPrimary)
 
-        tv.setOnClickListener { onItemClick(candidate) }
+        tv.setOnClickListener {
+            val idx = holder.bindingAdapterPosition
+            if (idx != RecyclerView.NO_POSITION) {
+                onItemClick(idx)
+            }
+        }
     }
 
     override fun getItemCount(): Int = items.size

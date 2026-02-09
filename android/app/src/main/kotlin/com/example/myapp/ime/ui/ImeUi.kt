@@ -25,14 +25,9 @@ import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.prefs.KeyboardPrefs
 import java.util.WeakHashMap
 
-/**
- * 供 KeyboardController 直接 import 使用：
- * import com.example.myapp.ime.ui.FontApplier
- */
 object FontApplier {
     private val baseTextSizePx = WeakHashMap<TextView, Float>()
 
-    // NEW: 缓存 typeface，避免每次遍历 view 树都重复加载字体文件
     private val typefaceCache = HashMap<String, Typeface>()
 
     private fun resolveTypeface(view: View, spec: String): Typeface {
@@ -98,10 +93,8 @@ class ImeUi {
 
     private lateinit var btnToolFont: ImageButton
 
-    // 将预览文本交给 service 去“浮层显示”
     private var composingPreviewListener: ((String?) -> Unit)? = null
 
-    // 当前字体配置（由 FontController / KeyboardPrefs 驱动）
     private var currentFontFamily: String = "sans-serif-light"
     private var currentFontScale: Float = 1.0f
 
@@ -139,9 +132,34 @@ class ImeUi {
         })
     }
 
+    // Backward-compatible: old signature (Candidate payload).
     fun inflate(
         inflater: LayoutInflater,
         onCandidateClick: (Candidate) -> Unit
+    ): View {
+        return inflateInternal(
+            inflater = inflater,
+            onCandidateClick = onCandidateClick,
+            onCandidateIndexClick = null
+        )
+    }
+
+    // New: index-based click (preferred).
+    fun inflate(
+        inflater: LayoutInflater,
+        onCandidateIndexClick: (Int) -> Unit
+    ): View {
+        return inflateInternal(
+            inflater = inflater,
+            onCandidateClick = null,
+            onCandidateIndexClick = onCandidateIndexClick
+        )
+    }
+
+    private fun inflateInternal(
+        inflater: LayoutInflater,
+        onCandidateClick: ((Candidate) -> Unit)?,
+        onCandidateIndexClick: ((Int) -> Unit)?
     ): View {
         rootView = inflater.inflate(R.layout.imecontainer, null)
 
@@ -156,14 +174,23 @@ class ImeUi {
         btnFilter = rootView.findViewById(R.id.expandpanelfilter)
         btnToolFont = rootView.findViewById(R.id.btntoolfont)
 
-        // 直接引用资源图标
         btnToolFont.setImageResource(R.drawable.ic_tool_font)
 
         recyclerHorizontal = rootView.findViewById(R.id.recyclercandidateshorizontal)
         recyclerVertical = rootView.findViewById(R.id.recyclercandidatesvertical)
 
-        adapterHorizontal = CandidateStripAdapter { onCandidateClick(it) }
-        adapterVertical = CandidatePanelAdapter { onCandidateClick(it) }
+        adapterHorizontal = CandidateStripAdapter { index ->
+            onCandidateIndexClick?.invoke(index) ?: run {
+                val c = adapterHorizontal.getItem(index) ?: return@CandidateStripAdapter
+                onCandidateClick?.invoke(c)
+            }
+        }
+        adapterVertical = CandidatePanelAdapter { index ->
+            onCandidateIndexClick?.invoke(index) ?: run {
+                val c = adapterVertical.getItem(index) ?: return@CandidatePanelAdapter
+                onCandidateClick?.invoke(c)
+            }
+        }
 
         recyclerHorizontal.layoutManager =
             LinearLayoutManager(rootView.context, LinearLayoutManager.HORIZONTAL, false)

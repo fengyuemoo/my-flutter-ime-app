@@ -22,7 +22,7 @@ import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 class CandidatePanelAdapter(
-    private val onItemClick: (Candidate) -> Unit
+    private val onItemClick: (Int) -> Unit
 ) : RecyclerView.Adapter<CandidatePanelAdapter.ViewHolder>() {
 
     private val items = ArrayList<Candidate>()
@@ -45,6 +45,8 @@ class CandidatePanelAdapter(
         items.addAll(newItems)
         notifyDataSetChanged()
     }
+
+    fun getItem(position: Int): Candidate? = items.getOrNull(position)
 
     fun getSpanSize(
         position: Int,
@@ -144,7 +146,12 @@ class CandidatePanelAdapter(
             }
         }
 
-        tv.setOnClickListener { onItemClick(candidate) }
+        tv.setOnClickListener {
+            val idx = holder.bindingAdapterPosition
+            if (idx != RecyclerView.NO_POSITION) {
+                onItemClick(idx)
+            }
+        }
     }
 
     override fun getItemCount(): Int = items.size

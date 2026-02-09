@@ -223,7 +223,7 @@ class CandidateController(
     fun handleSpaceKey() {
         val st = currentState()
         if (st.currentCandidates.isNotEmpty()) {
-            commitCandidate(st.currentCandidates[0])
+            commitCandidateAt(0)
         } else {
             commitRaw(" ")
         }
@@ -232,8 +232,39 @@ class CandidateController(
     fun commitFirstCandidateOnEnter(): Boolean {
         val st = currentState()
         if (st.currentCandidates.isEmpty()) return false
-        commitCandidate(st.currentCandidates[0])
+        commitCandidateAt(0)
         return true
+    }
+
+    /**
+     * New: index-driven commit, used to decouple UI click from Candidate object identity.
+     */
+    fun commitCandidateAt(index: Int) {
+        if (keyboardController.isRawCommitMode()) {
+            val st = currentState()
+            if (index !in 0 until st.currentCandidates.size) return
+            commitRaw(st.currentCandidates[index].word)
+            clearComposing()
+            return
+        }
+
+        val key = currentModeKey()
+        val st = stateFor(key)
+        val s = session()
+        val useT9Layout = useT9Layout(key)
+        val isChinese = isChinese(key)
+
+        if (index !in 0 until st.currentCandidates.size) {
+            val msg = "Candidate index out of range: mode=$key, index=$index, size=${st.currentCandidates.size}"
+            if (isDebuggableApp()) {
+                Log.wtf("CandidateController", msg)
+                throw AssertionError(msg)
+            }
+            return
+        }
+
+        val cand = st.currentCandidates[index]
+        commitCandidateInSnapshot(key, st, s, useT9Layout, isChinese, cand)
     }
 
     fun commitCandidate(cand: Candidate) {
@@ -243,7 +274,6 @@ class CandidateController(
             return
         }
 
-        // Freeze everything needed for this commit path.
         val key = currentModeKey()
         val st = stateFor(key)
         val s = session()
@@ -260,6 +290,17 @@ class CandidateController(
             return
         }
 
+        commitCandidateInSnapshot(key, st, s, useT9Layout, isChinese, cand)
+    }
+
+    private fun commitCandidateInSnapshot(
+        key: ModeKey,
+        st: ModeState,
+        s: ComposingSession,
+        useT9Layout: Boolean,
+        isChinese: Boolean,
+        cand: Candidate
+    ) {
         when (val r = s.pickCandidate(
             cand,
             useT9Layout,
