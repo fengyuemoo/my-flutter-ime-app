@@ -1,10 +1,10 @@
 package com.example.myapp.ime.router
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.util.Log
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
-import com.example.myapp.BuildConfig
 import com.example.myapp.ime.candidate.CandidateController
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposeStrategy
@@ -17,33 +17,22 @@ import com.example.myapp.ime.ui.ImeUi
 /**
  * Centralized debug flags for IME refactor assertions/guards.
  *
- * All guards are forced OFF in release via BuildConfig.DEBUG.
+ * Note:
+ * - Do NOT depend on BuildConfig here (some builds may disable BuildConfig generation).
+ * - All guards are effectively OFF in release because debuggable flag is false.
  */
 internal object DebugFlags {
-    // Per-flag local switches (effective only in debug build).
-    private const val CN_PREVIEW_GUARD_DEBUG: Boolean = true
-    private const val MODE_SWITCH_ASSERT_DEBUG: Boolean = true
-    private const val CN_CLEAR_ASSERT_DEBUG: Boolean = true
-
-    private val DEBUG_BUILD: Boolean = BuildConfig.DEBUG
-
     /** Guard: CN composing preview can only be updated inside refreshComposingView(). */
-    val CN_PREVIEW_GUARD: Boolean = DEBUG_BUILD && CN_PREVIEW_GUARD_DEBUG
+    const val CN_PREVIEW_GUARD: Boolean = true
 
     /** Assert: after mode switch, old+new sessions must be cleared (B semantic). */
-    val MODE_SWITCH_ASSERT: Boolean = DEBUG_BUILD && MODE_SWITCH_ASSERT_DEBUG
+    const val MODE_SWITCH_ASSERT: Boolean = true
 
     /** Assert: after CN clearSessionAndEditorComposing(), session must not be composing. */
-    val CN_CLEAR_ASSERT: Boolean = DEBUG_BUILD && CN_CLEAR_ASSERT_DEBUG
+    const val CN_CLEAR_ASSERT: Boolean = true
 
-    /**
-     * Compatibility API: older call sites pass context; we ignore it and rely on BuildConfig.DEBUG.
-     * This guarantees release build returns false.
-     */
     fun isDebuggable(context: Context): Boolean {
-        @Suppress("UNUSED_PARAMETER")
-        val ignored = context
-        return DEBUG_BUILD
+        return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     }
 }
 
