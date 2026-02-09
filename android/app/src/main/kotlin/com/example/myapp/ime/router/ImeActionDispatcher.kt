@@ -1,28 +1,52 @@
 package com.example.myapp.ime.router
 
 import android.content.Context
-import android.content.pm.ApplicationInfo
-import android.util.Log
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.candidate.CandidateController
-import com.example.myapp.ime.compose.cn.qwerty.CnQwertyComposeStrategy
-import com.example.myapp.ime.compose.cn.t9.CnT9ComposeStrategy
-import com.example.myapp.ime.compose.common.ComposeStrategy
-import com.example.myapp.ime.compose.common.ComposingSession
+import com.example.myapp.ime.compose.cn.qwerty.CnQwertyInputEngine
+import com.example.myapp.ime.compose.cn.t9.CnT9InputEngine
 import com.example.myapp.ime.compose.common.ComposingSessionHub
-import com.example.myapp.ime.compose.common.EnglishComposeStrategy
-import com.example.myapp.ime.compose.common.PendingCommitStrategy
-import com.example.myapp.ime.compose.common.StrategyResult
-import com.example.myapp.ime.compose.en.qwerty.EnQwertyComposeStrategy
-import com.example.myapp.ime.compose.en.t9.EnT9ComposeStrategy
+import com.example.myapp.ime.compose.en.qwerty.EnQwertyInputEngine
+import com.example.myapp.ime.compose.en.t9.EnT9InputEngine
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.keyboard.model.PanelState
 import com.example.myapp.ime.prefs.SymbolPrefs
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.keyboard.core.PanelType
+
+/**
+ * Mode input engine abstraction (4 engines live in 4 mode files).
+ */
+abstract class ModeInputEngine {
+    abstract fun refreshCandidates()
+    abstract fun refreshComposingView()
+
+    abstract fun clearComposing()
+
+    abstract fun handleComposingInput(text: String)
+    abstract fun handleT9Input(digit: String)
+    abstract fun onPinyinSidebarClick(pinyin: String)
+    abstract fun handleBackspace()
+
+    abstract fun handleSpaceKey()
+
+    /**
+     * @return true if consumed (handled), false to fallback to editor Enter key event.
+     */
+    abstract fun handleEnter(ic: InputConnection?): Boolean
+
+    abstract fun beforeModeSwitch()
+    abstract fun afterModeSwitch()
+
+    abstract fun getEnglishPredictEnabled(): Boolean
+    abstract fun setEnglishPredict(enabled: Boolean)
+    fun toggleEnglishPredict() = setEnglishPredict(!getEnglishPredictEnabled())
+
+    abstract fun syncEnglishPredictUi()
+}
 
 class ImeActionDispatcher(
     private val context: Context,
@@ -38,6 +62,15 @@ class ImeActionDispatcher(
     private var symbolPage: Int = 0
     private var symbolLocked: Boolean = false
 
+    private lateinit var cnQwertyEngine: ModeInputEngine
+    private lateinit var cnT9Engine: ModeInputEngine
+    private lateinit var enQwertyEngine: ModeInputEngine
+    private lateinit var enT9Engine: ModeInputEngine
+
+    private fun enginesReady(): Boolean =
+        ::ui.isInitialized && ::keyboardController.isInitialized && ::candidateController.isInitialized &&
+            ::cnQwertyEngine.isInitialized
+
     private fun mainMode(): KeyboardMode {
         if (!::keyboardController.isInitialized) {
             return KeyboardMode(isChinese = true, useT9Layout = false)
@@ -45,61 +78,31 @@ class ImeActionDispatcher(
         return keyboardController.getMainMode()
     }
 
-    /**
-     * Strong-isolation: NEVER use sessions.current().
-     * Always pick the fixed session by current main mode.
-     */
-    private fun currentSession(): ComposingSession {
+    private enum class ModeKey {
+        CN_QWERTY, CN_T9, EN_QWERTY, EN_T9
+    }
+
+    private fun currentModeKey(): ModeKey {
         val mode = mainMode()
         return when {
-            mode.isChinese && !mode.useT9Layout -> sessions.cnQwerty
-            mode.isChinese && mode.useT9Layout -> sessions.cnT9
-            !mode.isChinese && !mode.useT9Layout -> sessions.enQwerty
-            else -> sessions.enT9
+            mode.isChinese && !mode.useT9Layout -> ModeKey.CN_QWERTY
+            mode.isChinese && mode.useT9Layout -> ModeKey.CN_T9
+            !mode.isChinese && !mode.useT9Layout -> ModeKey.EN_QWERTY
+            else -> ModeKey.EN_T9
         }
     }
 
-    private val cnQwertyStrategy: ComposeStrategy =
-        CnQwertyComposeStrategy(
-            sessionProvider = { sessions.cnQwerty }
-        )
-
-    private val cnT9Strategy: ComposeStrategy =
-        CnT9ComposeStrategy(
-            sessionProvider = { sessions.cnT9 },
-            enterCommitProvider = {
-                if (::candidateController.isInitialized) {
-                    candidateController.getEnterCommitTextOverride()
-                } else {
-                    null
-                }
-            }
-        )
-
-    private val enQwertyStrategy: ComposeStrategy =
-        EnQwertyComposeStrategy(
-            sessionProvider = { sessions.enQwerty },
-            inputConnectionProvider = { inputConnectionProvider() }
-        )
-
-    private val enT9Strategy: ComposeStrategy =
-        EnT9ComposeStrategy(
-            sessionProvider = { sessions.enT9 },
-            inputConnectionProvider = { inputConnectionProvider() }
-        )
-
-    private fun currentStrategy(): ComposeStrategy {
-        val mode = mainMode()
-        return when {
-            mode.isChinese && !mode.useT9Layout -> cnQwertyStrategy
-            mode.isChinese && mode.useT9Layout -> cnT9Strategy
-            !mode.isChinese && !mode.useT9Layout -> enQwertyStrategy
-            else -> enT9Strategy
+    private fun currentEngineOrNull(): ModeInputEngine? {
+        if (!enginesReady()) return null
+        return when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> cnQwertyEngine
+            ModeKey.CN_T9 -> cnT9Engine
+            ModeKey.EN_QWERTY -> enQwertyEngine
+            ModeKey.EN_T9 -> enT9Engine
         }
     }
 
-    private fun currentEnglishStrategy(): EnglishComposeStrategy? =
-        currentStrategy() as? EnglishComposeStrategy
+    private fun currentEngine(): ModeInputEngine = requireNotNull(currentEngineOrNull())
 
     fun attach(
         ui: ImeUi,
@@ -114,18 +117,45 @@ class ImeActionDispatcher(
         @Suppress("UNUSED_PARAMETER")
         val ignored = onToolbarUpdate
 
+        // Build 4 engines (each binds its fixed session).
+        cnQwertyEngine = CnQwertyInputEngine(
+            context = context,
+            ui = ui,
+            keyboardController = keyboardController,
+            candidateController = candidateController,
+            session = sessions.cnQwerty,
+            inputConnectionProvider = { inputConnectionProvider() }
+        )
+        cnT9Engine = CnT9InputEngine(
+            context = context,
+            ui = ui,
+            keyboardController = keyboardController,
+            candidateController = candidateController,
+            session = sessions.cnT9,
+            inputConnectionProvider = { inputConnectionProvider() }
+        )
+        enQwertyEngine = EnQwertyInputEngine(
+            ui = ui,
+            keyboardController = keyboardController,
+            candidateController = candidateController,
+            session = sessions.enQwerty,
+            inputConnectionProvider = { inputConnectionProvider() }
+        )
+        enT9Engine = EnT9InputEngine(
+            ui = ui,
+            keyboardController = keyboardController,
+            candidateController = candidateController,
+            session = sessions.enT9,
+            inputConnectionProvider = { inputConnectionProvider() }
+        )
+
         keyboardController.onKeyboardChanged = {
-            syncEnglishPredictUi()
+            currentEngineOrNull()?.syncEnglishPredictUi()
             syncSymbolPanelUi()
         }
 
-        syncEnglishPredictUi()
+        currentEngineOrNull()?.syncEnglishPredictUi()
         syncSymbolPanelUi()
-    }
-
-    private fun syncEnglishPredictUi() {
-        if (!::keyboardController.isInitialized) return
-        keyboardController.updateEnglishPredictUi(getEnglishPredictEnabled())
     }
 
     private fun syncSymbolPanelUi() {
@@ -140,178 +170,73 @@ class ImeActionDispatcher(
         }
     }
 
-    private fun shouldWriteComposingToEditor(mode: KeyboardMode): Boolean {
-        return !mode.isChinese
-    }
-
-    // --- CN composing preview guard ---
-
-    private val ENABLE_CN_PREVIEW_GUARD: Boolean = true
-    private var inRefreshComposingView: Boolean = false
-
-    private fun isDebuggableApp(): Boolean {
-        return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    }
-
-    private fun setComposingPreviewSafely(text: String?, from: String) {
-        if (!::ui.isInitialized) return
-
-        val mode = mainMode()
-
-        if (ENABLE_CN_PREVIEW_GUARD && isDebuggableApp() && mode.isChinese && text != null && !inRefreshComposingView) {
-            val msg = "CN composing preview updated outside refreshComposingView: from=$from, text=$text"
-            Log.wtf("ImeActionDispatcher", msg)
-            throw AssertionError(msg)
-        }
-
-        ui.setComposingPreview(text)
-    }
+    // --- External refresh API ---
 
     fun refreshComposingView() {
-        if (!::ui.isInitialized) return
-
-        val mode = mainMode()
-        val ic = inputConnection()
-
-        val displayText = currentSession().displayText(mode.useT9Layout)
-
-        if (displayText.isNullOrEmpty()) {
-            setComposingPreviewSafely(null, from = "refreshComposingView-empty")
-            ic?.setComposingText("", 0)
-            return
-        }
-
-        val overrideText =
-            if (mode.isChinese && ::candidateController.isInitialized) {
-                candidateController.getComposingPreviewOverride()
-            } else {
-                null
-            }
-
-        val rawUiText = overrideText ?: displayText
-
-        inRefreshComposingView = true
-        try {
-            setComposingPreviewSafely(rawUiText, from = "refreshComposingView")
-        } finally {
-            inRefreshComposingView = false
-        }
-
-        if (shouldWriteComposingToEditor(mode)) {
-            ic?.setComposingText(displayText, 1)
-        }
+        currentEngineOrNull()?.refreshComposingView()
     }
 
     fun refreshCandidates() {
-        if (!::candidateController.isInitialized) return
-        candidateController.updateCandidates()
+        currentEngineOrNull()?.refreshCandidates()
     }
 
-    private fun afterSessionMutated() {
-        refreshCandidates()
-        refreshComposingView()
-        syncEnglishPredictUi()
-    }
+    // --- ImeActions ---
 
     override fun inputConnection(): InputConnection? = inputConnectionProvider()
 
-    private fun clearCurrentSessionAndEditorComposing() {
-        currentSession().clear()
-        setComposingPreviewSafely(null, from = "clearCurrentSessionAndEditorComposing")
-        inputConnection()?.setComposingText("", 0)
-    }
-
-    private fun afterCommitOrClear() {
-        refreshCandidates()
-        syncEnglishPredictUi()
-    }
-
-    private fun commitAndReset(text: String) {
-        inputConnection()?.commitText(text, 1)
-        clearCurrentSessionAndEditorComposing()
-        afterCommitOrClear()
-    }
-
-    private fun clearAndReset() {
-        clearCurrentSessionAndEditorComposing()
-        afterCommitOrClear()
+    override fun clearComposing() {
+        currentEngineOrNull()?.clearComposing()
     }
 
     override fun handleComposingInput(text: String) {
-        val result = currentStrategy().onComposingInput(text)
-        handleStrategyResult(result)
+        currentEngineOrNull()?.handleComposingInput(text)
     }
 
     override fun handleT9Input(digit: String) {
-        val result = currentStrategy().onT9Input(digit)
-        handleStrategyResult(result)
+        currentEngineOrNull()?.handleT9Input(digit)
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
-        beforeModeSwitch()
-
-        currentStrategy().onPinyinSidebarClick(pinyin)
-        afterSessionMutated()
+        val engine = currentEngineOrNull() ?: return
+        engine.beforeModeSwitch()
+        engine.onPinyinSidebarClick(pinyin)
     }
 
     override fun commitText(text: String) {
-        commitAndReset(text)
-    }
-
-    override fun clearComposing() {
-        clearAndReset()
+        inputConnectionProvider()?.commitText(text, 1)
+        currentEngineOrNull()?.clearComposing()
     }
 
     override fun handleSpaceKey() {
-        beforeModeSwitch()
-
-        val strategy = currentStrategy()
-        if (strategy !is EnglishComposeStrategy || strategy.isPredicting()) {
-            if (::candidateController.isInitialized) {
-                candidateController.handleSpaceKey()
-            } else {
-                inputConnection()?.commitText(" ", 1)
-            }
-        } else {
-            inputConnection()?.commitText(" ", 1)
+        val engine = currentEngineOrNull() ?: run {
+            inputConnectionProvider()?.commitText(" ", 1)
+            return
         }
+        engine.beforeModeSwitch()
+        engine.handleSpaceKey()
     }
 
     override fun handleBackspace() {
-        val strategy = currentStrategy()
-        if ((strategy as? PendingCommitStrategy)?.handleBackspaceInOwnBuffer(inputConnection()) == true) {
-            return
+        currentEngineOrNull()?.handleBackspace() ?: run {
+            val ic = inputConnectionProvider() ?: return
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
         }
-
-        val consumedBySession = currentSession().backspace(mainMode().useT9Layout)
-        if (consumedBySession) {
-            if (!currentSession().isComposing()) {
-                clearComposing()
-            } else {
-                afterSessionMutated()
-            }
-            return
-        }
-
-        val ic = inputConnection() ?: return
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
     }
 
     override fun handleSpecialKey(keyLabel: String) {
-        beforeModeSwitch()
+        val engine = currentEngineOrNull() ?: return
+
+        engine.beforeModeSwitch()
 
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
-            val result = currentStrategy().onEnter(inputConnection())
-            if (result !is StrategyResult.Noop) {
-                handleStrategyResult(result)
-                return
+            val consumed = engine.handleEnter(inputConnectionProvider())
+            if (!consumed) {
+                val ic = inputConnectionProvider() ?: return
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
             }
-
-            val ic = inputConnection() ?: return
-            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
             return
         }
 
@@ -321,47 +246,70 @@ class ImeActionDispatcher(
     }
 
     override fun switchToEnglishMode() {
-        beforeModeSwitch()
-        clearComposing()
+        val oldEngine = currentEngineOrNull()
+        oldEngine?.beforeModeSwitch()
+        // B: switching clears composing (clear old + clear new).
+        oldEngine?.clearComposing()
+
         if (!::keyboardController.isInitialized) return
         keyboardController.setLanguage(false)
-        refreshCandidates()
-        syncEnglishPredictUi()
+
+        val newEngine = currentEngineOrNull()
+        newEngine?.clearComposing()
+        newEngine?.afterModeSwitch()
+
+        syncSymbolPanelUi()
     }
 
     override fun switchToChineseMode() {
-        beforeModeSwitch()
-        clearComposing()
+        val oldEngine = currentEngineOrNull()
+        oldEngine?.beforeModeSwitch()
+        // B: switching clears composing (clear old + clear new).
+        oldEngine?.clearComposing()
+
         if (!::keyboardController.isInitialized) return
         keyboardController.setLanguage(true)
-        refreshCandidates()
-        syncEnglishPredictUi()
+
+        val newEngine = currentEngineOrNull()
+        newEngine?.clearComposing()
+        newEngine?.afterModeSwitch()
+
+        syncSymbolPanelUi()
     }
 
     override fun switchToNumericMode() {
-        beforeModeSwitch()
+        val engine = currentEngineOrNull()
+        engine?.beforeModeSwitch()
+
         if (!::keyboardController.isInitialized) return
         keyboardController.openPanel(PanelType.NUMERIC)
-        syncEnglishPredictUi()
+
+        engine?.syncEnglishPredictUi()
     }
 
     override fun openSymbolPanel() {
-        beforeModeSwitch()
+        val engine = currentEngineOrNull()
+        engine?.beforeModeSwitch()
+
         if (!::keyboardController.isInitialized) return
 
         symbolCategory = ImeActions.SymbolCategory.COMMON
         symbolPage = 0
 
         keyboardController.openPanel(PanelType.SYMBOL)
-        syncEnglishPredictUi()
+
+        engine?.syncEnglishPredictUi()
         syncSymbolPanelUi()
     }
 
     override fun closeSymbolPanel() {
-        beforeModeSwitch()
+        val engine = currentEngineOrNull()
+        engine?.beforeModeSwitch()
+
         if (!::keyboardController.isInitialized) return
         keyboardController.closePanel()
-        syncEnglishPredictUi()
+
+        engine?.syncEnglishPredictUi()
     }
 
     override fun exitNumericMode() {
@@ -392,7 +340,7 @@ class ImeActionDispatcher(
     override fun commitSymbolFromPanel(symbol: String) {
         SymbolPrefs.recordMruCommon(context, symbol)
 
-        commitAndReset(symbol)
+        commitText(symbol)
 
         if (!symbolLocked) {
             closeSymbolPanel()
@@ -402,57 +350,14 @@ class ImeActionDispatcher(
     }
 
     override fun getEnglishPredictEnabled(): Boolean {
-        return currentEnglishStrategy()?.getEnglishPredictEnabled() ?: false
+        return currentEngineOrNull()?.getEnglishPredictEnabled() ?: false
     }
 
     override fun setEnglishPredict(enabled: Boolean) {
-        currentEnglishStrategy()?.setEnglishPredictEnabled(enabled)
-        afterSessionMutated()
+        currentEngineOrNull()?.setEnglishPredict(enabled)
     }
 
     override fun toggleEnglishPredict() {
-        currentEnglishStrategy()?.toggleEnglishPredict()
-        afterSessionMutated()
-    }
-
-    private fun handleStrategyResult(result: StrategyResult) {
-        when (result) {
-            is StrategyResult.SessionMutated -> afterSessionMutated()
-
-            is StrategyResult.DirectCommit -> {
-                commitText(result.text)
-            }
-
-            is StrategyResult.ComposingUpdate -> {
-                val mode = mainMode()
-
-                if (mode.isChinese) {
-                    refreshCandidates()
-                    refreshComposingView()
-                    return
-                }
-
-                val uiText = result.composingText
-                setComposingPreviewSafely(uiText, from = "handleStrategyResult-ComposingUpdate")
-
-                if (shouldWriteComposingToEditor(mode)) {
-                    inputConnection()?.setComposingText(result.composingText, 1)
-                }
-
-                refreshCandidates()
-            }
-
-            is StrategyResult.Noop -> {
-                /* Do nothing */
-            }
-        }
-    }
-
-    private fun beforeModeSwitch() {
-        val strategy = currentStrategy()
-        if (strategy is PendingCommitStrategy) {
-            val result = strategy.flushPendingCommit()
-            handleStrategyResult(result)
-        }
+        currentEngineOrNull()?.toggleEnglishPredict()
     }
 }
