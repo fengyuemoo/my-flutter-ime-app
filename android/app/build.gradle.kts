@@ -158,8 +158,18 @@ val checkComposeIsolation = tasks.register("checkComposeIsolation") {
     }
 }
 
-// 确保在编译前先生成 + 做隔离校验
+// 只在 Debug / CI 启用隔离校验（Release 默认不做扫描）
+val enableComposeIsolationCheck: Boolean = run {
+    val isCi = (System.getenv("CI") ?: "").equals("true", ignoreCase = true)
+    val taskNames = gradle.startParameter.taskNames
+    val isDebugRequested = taskNames.any { it.contains("debug", ignoreCase = true) }
+    isCi || isDebugRequested
+}
+
+// 确保在编译前先生成；隔离校验仅在 Debug/CI 启用
 tasks.named("preBuild") {
     dependsOn(generateDictDbBuildInfo)
-    dependsOn(checkComposeIsolation)
+    if (enableComposeIsolationCheck) {
+        dependsOn(checkComposeIsolation)
+    }
 }
