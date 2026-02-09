@@ -122,7 +122,7 @@ class ImeGraph(
 
             keyboardController.themeModeProvider = { themeController.themeMode }
 
-            // NEW: let keyboard refresh EN predict UI by itself when switching keyboards
+            // let keyboard refresh EN predict UI by itself when switching keyboards
             keyboardController.englishPredictEnabledProvider = { dispatcher.getEnglishPredictEnabled() }
 
             val layoutController = LayoutController(
@@ -149,14 +149,15 @@ class ImeGraph(
                 ui.applySavedFontNow()
             }
 
-            // 11) UI binder
+            // 11) UI binder（新增：传入 keyboardController，才能判断中英模式）
             val uiBinder = ImeUiBinder(
                 rootView = rootView,
                 ui = ui,
                 imeActions = dispatcher as ImeActions,
                 uiStateActions = candidateController,
                 layoutController = layoutController,
-                fontController = fontController
+                fontController = fontController,
+                keyboardController = keyboardController
             )
 
             // 初始化时也应用一次已保存字体/字号
