@@ -24,6 +24,8 @@ class ImeActionDispatcher(
     private val inputConnectionProvider: () -> InputConnection?
 ) : ImeActions {
 
+    private val debuggableApp: Boolean = DebugFlags.isDebuggable(context)
+
     private lateinit var ui: ImeUi
     private lateinit var keyboardController: KeyboardController
     private lateinit var candidateController: CandidateController
@@ -55,7 +57,7 @@ class ImeActionDispatcher(
     }
 
     private fun assertSessionCleared(mode: KeyboardMode, from: String) {
-        if (!DebugFlags.MODE_SWITCH_ASSERT || !DebugFlags.isDebuggable(context)) return
+        if (!DebugFlags.MODE_SWITCH_ASSERT || !debuggableApp) return
 
         val s = sessionByMode(mode)
         val display = s.displayText(mode.useT9Layout)

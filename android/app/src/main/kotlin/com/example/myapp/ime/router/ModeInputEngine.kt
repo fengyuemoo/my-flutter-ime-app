@@ -86,12 +86,13 @@ abstract class CnBaseInputEngine(
     private val strategy: ComposeStrategy
 ) : ModeInputEngine() {
 
+    private val debuggableApp: Boolean = DebugFlags.isDebuggable(context)
     private var inRefreshComposingView: Boolean = false
 
     private fun setComposingPreviewSafely(text: String?, from: String) {
         if (
             DebugFlags.CN_PREVIEW_GUARD &&
-            DebugFlags.isDebuggable(context) &&
+            debuggableApp &&
             text != null &&
             !inRefreshComposingView
         ) {
@@ -124,7 +125,7 @@ abstract class CnBaseInputEngine(
         setComposingPreviewSafely(null, from = "clearSessionAndEditorComposing")
         inputConnectionProvider()?.setComposingText("", 0)
 
-        if (DebugFlags.CN_CLEAR_ASSERT && DebugFlags.isDebuggable(context)) {
+        if (DebugFlags.CN_CLEAR_ASSERT && debuggableApp) {
             check(!session.isComposing()) {
                 "CN session must be cleared after clearSessionAndEditorComposing()"
             }
