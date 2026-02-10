@@ -10,13 +10,13 @@ import com.example.myapp.R
 import com.example.myapp.SidePinyinAdapter
 import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.keyboard.core.BaseKeyboard
-import com.example.myapp.keyboard.core.PinyinSidebarHost
+import com.example.myapp.keyboard.core.ISidebarHost
 import com.example.myapp.keyboard.core.T9Mode
 
 class CnT9Keyboard(
     context: Context,
     ime: ImeActions
-) : BaseKeyboard(context, ime, R.layout.kbd_t9_cn), PinyinSidebarHost, T9Mode {
+) : BaseKeyboard(context, ime, R.layout.kbd_t9_cn), ISidebarHost, T9Mode {
 
     private val recyclerSidebar: RecyclerView =
         rootView.findViewById(R.id.recyclert9pinyinsidebar)
@@ -34,7 +34,7 @@ class CnT9Keyboard(
     }
 
     override fun onActivate() {
-        updatePinyinSidebar(emptyList())
+        updateSideBar(emptyList())
 
         rootView.findViewById<Button>(R.id.t9btnlang)?.text = "中"
         rootView.findViewById<Button>(R.id.t9btnengpredict)?.visibility = View.GONE
@@ -45,7 +45,12 @@ class CnT9Keyboard(
         rootView.findViewById<Button>(R.id.t9puncexclaim)?.text = "！"
     }
 
-    override fun updatePinyinSidebar(pinyins: List<String>) {
+    override fun updateSideBar(items: List<String>) {
+        // CN-T9 sidebar items are pinyin segments / initials / letters
+        updatePinyinSidebarInternal(items)
+    }
+
+    private fun updatePinyinSidebarInternal(pinyins: List<String>) {
         if (pinyins.isEmpty()) {
             recyclerSidebar.visibility = View.GONE
             puncSidebar.visibility = View.VISIBLE
