@@ -10,16 +10,28 @@ class ComposingSession {
     private var _qwertyInput = ""
     private var _committedPrefix = ""
 
+    // CN-T9: 手动切分点（位置是“rawT9Digits 的 index”，范围 1..len-1 有意义）
+    private val _t9ManualCuts = HashSet<Int>()
+
     val pinyinStack: List<String> get() = _pinyinStack
     val rawT9Digits: String get() = _rawT9Digits
     val qwertyInput: String get() = _qwertyInput
     val committedPrefix: String get() = _committedPrefix
 
+    // Sorted snapshot for handler preview.
+    val t9ManualCuts: List<Int> get() = _t9ManualCuts.toList().sorted()
+
     private sealed class PickRecord {
         data class Qwerty(val word: String, val consumedPrefix: String) : PickRecord()
         data class Apostrophe(val word: String, val consumedParts: List<String>) : PickRecord()
         data class T9(val word: String, val consumedPinyins: List<String>) : PickRecord()
-        data class T9Digits(val word: String, val consumedDigits: String) : PickRecord()
+
+        // NEW: 记录被消费掉的 digits 前缀，以及被消费掉/移除的切分点，便于 undo 恢复
+        data class T9Digits(
+            val word: String,
+            val consumedDigits: String,
+            val consumedCuts: List<Int>
+        ) : PickRecord()
     }
 
     private val pickHistory = ArrayList<PickRecord>()
@@ -34,14 +46,15 @@ class ComposingSession {
         _rawT9Digits = ""
         _qwertyInput = ""
         _committedPrefix = ""
+        _t9ManualCuts.clear()
         pickHistory.clear()
     }
 
     fun isComposing(): Boolean {
         return _committedPrefix.isNotEmpty()
-                || _pinyinStack.isNotEmpty()
-                || _rawT9Digits.isNotEmpty()
-                || _qwertyInput.isNotEmpty()
+            || _pinyinStack.isNotEmpty()
+            || _rawT9Digits.isNotEmpty()
+            || _qwertyInput.isNotEmpty()
     }
 
     fun appendQwerty(text: String) {
@@ -50,12 +63,80 @@ class ComposingSession {
 
     fun appendT9Digit(digit: String) {
         _rawT9Digits += digit
+        // digits 在末尾追加，不需要调整 cuts（cuts 是 index，含义不变）
+    }
+
+    /**
+     * CN-T9: 在“已输入 digits 的末尾”插入一个切分点。
+     * 不选拼音，不消费 digits。
+     */
+    fun insertT9ManualCutAtEnd() {
+        val len = _rawT9Digits.length
+        if (len <= 0) return
+        // cut at end is meaningless; but storing it doesn't help, so ignore.
+        // We store only 1..len-1; however user presses at end, so we store `len`,
+        // and handler will treat it as boundary between previous segment and future input.
+        // For now, store it; it will become an interior cut after next digit arrives.
+        _t9ManualCuts.add(len)
+    }
+
+    private fun trimCutsToLength(newLen: Int) {
+        if (_t9ManualCuts.isEmpty()) return
+        val it = _t9ManualCuts.iterator()
+        while (it.hasNext()) {
+            val p = it.next()
+            if (p > newLen) it.remove()
+        }
+    }
+
+    /**
+     * Consume digits prefix (len) => shift all remaining cut positions left by len.
+     * Return all cuts removed (<= len) so undo can restore.
+     */
+    private fun consumeDigitsPrefixForCuts(len: Int): List<Int> {
+        if (len <= 0 || _t9ManualCuts.isEmpty()) return emptyList()
+
+        val removed = ArrayList<Int>()
+        val remain = HashSet<Int>(_t9ManualCuts.size)
+
+        for (p in _t9ManualCuts) {
+            if (p <= len) {
+                removed.add(p)
+            } else {
+                remain.add(p - len)
+            }
+        }
+
+        _t9ManualCuts.clear()
+        _t9ManualCuts.addAll(remain)
+        return removed
+    }
+
+    /**
+     * Prepend digits prefix (len) during undo => shift existing cuts right by len, then restore removed cuts.
+     */
+    private fun restoreCutsOnPrepend(len: Int, restoredCuts: List<Int>) {
+        if (len <= 0 && restoredCuts.isEmpty()) return
+
+        val shifted = HashSet<Int>(_t9ManualCuts.size + restoredCuts.size)
+        for (p in _t9ManualCuts) shifted.add(p + len)
+        for (p in restoredCuts) shifted.add(p)
+
+        _t9ManualCuts.clear()
+        _t9ManualCuts.addAll(shifted)
     }
 
     fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         _pinyinStack.add(pinyin.lowercase())
+
+        val consume = t9Code.length
+        if (consume > 0) {
+            consumeDigitsPrefixForCuts(consume)
+        }
+
         _rawT9Digits =
-            if (_rawT9Digits.length >= t9Code.length) _rawT9Digits.substring(t9Code.length) else ""
+            if (_rawT9Digits.length >= consume) _rawT9Digits.substring(consume) else ""
+        trimCutsToLength(_rawT9Digits.length)
     }
 
     private fun repLetter(d: Char): String {
@@ -67,8 +148,6 @@ class ComposingSession {
         if (!isComposing()) return null
 
         if (!useT9Layout) {
-            // 非 T9：session 只输出 committedPrefix + raw qwertyInput。
-            // CN-Qwerty 的分词预览由 handler 输出 -> CandidateController override -> Dispatcher 决定显示。
             val sb = StringBuilder()
             sb.append(_committedPrefix)
             sb.append(_qwertyInput)
@@ -104,8 +183,12 @@ class ComposingSession {
         if (!useT9Layout) {
             if (_qwertyInput.isNotEmpty()) _qwertyInput = _qwertyInput.dropLast(1)
         } else {
-            if (_rawT9Digits.isNotEmpty()) _rawT9Digits = _rawT9Digits.dropLast(1)
-            else if (_pinyinStack.isNotEmpty()) _pinyinStack.removeAt(_pinyinStack.size - 1)
+            if (_rawT9Digits.isNotEmpty()) {
+                _rawT9Digits = _rawT9Digits.dropLast(1)
+                trimCutsToLength(_rawT9Digits.length)
+            } else if (_pinyinStack.isNotEmpty()) {
+                _pinyinStack.removeAt(_pinyinStack.size - 1)
+            }
         }
 
         return true
@@ -135,9 +218,12 @@ class ComposingSession {
 
             val consumeDigits = cand.input.length.coerceAtLeast(1).coerceAtMost(_rawT9Digits.length)
             val consumedDigits = _rawT9Digits.substring(0, consumeDigits)
-            _rawT9Digits = _rawT9Digits.substring(consumeDigits)
 
-            pickHistory.add(PickRecord.T9Digits(cand.word, consumedDigits))
+            val consumedCuts = consumeDigitsPrefixForCuts(consumeDigits)
+            _rawT9Digits = _rawT9Digits.substring(consumeDigits)
+            trimCutsToLength(_rawT9Digits.length)
+
+            pickHistory.add(PickRecord.T9Digits(cand.word, consumedDigits, consumedCuts))
 
             return if (_pinyinStack.isEmpty() && _rawT9Digits.isEmpty()) {
                 PickResult.Commit(_committedPrefix)
@@ -210,7 +296,12 @@ class ComposingSession {
             }
 
             is PickRecord.T9 -> _pinyinStack.addAll(0, last.consumedPinyins)
-            is PickRecord.T9Digits -> _rawT9Digits = last.consumedDigits + _rawT9Digits
+
+            is PickRecord.T9Digits -> {
+                _rawT9Digits = last.consumedDigits + _rawT9Digits
+                restoreCutsOnPrepend(last.consumedDigits.length, last.consumedCuts)
+                trimCutsToLength(_rawT9Digits.length)
+            }
         }
     }
 

@@ -54,7 +54,11 @@ object CnT9Handler : ImeModeHandler {
 
         val t9PreviewText =
             if (session.rawT9Digits.isNotEmpty()) {
-                T9PreviewBuilder.buildPreview(session.rawT9Digits, finalList)
+                T9PreviewBuilder.buildPreview(
+                    digits = session.rawT9Digits,
+                    candidates = finalList,
+                    manualCuts = session.t9ManualCuts
+                )
             } else {
                 null
             }
@@ -213,7 +217,11 @@ object CnT9Handler : ImeModeHandler {
             return parts.joinToString("'")
         }
 
-        fun buildPreview(digits: String, candidates: List<Candidate>): String? {
+        fun buildPreview(
+            digits: String,
+            candidates: List<Candidate>,
+            manualCuts: List<Int>
+        ): String? {
             if (digits.isEmpty()) return null
 
             if (digits.length == 1) {
@@ -242,7 +250,30 @@ object CnT9Handler : ImeModeHandler {
                 }
             }
 
-            return segmentLettersForUi(prefixLetters)
+            val cuts = manualCuts
+                .asSequence()
+                .filter { it in 1 until prefixLetters.length }
+                .distinct()
+                .sorted()
+                .toList()
+
+            if (cuts.isEmpty()) {
+                return segmentLettersForUi(prefixLetters)
+            }
+
+            val parts = ArrayList<String>()
+            var prev = 0
+            for (c in cuts) {
+                val seg = prefixLetters.substring(prev, c)
+                val ui = segmentLettersForUi(seg)
+                if (ui.isNotEmpty()) parts.add(ui)
+                prev = c
+            }
+            val tail = prefixLetters.substring(prev)
+            val uiTail = segmentLettersForUi(tail)
+            if (uiTail.isNotEmpty()) parts.add(uiTail)
+
+            return parts.joinToString("'")
         }
 
         fun normalizePreviewLetters(previewText: String): String {

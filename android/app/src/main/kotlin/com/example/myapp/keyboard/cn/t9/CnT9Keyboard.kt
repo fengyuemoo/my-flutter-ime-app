@@ -61,11 +61,12 @@ class CnT9Keyboard(
         when (button.id) {
             R.id.t9btnlang -> ime.switchToEnglishMode()
 
-            // 你之前的 openPanel(PanelType.xxx) 改成 ImeActions 的标准接口
             R.id.t9btn123 -> ime.switchToNumericMode()
             R.id.t9btnsym -> ime.openSymbolPanel()
 
-            R.id.t9key1 -> ime.handleT9Input("1")
+            // 1 = 分词（切分点）：不再把 "1" 混入 digits
+            R.id.t9key1 -> ime.handleSpecialKey("分词")
+
             R.id.t9key2 -> ime.handleT9Input("2")
             R.id.t9key3 -> ime.handleT9Input("3")
             R.id.t9key4 -> ime.handleT9Input("4")

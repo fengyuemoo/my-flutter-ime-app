@@ -318,6 +318,17 @@ class ImeActionDispatcher(
 
         engine.beforeModeSwitch()
 
+        // CN-T9: 分词 = 在“已输入 digits 的末尾”插入一个手动切分点（不选拼音，不消费 digits）
+        if (keyLabel == "分词") {
+            val mode = mainMode()
+            if (mode.isChinese && mode.useT9Layout) {
+                sessions.cnT9.insertT9ManualCutAtEnd()
+                engine.refreshCandidates()
+                engine.refreshComposingView()
+            }
+            return
+        }
+
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
             val consumed = engine.handleEnter(inputConnectionProvider())
