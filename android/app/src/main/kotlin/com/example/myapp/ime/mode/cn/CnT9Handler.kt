@@ -13,32 +13,56 @@ import com.example.myapp.ime.ui.ImeUi
 
 object CnT9Handler : ImeModeHandler {
 
+    private val allPinyinsLower: List<String> = PinyinTable.allPinyins.map { it.lowercase() }
+    private val pinyinSet: Set<String> = allPinyinsLower.toHashSet()
+    private val maxPyLen: Int = allPinyinsLower.maxOfOrNull { it.length } ?: 8
+
     override fun build(
         session: ComposingSession,
         dictEngine: Dictionary,
         singleCharMode: Boolean
     ): ImeModeHandler.Output {
 
+        // Sidebar: “下一节”候选（在 SQLiteDictionaryEngine.getPinyinPossibilities 里改成严格前缀语义）
         val sidebar = if (dictEngine.isLoaded && session.rawT9Digits.isNotEmpty()) {
             dictEngine.getPinyinPossibilities(session.rawT9Digits)
         } else {
             emptyList()
         }
 
-        val candidates = ArrayList<Candidate>()
-        if (dictEngine.isLoaded) {
-            if (session.pinyinStack.isNotEmpty()) {
-                candidates.addAll(
-                    dictEngine.getSuggestionsFromPinyinStack(session.pinyinStack, session.rawT9Digits)
-                )
-            } else {
-                val input = session.rawT9Digits
-                if (input.isNotEmpty()) {
-                    candidates.addAll(dictEngine.getSuggestions(input, isT9 = true, isChineseMode = true))
-                }
-            }
+        // --- Build preview segments (stack + auto) ---
+        val stackSegs = session.pinyinStack.map { it.lowercase() }
+        val autoSegs = if (dictEngine.isLoaded && session.rawT9Digits.isNotEmpty()) {
+            T9PathBuilder.buildAutoSegments(
+                digits = session.rawT9Digits,
+                manualCuts = session.t9ManualCuts,
+                dict = dictEngine
+            )
+        } else {
+            emptyList()
         }
 
+        val fullSegs = ArrayList<String>(stackSegs.size + autoSegs.size).apply {
+            addAll(stackSegs)
+            addAll(autoSegs)
+        }
+
+        val previewPathText = fullSegs.joinToString("'").takeIf { it.isNotBlank() }
+
+        // --- Candidates: use apostrophe path (strict match + fallback handled by engine),
+        // then re-rank by how many “segments” truly match candidate's syllables.
+        val candidates = ArrayList<Candidate>()
+        if (dictEngine.isLoaded && !previewPathText.isNullOrBlank()) {
+            candidates.addAll(
+                dictEngine.getSuggestions(
+                    input = previewPathText,
+                    isT9 = false,
+                    isChineseMode = true
+                )
+            )
+        }
+
+        // Apply single-char filter if enabled.
         val filtered = if (singleCharMode) {
             candidates.filter { it.word.length == 1 }
         } else {
@@ -52,48 +76,21 @@ object CnT9Handler : ImeModeHandler {
                 ArrayList(filtered)
             }
 
-        val t9PreviewText =
-            if (session.rawT9Digits.isNotEmpty()) {
-                T9PreviewBuilder.buildPreview(
-                    digits = session.rawT9Digits,
-                    candidates = finalList,
-                    manualCuts = session.t9ManualCuts
-                )
-            } else {
-                null
-            }
+        // Re-rank (strictly by segment match count first, then freq)
+        promoteCandidatesMatchingSegments(finalList, fullSegs)
 
-        promoteCandidateMatchingPreview(finalList, t9PreviewText)
-
-        // NEW: In CN-T9, suppress English exact candidates when the preview is a full pinyin sequence
-        // AND we do have corresponding Chinese candidates.
-        if (shouldSuppressEnglishExactCandidates(
-                previewText = t9PreviewText,
-                candidates = finalList
-            )
-        ) {
-            val suppressed = finalList.filterNot { isEnglishExactCandidate(it) }
-            finalList.clear()
-            finalList.addAll(suppressed)
-        }
-
-        // CN-T9: UI composing preview line (includes committedPrefix + stack + preview)
-        val stackUi = session.pinyinStack.joinToString("'") { it.lowercase() }
-        val previewUi = t9PreviewText ?: ""
+        // UI composing preview line: committedPrefix + full preview segments
+        val composingPreviewCore = previewPathText ?: ""
         val composingPreviewText = buildString {
             append(session.committedPrefix)
-            if (stackUi.isNotEmpty()) append(stackUi)
-            if (previewUi.isNotEmpty()) {
-                if (stackUi.isNotEmpty()) append("'")
-                append(previewUi)
-            }
+            if (composingPreviewCore.isNotEmpty()) append(composingPreviewCore)
         }.takeIf { it.isNotBlank() }
 
-        // CN-T9: Enter commits preview letters only (keep old behavior of t9PreviewCommitText)
-        val enterCommitText = t9PreviewText
-            ?.lowercase()
-            ?.filter { it in 'a'..'z' }
-            ?.takeIf { it.isNotEmpty() }
+        // Enter commits preview letters only (keep old behavior: letters only)
+        val enterCommitText = composingPreviewCore
+            .lowercase()
+            .filter { it in 'a'..'z' }
+            .takeIf { it.isNotEmpty() }
 
         return ImeModeHandler.Output(
             candidates = finalList,
@@ -103,249 +100,141 @@ object CnT9Handler : ImeModeHandler {
         )
     }
 
-    private fun shouldSuppressEnglishExactCandidates(
-        previewText: String?,
-        candidates: List<Candidate>
-    ): Boolean {
-        if (previewText.isNullOrBlank()) return false
-
-        // 1) preview must be a full pinyin sequence (e.g. yong / zhuang / zhuan / zhong'guo ...)
-        if (!T9PreviewBuilder.isFullPinyinSequence(previewText)) return false
-
-        // 2) must have corresponding Chinese candidates (avoid suppressing when no CN candidates exist)
-        val key = T9PreviewBuilder.normalizePreviewLetters(previewText)
-        if (key.isEmpty()) return false
-
-        val hasMatchingChinese = candidates.any { c ->
-            val w = c.word
-            if (!containsCjk(w)) return@any false
-            val py = c.pinyin ?: return@any false
-            val pyLetters = T9PreviewBuilder.normalizePinyinLetters(py)
-            pyLetters.startsWith(key)
-        }
-
-        return hasMatchingChinese
-    }
-
-    private fun isEnglishExactCandidate(c: Candidate): Boolean {
-        val w = c.word.trim()
-        if (w.isEmpty()) return false
-
-        // Pure ASCII a-z word, and not the raw digits fallback.
-        // This matches items like "wong/yong/zong/year/home" in your report.
-        if (!isAsciiLettersOnly(w)) return false
-
-        // Avoid misclassifying rare mixed scripts.
-        if (containsCjk(w)) return false
-
-        return true
-    }
-
-    private fun isAsciiLettersOnly(s: String): Boolean {
-        for (ch in s) {
-            val c = ch.lowercaseChar()
-            if (c !in 'a'..'z') return false
-        }
-        return true
-    }
-
-    private fun containsCjk(s: String): Boolean {
-        for (ch in s) {
-            if (ch in '\u4E00'..'\u9FFF') return true
-        }
-        return false
-    }
-
-    private object T9PreviewBuilder {
-        private val pinyinSet: Set<String> = PinyinTable.allPinyins.map { it.lowercase() }.toHashSet()
-        private val maxPyLen: Int = PinyinTable.allPinyins.maxOfOrNull { it.length } ?: 8
-
-        private fun repLetter(d: Char): Char {
+    private object T9PathBuilder {
+        private fun defaultLetterForDigit(d: Char): String {
             val list = T9Lookup.charsFromDigit(d)
-            if (list.isNotEmpty() && list[0].isNotEmpty()) return list[0][0]
-            return '?'
+            val s = list.firstOrNull()?.lowercase()?.trim()
+            return if (!s.isNullOrEmpty()) s.substring(0, 1) else "?"
         }
 
-        private fun lettersOnly(raw: String): String {
-            val s = raw.lowercase()
-            val sb = StringBuilder()
-            for (ch in s) {
-                if (ch in 'a'..'z') sb.append(ch)
-            }
-            return sb.toString()
-        }
-
-        private fun segmentLettersForUi(letters: String): String {
-            val s = letters.lowercase()
-            if (s.isEmpty()) return ""
-
-            val dp: ArrayList<List<String>?> = ArrayList<List<String>?>(s.length + 1)
-            repeat(s.length + 1) { dp.add(null) }
-            dp[0] = emptyList()
-
-            for (i in 0..s.length) {
-                val base = dp[i] ?: continue
-                val remain = s.length - i
-                val tryMax = minOf(maxPyLen, remain)
-                for (l in 1..tryMax) {
-                    val sub = s.substring(i, i + l)
-                    if (!pinyinSet.contains(sub)) continue
-                    val cand = base + sub
-                    val old = dp[i + l]
-                    if (old == null || cand.size > old.size) {
-                        dp[i + l] = cand
-                    }
-                }
-            }
-
-            var bestCut = 0
-            for (k in s.length downTo 0) {
-                if (dp[k] != null) {
-                    bestCut = k
-                    break
-                }
-            }
-
-            val parts = ArrayList<String>()
-            val left = dp[bestCut] ?: emptyList()
-            parts.addAll(left)
-
-            if (bestCut < s.length) {
-                parts.add(s.substring(bestCut))
-            }
-
-            return parts.joinToString("'")
-        }
-
-        fun buildPreview(
-            digits: String,
-            candidates: List<Candidate>,
-            manualCuts: List<Int>
-        ): String? {
-            if (digits.isEmpty()) return null
-
-            if (digits.length == 1) {
-                return repLetter(digits[0]).toString()
-            }
-
-            val bestPinyin = candidates.asSequence()
-                .mapNotNull { it.pinyin }
-                .firstOrNull { it.isNotBlank() }
-                ?.lowercase()
-                ?.trim()
-
-            val prefixLetters = if (!bestPinyin.isNullOrEmpty()) {
-                val letters = lettersOnly(bestPinyin)
-                val sb = StringBuilder()
-                sb.append(letters.take(digits.length))
-                var i = sb.length
-                while (i < digits.length) {
-                    sb.append(repLetter(digits[i]))
-                    i++
-                }
-                sb.toString()
-            } else {
-                buildString {
-                    for (ch in digits) append(repLetter(ch))
-                }
-            }
+        private fun splitDigitsByCuts(digits: String, manualCuts: List<Int>): List<String> {
+            if (digits.isEmpty()) return emptyList()
 
             val cuts = manualCuts
                 .asSequence()
-                .filter { it in 1 until prefixLetters.length }
+                .filter { it in 1 until digits.length } // interior cuts only
                 .distinct()
                 .sorted()
                 .toList()
 
-            if (cuts.isEmpty()) {
-                return segmentLettersForUi(prefixLetters)
-            }
+            if (cuts.isEmpty()) return listOf(digits)
 
-            val parts = ArrayList<String>()
+            val out = ArrayList<String>()
             var prev = 0
             for (c in cuts) {
-                val seg = prefixLetters.substring(prev, c)
-                val ui = segmentLettersForUi(seg)
-                if (ui.isNotEmpty()) parts.add(ui)
+                if (c > prev) out.add(digits.substring(prev, c))
                 prev = c
             }
-            val tail = prefixLetters.substring(prev)
-            val uiTail = segmentLettersForUi(tail)
-            if (uiTail.isNotEmpty()) parts.add(uiTail)
-
-            return parts.joinToString("'")
+            if (prev < digits.length) out.add(digits.substring(prev))
+            return out
         }
 
-        fun normalizePreviewLetters(previewText: String): String {
-            val sb = StringBuilder()
-            for (ch in previewText.lowercase()) {
-                if (ch in 'a'..'z') sb.append(ch)
-            }
-            return sb.toString()
-        }
+        fun buildAutoSegments(digits: String, manualCuts: List<Int>, dict: Dictionary): List<String> {
+            if (digits.isEmpty()) return emptyList()
 
-        fun normalizePinyinLetters(pinyin: String): String {
-            val sb = StringBuilder()
-            for (ch in pinyin.lowercase()) {
-                if (ch in 'a'..'z') sb.append(ch)
-            }
-            return sb.toString()
-        }
+            val parts = splitDigitsByCuts(digits, manualCuts)
+            val out = ArrayList<String>()
 
-        // NEW: preview must be fully segmentable into valid pinyins (no leftover tail).
-        fun isFullPinyinSequence(previewText: String): Boolean {
-            val raw = previewText.trim().lowercase()
-            if (raw.isEmpty()) return false
+            for (part in parts) {
+                var remain = part
+                while (remain.isNotEmpty()) {
+                    val opts = dict.getPinyinPossibilities(remain)
+                    val chosen = opts.firstOrNull()?.lowercase()?.trim()
+                        ?: defaultLetterForDigit(remain[0])
 
-            val parts = raw.split("'").filter { it.isNotBlank() }
-            if (parts.isEmpty()) return false
+                    out.add(chosen)
 
-            // All parts must be valid pinyin.
-            for (p in parts) {
-                if (!pinyinSet.contains(p)) return false
+                    val consume = T9Lookup.encodeLetters(chosen)
+                        .length
+                        .coerceAtLeast(1)
+                        .coerceAtMost(remain.length)
+
+                    remain = remain.substring(consume)
+                }
             }
 
-            // Also ensure the normalized letters length matches concatenation length (sanity check).
-            val joined = parts.joinToString("")
-            val normalized = normalizePreviewLetters(raw)
-            if (normalized.isEmpty()) return false
-            return normalized == joined
+            return out
         }
     }
 
-    private fun promoteCandidateMatchingPreview(
+    private fun promoteCandidatesMatchingSegments(
         candidates: ArrayList<Candidate>,
-        previewText: String?
+        segments: List<String>
     ) {
-        if (previewText.isNullOrEmpty()) return
         if (candidates.isEmpty()) return
+        if (segments.isEmpty()) return
 
-        val key = T9PreviewBuilder.normalizePreviewLetters(previewText)
-        if (key.isEmpty()) return
+        val matchCount = HashMap<Candidate, Int>(candidates.size)
 
-        var bestIdx = -1
-        var bestScore = Int.MIN_VALUE
-
-        for (i in candidates.indices) {
-            val c = candidates[i]
-            val py = c.pinyin ?: continue
-            val pyLetters = T9PreviewBuilder.normalizePinyinLetters(py)
-            if (!pyLetters.startsWith(key)) continue
-
-            val lenScore = -kotlin.math.abs(pyLetters.length - key.length)
-            val freqScore = c.priority
-            val score = lenScore * 1_000_000 + freqScore
-
-            if (score > bestScore) {
-                bestScore = score
-                bestIdx = i
-            }
+        for (c in candidates) {
+            val py = c.pinyin?.lowercase()?.trim()
+            val syllables = if (!py.isNullOrEmpty()) splitConcatPinyinToSyllables(py) else emptyList()
+            val cnt = if (syllables.isEmpty()) 0 else countMatchedSegments(segments, syllables)
+            matchCount[c] = cnt
         }
 
-        if (bestIdx <= 0) return
+        candidates.sortWith(
+            compareByDescending<Candidate> { matchCount[it] ?: 0 }
+                .thenByDescending { it.priority }
+                .thenBy { it.word }
+        )
+    }
 
-        val matched = candidates.removeAt(bestIdx)
-        candidates.add(0, matched)
+    private fun countMatchedSegments(segments: List<String>, syllables: List<String>): Int {
+        val n = minOf(segments.size, syllables.size)
+        var matched = 0
+
+        for (i in 0 until n) {
+            val seg = segments[i].lowercase()
+            val syl = syllables[i].lowercase()
+
+            val ok = when {
+                // 完整音节：必须完全相等
+                pinyinSet.contains(seg) -> syl == seg
+
+                // zh/ch/sh：作为“完成一个节”，但只约束该音节的声母前缀
+                seg == "zh" || seg == "ch" || seg == "sh" -> syl.startsWith(seg)
+
+                // 单字母节：约束该音节首字母
+                seg.length == 1 && seg[0] in 'a'..'z' -> syl.startsWith(seg)
+
+                else -> false
+            }
+
+            if (!ok) break
+            matched++
+        }
+
+        return matched
+    }
+
+    private fun splitConcatPinyinToSyllables(rawLower: String): List<String> {
+        if (rawLower.isEmpty()) return emptyList()
+        if (!rawLower.all { it in 'a'..'z' }) return emptyList()
+        if (maxPyLen <= 0) return emptyList()
+
+        val out = ArrayList<String>()
+        var i = 0
+        while (i < rawLower.length) {
+            val remain = rawLower.length - i
+            val tryMax = minOf(maxPyLen, remain)
+
+            var matched: String? = null
+            var l = tryMax
+            while (l >= 1) {
+                val sub = rawLower.substring(i, i + l)
+                if (pinyinSet.contains(sub)) {
+                    matched = sub
+                    break
+                }
+                l--
+            }
+
+            if (matched == null) return emptyList()
+            out.add(matched)
+            i += matched.length
+        }
+        return out
     }
 }
 

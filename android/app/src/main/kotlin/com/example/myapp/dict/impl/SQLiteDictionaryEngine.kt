@@ -47,36 +47,59 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         if (info != null) debugInfo = info
     }
 
+    /**
+     * CN-T9 sidebar: “下一节”候选（单列滚动）。
+     *
+     * 规则：
+     * - 完整拼音音节：仅允许 digits 以该音节的 T9 code 开头（严格不超过输入长度）
+     * - 声母节：zh/ch/sh 也作为“完成一个节”（同样严格前缀）
+     * - 单字母节：总是追加 digits[0] 对应的 a-z 小写字母（不输出大写/数字）
+     */
     override fun getPinyinPossibilities(digits: String): List<String> {
         if (digits.isEmpty()) return emptyList()
 
-        data class Item(val pinyin: String, val code: String)
+        data class Item(val text: String, val code: String, val typeRank: Int)
+        // typeRank: 0=完整音节, 1=声母(zh/ch/sh)
 
         val items = ArrayList<Item>()
 
-        for (pinyin in allPinyins) {
+        // 1) 完整音节：只允许 “digits.startsWith(t9Code)”
+        for (pinyinRaw in allPinyins) {
+            val pinyin = pinyinRaw.lowercase()
             val t9 = T9Lookup.encodeLetters(pinyin)
-            if (digits.startsWith(t9) || t9.startsWith(digits)) {
-                items.add(Item(pinyin, t9))
+            if (t9.isNotEmpty() && digits.startsWith(t9)) {
+                items.add(Item(text = pinyin, code = t9, typeRank = 0))
             }
         }
 
+        // 2) 声母节：zh/ch/sh 也当作“完成一个节”
+        val initials = listOf("zh", "ch", "sh")
+        for (init in initials) {
+            val code = T9Lookup.encodeLetters(init)
+            if (code.isNotEmpty() && digits.startsWith(code)) {
+                items.add(Item(text = init, code = code, typeRank = 1))
+            }
+        }
+
+        // 排序：更长 code 优先（更具体），完整音节优先于声母，其次按字母序
         val sorted = items.sortedWith(
             compareBy<Item>(
-                { if (it.code == digits) 0 else 1 },
-                { it.code.length },
-                { it.pinyin }
+                { -it.code.length },
+                { it.typeRank },
+                { it.text }
             )
         )
 
         val out = LinkedHashSet<String>()
 
-        if (digits.length == 1) {
-            val firstDigit = digits[0]
-            for (s in T9Lookup.charsFromDigit(firstDigit)) out.add(s)
-        }
+        for (it in sorted) out.add(it.text)
 
-        for (it in sorted) out.add(it.pinyin)
+        // 3) 单字母节：追加当前首位 digit 对应的小写字母（w/x/y/z, g/h/i ...）
+        val firstDigit = digits[0]
+        for (s0 in T9Lookup.charsFromDigit(firstDigit)) {
+            val s = s0.lowercase().trim()
+            if (s.length == 1 && s[0] in 'a'..'z') out.add(s)
+        }
 
         return out.toList()
     }
@@ -590,11 +613,14 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return list
     }
 
+    // --- UPDATED: single-char queries now include pinyin/syllables/acronym (for strict matching & ranking) ---
+
     private fun querySingleCharByInputPrefix(db: SQLiteDatabase, prefix: String): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_ACRONYM}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT},
+                       ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_INPUT} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -606,8 +632,22 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    val acronym = try { it.getString(2) } catch (_: Exception) { null }
-                    list.add(Candidate(word, prefix, freq, matchedLength = prefix.length, pinyinCount = 0, acronym = acronym))
+                    val pinyin = it.getString(2)
+                    val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+                    val acronym = try { it.getString(4) } catch (_: Exception) { null }
+
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = prefix,
+                            priority = freq,
+                            matchedLength = prefix.length,
+                            pinyinCount = 0,
+                            pinyin = pinyin,
+                            syllables = syllables,
+                            acronym = acronym
+                        )
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -620,7 +660,8 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val list = ArrayList<Candidate>()
         try {
             val sql = """
-                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_ACRONYM}
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT},
+                       ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_INPUT} = ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
@@ -633,8 +674,22 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
-                    val acronym = try { it.getString(2) } catch (_: Exception) { null }
-                    list.add(Candidate(word, input, freq, matchedLength = input.length, pinyinCount = 0, acronym = acronym))
+                    val pinyin = it.getString(2)
+                    val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
+                    val acronym = try { it.getString(4) } catch (_: Exception) { null }
+
+                    list.add(
+                        Candidate(
+                            word = word,
+                            input = input,
+                            priority = freq,
+                            matchedLength = input.length,
+                            pinyinCount = 0,
+                            pinyin = pinyin,
+                            syllables = syllables,
+                            acronym = acronym
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {
