@@ -20,7 +20,7 @@ object CnT9Handler : ImeModeHandler {
     private data class PathPlan(
         val rank: Int,                // 0 = 主预览路径，其它分支依次递增
         val segments: List<String>,    // stack + first + autoTail
-        val text: String              // segments joined by '
+        val text: String              // segments joined by '\n
     )
 
     override fun build(
@@ -483,27 +483,37 @@ class CnT9CandidateEngine(
             return
         }
 
-        // CN-T9: 提交前先把当前 rawT9Digits 的“默认自动段”物化进 stack（等价于用户一路点默认下一节）
-        if (dictEngine.isLoaded && session.rawT9Digits.isNotEmpty()) {
-            val autoSegs = CnT9Handler.T9PathBuilder.buildAutoSegments(
-                digits = session.rawT9Digits,
-                manualCuts = session.t9ManualCuts,
-                dict = dictEngine
-            )
-            for (seg in autoSegs) {
-                val code = T9Lookup.encodeLetters(seg)
-                session.onPinyinSidebarClick(seg, code)
-            }
-        }
-
-        // 使用词库 syllables 作为“消费多少节”，这样 pickCandidate() 会按节推进、并支持逐节回退后的继续组合
-        val stackSize = session.pinyinStack.size
-        val consume = when {
+        // 目标：只物化“本次需要消费的节数”，不要把剩余 rawT9Digits 全部吃掉，否则 sidebar 会变空。
+        val desiredConsume = when {
             cand.syllables > 0 -> cand.syllables
             cand.word.isNotEmpty() -> cand.word.length
             else -> 1
-        }.coerceAtLeast(1).coerceAtMost(stackSize)
+        }.coerceAtLeast(1)
 
+        // 只补齐到 desiredConsume；每次只物化 1 个 segment，保留剩余 digits 给下一节 sidebar。
+        if (dictEngine.isLoaded) {
+            while (session.pinyinStack.size < desiredConsume && session.rawT9Digits.isNotEmpty()) {
+                val nextSeg = CnT9Handler.T9PathBuilder.buildAutoSegments(
+                    digits = session.rawT9Digits,
+                    manualCuts = session.t9ManualCuts,
+                    dict = dictEngine
+                ).firstOrNull() ?: break
+
+                val code = T9Lookup.encodeLetters(nextSeg)
+                if (code.isEmpty()) break
+
+                session.onPinyinSidebarClick(nextSeg, code)
+            }
+        }
+
+        val stackSize = session.pinyinStack.size
+        if (stackSize <= 0) {
+            updateCandidates()
+            updateComposingView()
+            return
+        }
+
+        val consume = desiredConsume.coerceAtMost(stackSize).coerceAtLeast(1)
         val candForPick = cand.copy(pinyinCount = consume)
 
         when (val r = session.pickCandidate(
