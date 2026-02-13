@@ -432,6 +432,34 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return out
     }
 
+    // 当 apostrophe 路径的开头包含“强约束段”（完整音节，或 zh/ch/sh），返回一个 input 的严格前缀（用于 SQL 过滤）。
+    // 规则：从 parts[0] 开始拼接；连续拼接完整音节；遇到第一个“非完整音节(如单字母节 g/j/w)”就停止。
+    private fun buildStrictInputPrefixFromParts(parts: List<String>): String? {
+        if (parts.isEmpty()) return null
+
+        fun isInitialSeg(s: String): Boolean = (s == "zh" || s == "ch" || s == "sh")
+        fun isFullSyllable(s: String): Boolean = pinyinSet.contains(s)
+
+        val first = parts[0].lowercase().trim()
+        if (first.isEmpty()) return null
+
+        // 第一段必须是“强约束段”，否则不启用严格过滤（例如首段是单字母 x/w）
+        if (!isFullSyllable(first) && !isInitialSeg(first)) return null
+
+        val sb = StringBuilder()
+        sb.append(first)
+
+        // 后续只继续拼接“完整音节”，一旦遇到单字母节/其它就停止
+        for (i in 1 until parts.size) {
+            val p = parts[i].lowercase().trim()
+            if (p.isEmpty()) break
+            if (!isFullSyllable(p)) break
+            sb.append(p)
+        }
+
+        return sb.toString().takeIf { it.isNotEmpty() }
+    }
+
     private fun getSuggestionsWithApostrophe(db: SQLiteDatabase, rawInput: String): List<Candidate> {
         val parts = rawInput.split("'").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
         if (parts.isEmpty()) return emptyList()
@@ -445,27 +473,59 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
 
         val n = parts.size
 
-        addAll(queryMultiCharByAcronymPrefix(db, parts, wordLen = n))
-        for (k in (n - 1) downTo 2) addAll(queryMultiCharByAcronymPrefix(db, parts.take(k), wordLen = k))
+        // 多字词：按节数从长到短回退（n, n-1, ... 2）
+        // 关键：对 acronym 查询增加“input 严格前缀”过滤，避免 xiong'g 回退时混入 xin+gu 这类仅 acronym 命中的词。
+        run {
+            val strictPrefix = buildStrictInputPrefixFromParts(parts)
+            addAll(queryMultiCharByAcronymPrefix(db, parts, wordLen = n, strictInputPrefix = strictPrefix))
+        }
+
+        for (k in (n - 1) downTo 2) {
+            val prefixParts = parts.take(k)
+            val strictPrefix = buildStrictInputPrefixFromParts(prefixParts)
+            addAll(queryMultiCharByAcronymPrefix(db, prefixParts, wordLen = k, strictInputPrefix = strictPrefix))
+        }
+
+        // 单字：仍然按“拼接前缀”做 input prefix 查
         for (k in n downTo 1) addAll(querySingleCharByInputPrefix(db, parts.take(k).joinToString("")))
 
         return result
     }
 
-    private fun queryMultiCharByAcronymPrefix(db: SQLiteDatabase, parts: List<String>, wordLen: Int): List<Candidate> {
+    private fun queryMultiCharByAcronymPrefix(
+        db: SQLiteDatabase,
+        parts: List<String>,
+        wordLen: Int,
+        strictInputPrefix: String?
+    ): List<Candidate> {
         val list = ArrayList<Candidate>()
         try {
             val acronymPrefix = parts.joinToString("") { it.take(1) }
-            val sql = """
+
+            val (sql, args) = if (!strictInputPrefix.isNullOrEmpty()) {
+                val s = """
+                SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
+                FROM ${DictionaryDbHelper.TABLE_NAME}
+                WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
+                  AND ${DictionaryDbHelper.COL_LANG} = 0
+                  AND ${DictionaryDbHelper.COL_WORD_LEN} = ?
+                  AND ${DictionaryDbHelper.COL_INPUT} LIKE ?
+                ORDER BY ${DictionaryDbHelper.COL_FREQ} DESC
+                """.trimIndent()
+                s to arrayOf("${acronymPrefix}%", wordLen.toString(), "${strictInputPrefix}%")
+            } else {
+                val s = """
                 SELECT ${DictionaryDbHelper.COL_WORD}, ${DictionaryDbHelper.COL_FREQ}, ${DictionaryDbHelper.COL_INPUT}, ${DictionaryDbHelper.COL_SYLLABLES}, ${DictionaryDbHelper.COL_ACRONYM}
                 FROM ${DictionaryDbHelper.TABLE_NAME}
                 WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
                   AND ${DictionaryDbHelper.COL_LANG} = 0
                   AND ${DictionaryDbHelper.COL_WORD_LEN} = ?
                 ORDER BY ${DictionaryDbHelper.COL_FREQ} DESC
-            """.trimIndent()
+                """.trimIndent()
+                s to arrayOf("${acronymPrefix}%", wordLen.toString())
+            }
 
-            db.rawQuery(sql, arrayOf("${acronymPrefix}%", wordLen.toString())).use {
+            db.rawQuery(sql, args).use {
                 while (it.moveToNext()) {
                     val word = it.getString(0)
                     val freq = it.getInt(1)
