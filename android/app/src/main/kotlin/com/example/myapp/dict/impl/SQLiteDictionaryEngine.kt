@@ -460,6 +460,38 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         return sb.toString().takeIf { it.isNotEmpty() }
     }
 
+    // NEW: 对 apostrophe parts 做“逐节严格匹配”，从而支持“中间段/后段也严格匹配”，并严格约束 zh/ch/sh。
+    // 策略 A：如果候选 pinyin 无法解析为合法音节（splitConcatPinyinToSyllables 为空），则不过滤（返回 true）。
+    private fun matchesPartsStrict(parts: List<String>, candPinyin: String?): Boolean {
+        if (parts.isEmpty()) return true
+        val py = candPinyin?.lowercase()?.trim() ?: return false
+        if (py.isEmpty()) return false
+
+        val syllables = splitConcatPinyinToSyllables(py)
+        if (syllables.isEmpty()) return true  // A: 不解析不过滤
+
+        if (syllables.size < parts.size) return false
+
+        fun isInitialSeg(s: String): Boolean = (s == "zh" || s == "ch" || s == "sh")
+        fun isFullSyllable(s: String): Boolean = pinyinSet.contains(s)
+
+        for (i in parts.indices) {
+            val seg = parts[i].lowercase().trim()
+            val syl = syllables[i].lowercase()
+
+            val ok = when {
+                isInitialSeg(seg) -> syl.startsWith(seg)
+                isFullSyllable(seg) -> syl == seg
+                seg.length == 1 && seg[0] in 'a'..'z' -> syl.startsWith(seg)
+                else -> false
+            }
+
+            if (!ok) return false
+        }
+
+        return true
+    }
+
     private fun getSuggestionsWithApostrophe(db: SQLiteDatabase, rawInput: String): List<Candidate> {
         val parts = rawInput.split("'").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
         if (parts.isEmpty()) return emptyList()
@@ -474,7 +506,6 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
         val n = parts.size
 
         // 多字词：按节数从长到短回退（n, n-1, ... 2）
-        // 关键：对 acronym 查询增加“input 严格前缀”过滤，避免 xiong'g 回退时混入 xin+gu 这类仅 acronym 命中的词。
         run {
             val strictPrefix = buildStrictInputPrefixFromParts(parts)
             addAll(queryMultiCharByAcronymPrefix(db, parts, wordLen = n, strictInputPrefix = strictPrefix))
@@ -532,6 +563,9 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
                     val pinyin = it.getString(2)
                     val syllables = try { it.getInt(3) } catch (_: Exception) { 0 }
                     val acronym = try { it.getString(4) } catch (_: Exception) { null }
+
+                    // NEW: 逐节严格过滤（支持“中间段/后段也严格匹配”，并严格约束 zh/ch/sh）
+                    if (!matchesPartsStrict(parts, pinyin)) continue
 
                     list.add(
                         Candidate(
