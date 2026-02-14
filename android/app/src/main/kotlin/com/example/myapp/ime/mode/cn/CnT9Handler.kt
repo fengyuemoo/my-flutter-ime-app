@@ -87,10 +87,10 @@ object CnT9Handler : ImeModeHandler {
                 ArrayList(filtered)
             }
 
-        // NEW: 候选排序按“长词/多音节优先 + 词频”，不再按 sidebar 第一节分支的顺序分组。
-        rerankCandidatesByLengthThenFreq(finalList)
+        // NEW: 先按匹配强度（避免 xi'g 这种“弱路径”把 zhi 这种“强路径”挤到后面），再按长词/多音节、再按词频。
+        rerankByMatchThenLengthFreq(finalList, plans)
 
-        // NEW: 顶部预览以“第 1 个候选词”作为基准对齐；若候选无法提供拼音，则回退到主预览路径。
+        // 顶部预览以“第 1 个候选词”作为基准对齐；若候选无法提供拼音，则回退到主预览路径。
         val composingPreviewCore = buildPreviewCoreByTopCandidate(
             top = finalList.firstOrNull(),
             plans = plans,
@@ -139,8 +139,8 @@ object CnT9Handler : ImeModeHandler {
 
         val mainFirst = mainAutoSegs.firstOrNull()?.lowercase()
 
-        // 其它第一节分支：取 sidebar 前若干个（避免太多 DB query）
-        val maxAltFirst = 10
+        // 其它第一节分支：短输入时多取一些，避免常用组合（如 yi'ge）因为分支不足而不出现。
+        val maxAltFirst = if (rawDigits.length <= 4) 30 else 10
         var rank = 1
 
         for (first in sidebar) {
@@ -215,34 +215,115 @@ object CnT9Handler : ImeModeHandler {
         return outMap.values.toList()
     }
 
-    // NEW: 候选排序：长词/多音节优先，然后按词频(priority)。
-    private fun rerankCandidatesByLengthThenFreq(candidates: ArrayList<Candidate>) {
+    // ---------- NEW: “匹配强度”排序 ----------
+
+    private data class MatchQuality(
+        val weakSegCount: Int,      // 匹配前缀里用了多少“单字母节”(g/h/i/w/x/y/z…)，越少越强
+        val fullSyllableCount: Int, // 匹配前缀里有多少“完整音节”命中，越多越强
+        val matchedSegments: Int    // 一共连续匹配了多少节，越多越强
+    )
+
+    private fun bestMatchQuality(plans: List<PathPlan>, cand: Candidate): MatchQuality? {
+        val py = cand.pinyin?.lowercase()?.trim() ?: return null
+        val syl = splitConcatPinyinToSyllables(py)
+        if (syl.isEmpty()) return null
+
+        var best: MatchQuality? = null
+
+        for (p in plans) {
+            val n = minOf(p.segments.size, syl.size)
+            var weak = 0
+            var full = 0
+            var matched = 0
+
+            for (i in 0 until n) {
+                val seg = p.segments[i].lowercase()
+                val s = syl[i].lowercase()
+
+                val ok = when {
+                    // 完整音节：必须完全相等（强）
+                    pinyinSet.contains(seg) -> {
+                        if (s == seg) {
+                            full++
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    // zh/ch/sh：声母节，要求该音节以它开头（中强）
+                    seg == "zh" || seg == "ch" || seg == "sh" -> s.startsWith(seg)
+
+                    // 单字母节：只约束该音节首字母（弱）
+                    seg.length == 1 && seg[0] in 'a'..'z' -> {
+                        if (s.startsWith(seg)) {
+                            weak++
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    else -> false
+                }
+
+                if (!ok) break
+                matched++
+            }
+
+            val q = MatchQuality(weakSegCount = weak, fullSyllableCount = full, matchedSegments = matched)
+
+            // 选“最强”的 plan：先弱段更少，再完整音节更多，再匹配段数更多
+            if (best == null
+                || q.weakSegCount < best!!.weakSegCount
+                || (q.weakSegCount == best!!.weakSegCount && q.fullSyllableCount > best!!.fullSyllableCount)
+                || (q.weakSegCount == best!!.weakSegCount
+                    && q.fullSyllableCount == best!!.fullSyllableCount
+                    && q.matchedSegments > best!!.matchedSegments)
+            ) {
+                best = q
+            }
+        }
+
+        return best
+    }
+
+    private fun rerankByMatchThenLengthFreq(
+        candidates: ArrayList<Candidate>,
+        plans: List<PathPlan>
+    ) {
         if (candidates.isEmpty()) return
 
-        val syllableCountCache = HashMap<Candidate, Int>(candidates.size)
+        val qMap = HashMap<Candidate, MatchQuality?>(candidates.size)
+        val sylCountCache = HashMap<Candidate, Int>(candidates.size)
 
         fun syllableCount(c: Candidate): Int {
-            syllableCountCache[c]?.let { return it }
-
+            sylCountCache[c]?.let { return it }
             val n = when {
                 c.syllables > 0 -> c.syllables
                 !c.pinyin.isNullOrBlank() -> splitConcatPinyinToSyllables(c.pinyin.lowercase().trim()).size
                 else -> 0
             }
-
-            syllableCountCache[c] = n
+            sylCountCache[c] = n
             return n
         }
 
+        for (c in candidates) qMap[c] = bestMatchQuality(plans, c)
+
         candidates.sortWith(
-            compareByDescending<Candidate> { syllableCount(it).coerceAtLeast(it.word.length) }
-                .thenByDescending { it.word.length }
-                .thenByDescending { it.priority }
-                .thenBy { it.word }
+            compareBy<Candidate>(
+                { qMap[it]?.weakSegCount ?: Int.MAX_VALUE },            // 1) 弱段越少越靠前（先保证 zhi > xi'g）
+                { -(qMap[it]?.fullSyllableCount ?: 0) },                // 2) 完整音节命中越多越靠前
+                { -(qMap[it]?.matchedSegments ?: 0) },                  // 3) 连续匹配段数越多越靠前
+                { -syllableCount(it).coerceAtLeast(it.word.length) },   // 4) 同强度内：音节/字数更长更靠前
+                { -it.word.length },                                    // 5) 再偏向更长词
+                { -it.priority },                                       // 6) 再按词频
+                { it.word }
+            )
         )
     }
 
-    // NEW: 顶部预览以“第 1 个候选词”对齐；并用最贴合的 plan 补齐后续段（如果有）。
+    // 顶部预览以“第 1 个候选词”对齐；并用最贴合的 plan 补齐后续段（如果有）。
     private fun buildPreviewCoreByTopCandidate(
         top: Candidate?,
         plans: List<PathPlan>,
@@ -277,51 +358,6 @@ object CnT9Handler : ImeModeHandler {
         }
 
         return out.joinToString("'")
-    }
-
-    // 旧逻辑保留（不再用于最终排序），避免你后续还想切回“按分支优先”的体验。
-    private fun rerankCandidatesByBestPlan(
-        candidates: ArrayList<Candidate>,
-        plans: List<PathPlan>
-    ) {
-        if (candidates.isEmpty()) return
-        if (plans.isEmpty()) return
-
-        data class Best(val rank: Int, val matched: Int)
-
-        val bestMap = HashMap<Candidate, Best>(candidates.size)
-
-        for (c in candidates) {
-            val py = c.pinyin?.lowercase()?.trim()
-            val syllables = if (!py.isNullOrEmpty()) splitConcatPinyinToSyllables(py) else emptyList()
-
-            var bestRank = Int.MAX_VALUE
-            var bestMatched = 0
-
-            if (syllables.isNotEmpty()) {
-                for (p in plans) {
-                    val m = countMatchedSegments(p.segments, syllables)
-                    if (m > bestMatched || (m == bestMatched && p.rank < bestRank)) {
-                        bestMatched = m
-                        bestRank = p.rank
-                    }
-                }
-            } else {
-                bestRank = plans.first().rank
-                bestMatched = 0
-            }
-
-            bestMap[c] = Best(rank = bestRank, matched = bestMatched)
-        }
-
-        candidates.sortWith(
-            compareBy<Candidate>(
-                { bestMap[it]?.rank ?: Int.MAX_VALUE },
-                { -(bestMap[it]?.matched ?: 0) },
-                { -it.priority },
-                { it.word }
-            )
-        )
     }
 
     internal object T9PathBuilder {
