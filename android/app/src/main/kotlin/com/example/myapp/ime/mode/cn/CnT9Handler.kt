@@ -87,8 +87,14 @@ object CnT9Handler : ImeModeHandler {
                 ArrayList(filtered)
             }
 
-        // NEW: 先按匹配强度（避免 xi'g 这种“弱路径”把 zhi 这种“强路径”挤到后面），再按长词/多音节、再按词频。
-        rerankByMatchThenLengthFreq(finalList, plans)
+        // FINAL: 覆盖优先评分（防“新密灾难”）+ 词频优先（保证 一个/知道/侄儿 不会很靠后）+ 轻量长度偏好
+        rerankByCoverageThenFreq(finalList, plans)
+
+        // 排序完成后再截断展示长度（召回池可能 > 300）
+        val displayLimit = 300
+        if (finalList.size > displayLimit) {
+            finalList.subList(displayLimit, finalList.size).clear()
+        }
 
         // 顶部预览以“第 1 个候选词”作为基准对齐；若候选无法提供拼音，则回退到主预览路径。
         val composingPreviewCore = buildPreviewCoreByTopCandidate(
@@ -196,7 +202,16 @@ object CnT9Handler : ImeModeHandler {
         plans: List<PathPlan>,
         limit: Int
     ): List<Candidate> {
-        val outMap = LinkedHashMap<String, Candidate>(limit)
+        // 关键：每条 plan 都必须有机会贡献候选，避免“前几个 plan 塞满池子，后续 plan 饿死”
+        // limit 是最终展示上限（build 里会截断），这里构建更大的“召回池”
+        val perPlanLimit = when {
+            plans.size <= 5 -> 160
+            plans.size <= 12 -> 120
+            else -> 80
+        }
+
+        val outMap = LinkedHashMap<String, Candidate>(limit * 4)
+
         for (p in plans) {
             if (p.text.isBlank()) continue
             val list = dict.getSuggestions(
@@ -204,97 +219,160 @@ object CnT9Handler : ImeModeHandler {
                 isT9 = false,
                 isChineseMode = true
             )
+
+            // 每条 plan 限额，保证公平
+            var taken = 0
             for (c in list) {
                 if (!outMap.containsKey(c.word)) {
                     outMap[c.word] = c
-                    if (outMap.size >= limit) break
+                    taken++
+                    if (taken >= perPlanLimit) break
                 }
             }
-            if (outMap.size >= limit) break
         }
+
         return outMap.values.toList()
     }
 
-    // ---------- NEW: “匹配强度”排序 ----------
+    // ---------- FINAL: “覆盖优先 + 词频优先 + 轻量长度偏好”排序 ----------
 
-    private data class MatchQuality(
-        val weakSegCount: Int,      // 匹配前缀里用了多少“单字母节”(g/h/i/w/x/y/z…)，越少越强
-        val fullSyllableCount: Int, // 匹配前缀里有多少“完整音节”命中，越多越强
-        val matchedSegments: Int    // 一共连续匹配了多少节，越多越强
+    private data class PlanInfo(
+        val plan: PathPlan,
+        val segDigits: IntArray,      // each segment's digit length
+        val prefixDigits: IntArray,   // prefixDigits[k] = digits consumed by first k segments
+        val totalDigits: Int
     )
 
-    private fun bestMatchQuality(plans: List<PathPlan>, cand: Candidate): MatchQuality? {
+    private enum class SegKind { STRONG_FULL, MEDIUM_INITIAL, WEAK }
+
+    private data class Explain(
+        val uncoveredDigits: Int,
+        val matchedDigits: Int,
+        val strongFull: Int,
+        val mediumInitial: Int,
+        val weakSeg: Int
+    )
+
+    private fun buildPlanInfos(plans: List<PathPlan>): List<PlanInfo> {
+        val out = ArrayList<PlanInfo>(plans.size)
+        for (p in plans) {
+            val segs = p.segments
+            val segDigits = IntArray(segs.size)
+            val prefix = IntArray(segs.size + 1)
+            prefix[0] = 0
+
+            for (i in segs.indices) {
+                val len = T9Lookup.encodeLetters(segs[i]).length.coerceAtLeast(1)
+                segDigits[i] = len
+                prefix[i + 1] = prefix[i] + len
+            }
+
+            out.add(
+                PlanInfo(
+                    plan = p,
+                    segDigits = segDigits,
+                    prefixDigits = prefix,
+                    totalDigits = prefix.last()
+                )
+            )
+        }
+        return out
+    }
+
+    private fun matchKind(segLower: String, sylLower: String): SegKind? {
+        // 1) 完整音节：必须完全相等；但 a/o/e 这种长度=1 的“完整音节”在 T9 里过于宽松，算 WEAK
+        if (pinyinSet.contains(segLower)) {
+            if (sylLower != segLower) return null
+            return if (segLower.length >= 2) SegKind.STRONG_FULL else SegKind.WEAK
+        }
+
+        // 2) zh/ch/sh：声母节（中等强度）
+        if (segLower == "zh" || segLower == "ch" || segLower == "sh") {
+            return if (sylLower.startsWith(segLower)) SegKind.MEDIUM_INITIAL else null
+        }
+
+        // 3) 单字母节：只匹配音节首字母（弱）
+        if (segLower.length == 1 && segLower[0] in 'a'..'z') {
+            return if (sylLower.startsWith(segLower)) SegKind.WEAK else null
+        }
+
+        return null
+    }
+
+    private fun explainOnPlan(info: PlanInfo, syllables: List<String>): Explain {
+        val segs = info.plan.segments
+        val n = minOf(segs.size, syllables.size)
+
+        var strong = 0
+        var medium = 0
+        var weak = 0
+        var matchedSegs = 0
+
+        for (i in 0 until n) {
+            val seg = segs[i].lowercase()
+            val syl = syllables[i].lowercase()
+
+            val kind = matchKind(seg, syl) ?: break
+            matchedSegs++
+
+            when (kind) {
+                SegKind.STRONG_FULL -> strong++
+                SegKind.MEDIUM_INITIAL -> medium++
+                SegKind.WEAK -> weak++
+            }
+        }
+
+        val matchedDigits = info.prefixDigits[matchedSegs]
+        val uncovered = (info.totalDigits - matchedDigits).coerceAtLeast(0)
+
+        return Explain(
+            uncoveredDigits = uncovered,
+            matchedDigits = matchedDigits,
+            strongFull = strong,
+            mediumInitial = medium,
+            weakSeg = weak
+        )
+    }
+
+    private fun bestExplain(planInfos: List<PlanInfo>, cand: Candidate): Explain? {
         val py = cand.pinyin?.lowercase()?.trim() ?: return null
         val syl = splitConcatPinyinToSyllables(py)
         if (syl.isEmpty()) return null
 
-        var best: MatchQuality? = null
+        var best: Explain? = null
 
-        for (p in plans) {
-            val n = minOf(p.segments.size, syl.size)
-            var weak = 0
-            var full = 0
-            var matched = 0
+        for (info in planInfos) {
+            val e = explainOnPlan(info, syl)
 
-            for (i in 0 until n) {
-                val seg = p.segments[i].lowercase()
-                val s = syl[i].lowercase()
-
-                val ok = when {
-                    // 完整音节：必须完全相等（强）
-                    pinyinSet.contains(seg) -> {
-                        if (s == seg) {
-                            full++
-                            true
-                        } else {
-                            false
-                        }
-                    }
-
-                    // zh/ch/sh：声母节，要求该音节以它开头（中强）
-                    seg == "zh" || seg == "ch" || seg == "sh" -> s.startsWith(seg)
-
-                    // 单字母节：只约束该音节首字母（弱）
-                    seg.length == 1 && seg[0] in 'a'..'z' -> {
-                        if (s.startsWith(seg)) {
-                            weak++
-                            true
-                        } else {
-                            false
-                        }
-                    }
-
-                    else -> false
-                }
-
-                if (!ok) break
-                matched++
-            }
-
-            val q = MatchQuality(weakSegCount = weak, fullSyllableCount = full, matchedSegments = matched)
-
-            // 选“最强”的 plan：先弱段更少，再完整音节更多，再匹配段数更多
+            // 选择“最佳解释”：先覆盖度（uncovered）最小，再强音节更多，再中等更多，再弱段更少，再解释 digits 更长
             if (best == null
-                || q.weakSegCount < best!!.weakSegCount
-                || (q.weakSegCount == best!!.weakSegCount && q.fullSyllableCount > best!!.fullSyllableCount)
-                || (q.weakSegCount == best!!.weakSegCount
-                    && q.fullSyllableCount == best!!.fullSyllableCount
-                    && q.matchedSegments > best!!.matchedSegments)
+                || e.uncoveredDigits < best!!.uncoveredDigits
+                || (e.uncoveredDigits == best!!.uncoveredDigits && e.strongFull > best!!.strongFull)
+                || (e.uncoveredDigits == best!!.uncoveredDigits && e.strongFull == best!!.strongFull && e.mediumInitial > best!!.mediumInitial)
+                || (e.uncoveredDigits == best!!.uncoveredDigits && e.strongFull == best!!.strongFull && e.mediumInitial == best!!.mediumInitial && e.weakSeg < best!!.weakSeg)
+                || (e.uncoveredDigits == best!!.uncoveredDigits
+                    && e.strongFull == best!!.strongFull
+                    && e.mediumInitial == best!!.mediumInitial
+                    && e.weakSeg == best!!.weakSeg
+                    && e.matchedDigits > best!!.matchedDigits)
             ) {
-                best = q
+                best = e
             }
         }
 
         return best
     }
 
-    private fun rerankByMatchThenLengthFreq(
+    private fun rerankByCoverageThenFreq(
         candidates: ArrayList<Candidate>,
         plans: List<PathPlan>
     ) {
         if (candidates.isEmpty()) return
+        if (plans.isEmpty()) return
 
-        val qMap = HashMap<Candidate, MatchQuality?>(candidates.size)
+        val planInfos = buildPlanInfos(plans)
+
+        val explainCache = HashMap<Candidate, Explain?>(candidates.size)
         val sylCountCache = HashMap<Candidate, Int>(candidates.size)
 
         fun syllableCount(c: Candidate): Int {
@@ -308,16 +386,20 @@ object CnT9Handler : ImeModeHandler {
             return n
         }
 
-        for (c in candidates) qMap[c] = bestMatchQuality(plans, c)
+        for (c in candidates) {
+            explainCache[c] = bestExplain(planInfos, c)
+        }
 
         candidates.sortWith(
             compareBy<Candidate>(
-                { qMap[it]?.weakSegCount ?: Int.MAX_VALUE },            // 1) 弱段越少越靠前（先保证 zhi > xi'g）
-                { -(qMap[it]?.fullSyllableCount ?: 0) },                // 2) 完整音节命中越多越靠前
-                { -(qMap[it]?.matchedSegments ?: 0) },                  // 3) 连续匹配段数越多越靠前
-                { -syllableCount(it).coerceAtLeast(it.word.length) },   // 4) 同强度内：音节/字数更长更靠前
-                { -it.word.length },                                    // 5) 再偏向更长词
-                { -it.priority },                                       // 6) 再按词频
+                { explainCache[it]?.uncoveredDigits ?: Int.MAX_VALUE },   // 1) 覆盖度优先（硬约束，防“新密灾难”）
+                { -(explainCache[it]?.strongFull ?: 0) },                 // 2) 强音节越多越靠前
+                { -(explainCache[it]?.mediumInitial ?: 0) },              // 3) zh/ch/sh 声母节作为次优
+                { -it.priority },                                         // 4) 词频（常用词靠前：一个/知道/侄儿）
+                { -syllableCount(it) },                                   // 5) 轻量偏向多音节
+                { -it.word.length },                                      // 6) 轻量偏向长词
+                { explainCache[it]?.weakSeg ?: Int.MAX_VALUE },           // 7) 弱段越少越好（但不压过词频）
+                { -(explainCache[it]?.matchedDigits ?: 0) },              // 8) 解释 digits 越长越好
                 { it.word }
             )
         )
