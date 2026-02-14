@@ -20,7 +20,7 @@ object CnT9Handler : ImeModeHandler {
     private data class PathPlan(
         val rank: Int,                // 0 = 主预览路径，其它分支依次递增
         val segments: List<String>,    // stack + first + autoTail
-        val text: String              // segments joined by '\n
+        val text: String              // segments joined by '\n'
     )
 
     override fun build(
@@ -87,11 +87,17 @@ object CnT9Handler : ImeModeHandler {
                 ArrayList(filtered)
             }
 
-        // Re-rank: 主分支优先，其次严格匹配段数，再按 freq
-        rerankCandidatesByBestPlan(finalList, plans)
+        // NEW: 候选排序按“长词/多音节优先 + 词频”，不再按 sidebar 第一节分支的顺序分组。
+        rerankCandidatesByLengthThenFreq(finalList)
 
-        // UI composing preview line: committedPrefix + 主预览路径
-        val composingPreviewCore = previewPathText ?: ""
+        // NEW: 顶部预览以“第 1 个候选词”作为基准对齐；若候选无法提供拼音，则回退到主预览路径。
+        val composingPreviewCore = buildPreviewCoreByTopCandidate(
+            top = finalList.firstOrNull(),
+            plans = plans,
+            fallback = previewPathText
+        ) ?: ""
+
+        // UI composing preview line: committedPrefix + 预览路径
         val composingPreviewText = buildString {
             append(session.committedPrefix)
             if (composingPreviewCore.isNotEmpty()) append(composingPreviewCore)
@@ -209,6 +215,71 @@ object CnT9Handler : ImeModeHandler {
         return outMap.values.toList()
     }
 
+    // NEW: 候选排序：长词/多音节优先，然后按词频(priority)。
+    private fun rerankCandidatesByLengthThenFreq(candidates: ArrayList<Candidate>) {
+        if (candidates.isEmpty()) return
+
+        val syllableCountCache = HashMap<Candidate, Int>(candidates.size)
+
+        fun syllableCount(c: Candidate): Int {
+            syllableCountCache[c]?.let { return it }
+
+            val n = when {
+                c.syllables > 0 -> c.syllables
+                !c.pinyin.isNullOrBlank() -> splitConcatPinyinToSyllables(c.pinyin.lowercase().trim()).size
+                else -> 0
+            }
+
+            syllableCountCache[c] = n
+            return n
+        }
+
+        candidates.sortWith(
+            compareByDescending<Candidate> { syllableCount(it).coerceAtLeast(it.word.length) }
+                .thenByDescending { it.word.length }
+                .thenByDescending { it.priority }
+                .thenBy { it.word }
+        )
+    }
+
+    // NEW: 顶部预览以“第 1 个候选词”对齐；并用最贴合的 plan 补齐后续段（如果有）。
+    private fun buildPreviewCoreByTopCandidate(
+        top: Candidate?,
+        plans: List<PathPlan>,
+        fallback: String?
+    ): String? {
+        if (top == null) return fallback
+
+        val py = top.pinyin?.lowercase()?.trim()
+        if (py.isNullOrEmpty()) return fallback
+
+        val syl = splitConcatPinyinToSyllables(py)
+        if (syl.isEmpty()) return fallback
+
+        var bestPlan: PathPlan? = null
+        var bestMatched = -1
+        var bestRank = Int.MAX_VALUE
+
+        for (p in plans) {
+            val m = countMatchedSegments(p.segments, syl)
+            if (m > bestMatched || (m == bestMatched && p.rank < bestRank)) {
+                bestMatched = m
+                bestRank = p.rank
+                bestPlan = p
+            }
+        }
+
+        val out = ArrayList<String>(syl.size + (bestPlan?.segments?.size ?: 0))
+        out.addAll(syl)
+
+        if (bestPlan != null && bestPlan.segments.size > syl.size) {
+            out.addAll(bestPlan.segments.drop(syl.size))
+        }
+
+        return out.joinToString("'")
+    }
+
+    // 旧逻辑保留（不再用于最终排序），避免你后续还想切回“按分支优先”的体验。
     private fun rerankCandidatesByBestPlan(
         candidates: ArrayList<Candidate>,
         plans: List<PathPlan>
