@@ -20,6 +20,7 @@ import com.example.myapp.ime.theme.ThemeController
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.ime.ui.ImeUiBinder
 import com.example.myapp.ime.ui.ToolbarController
+
 import com.example.myapp.keyboard.DefaultKeyboardRegistry
 
 class ImeGraph(
@@ -82,14 +83,21 @@ class ImeGraph(
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
-            val candidateController = CandidateController(
+            lateinit var candidateController: CandidateController
+
+            val updateComposingView: () -> Unit = {
+                val preview = candidateController.resolveComposingPreviewText()
+                ui.setComposingPreview(preview)
+            }
+
+            candidateController = CandidateController(
                 ui = ui,
                 keyboardController = keyboardController,
                 dictEngine = dictManager.dictionary,
                 sessions = sessions,
                 commitRaw = { text -> inputConnectionProvider()?.commitText(text, 1) },
                 clearComposing = { dispatcher.clearComposing() },
-                updateComposingView = { dispatcher.refreshComposingView() }
+                updateComposingView = updateComposingView
             )
 
             val toolbarController = ToolbarController(
