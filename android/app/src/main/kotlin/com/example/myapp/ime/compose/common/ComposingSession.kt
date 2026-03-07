@@ -45,8 +45,6 @@ class ComposingSession {
             val consumedPinyins: List<String>,
             val consumedDigitChunks: List<String>,
             val consumedCutChunks: List<List<Int>>,
-            // undo 时：前 restorePinyinCountOnUndo 个 segment 恢复回 stack，
-            // 其余 segment 恢复回 raw digits（用于“提交前临时自动物化”的部分）
             val restorePinyinCountOnUndo: Int
         ) : PickRecord()
 
@@ -92,10 +90,6 @@ class ComposingSession {
         _rawT9Digits += digit.filter { it in '0'..'9' }
     }
 
-    /**
-     * CN-T9: 在“当前 raw digits 尾部”插入一个待生效切分点。
-     * 当下一位 digit 继续输入后，该切分点会自然变成内部切分点。
-     */
     fun insertT9ManualCutAtEnd() {
         val len = _rawT9Digits.length
         if (len <= 0) return
@@ -113,10 +107,6 @@ class ComposingSession {
         }
     }
 
-    /**
-     * 消费 raw digits 的前缀，同时把剩余切分点整体左移。
-     * 返回被消费掉/移除的切分点（局部坐标，范围 1..len）。
-     */
     private fun consumeDigitsPrefixForCuts(len: Int): List<Int> {
         if (len <= 0 || _t9ManualCuts.isEmpty()) return emptyList()
 
@@ -137,10 +127,6 @@ class ComposingSession {
         return removed
     }
 
-    /**
-     * 在 raw digits 前面恢复一个前缀；已有切分点整体右移，再把 restoredCuts 放回去。
-     * restoredCuts 的坐标必须是相对“这个恢复前缀”的局部坐标。
-     */
     private fun restoreCutsOnPrepend(prefixLen: Int, restoredCuts: List<Int>) {
         if (prefixLen <= 0 && restoredCuts.isEmpty()) return
 
@@ -159,13 +145,6 @@ class ComposingSession {
         _t9ManualCuts.addAll(shifted)
     }
 
-    /**
-     * 将多个 segment 的局部 cuts 拼成一个“组合前缀”的局部 cuts。
-     * 例如：
-     * - chunk1 len=2, cuts=[2]
-     * - chunk2 len=3, cuts=[1]
-     * => 合并后 cuts=[2,3]
-     */
     private fun flattenCutChunks(
         digitChunks: List<String>,
         cutChunks: List<List<Int>>
@@ -191,10 +170,6 @@ class ComposingSession {
         return out
     }
 
-    /**
-     * 侧栏选中一个拼音节：把它压入 pinyinStack，并从 raw digits 消费对应前缀。
-     * 为了后续 backspace / undo 稳定恢复，这里会把“实际消费的 digits 与 cuts”同步记账。
-     */
     fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         val normalizedPinyin = pinyin.trim().lowercase(Locale.ROOT)
         if (normalizedPinyin.isEmpty()) return
@@ -218,6 +193,20 @@ class ComposingSession {
         return if (list.isNotEmpty()) list[0] else "?"
     }
 
+    private fun buildT9DisplayFallbackSuffix(): String {
+        if (_rawT9Digits.isEmpty()) return ""
+
+        if (_pinyinStack.isNotEmpty()) {
+            return ""
+        }
+
+        if (_rawT9Digits.length == 1) {
+            return repLetter(_rawT9Digits[0])
+        }
+
+        return ""
+    }
+
     fun displayText(useT9Layout: Boolean): String? {
         if (!isComposing()) return null
 
@@ -229,20 +218,18 @@ class ComposingSession {
         }
 
         val stackUi = _pinyinStack.joinToString("'") { it.lowercase(Locale.ROOT) }
-        val previewUi = when {
-            _rawT9Digits.isEmpty() -> ""
-            _rawT9Digits.length == 1 -> repLetter(_rawT9Digits[0])
-            else -> "…"
-        }
+        val fallbackUi = buildT9DisplayFallbackSuffix()
 
-        return buildString {
+        val text = buildString {
             append(_committedPrefix)
-            if (stackUi.isNotEmpty()) append(stackUi)
-            if (previewUi.isNotEmpty()) {
-                if (stackUi.isNotEmpty()) append("'")
-                append(previewUi)
+            if (stackUi.isNotEmpty()) {
+                append(stackUi)
+            } else if (fallbackUi.isNotEmpty()) {
+                append(fallbackUi)
             }
         }
+
+        return text.takeIf { it.isNotEmpty() }
     }
 
     fun backspace(useT9Layout: Boolean): Boolean {
