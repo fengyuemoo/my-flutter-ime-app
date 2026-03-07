@@ -116,7 +116,7 @@ class ImeUi {
         return clampCandidateIndex(selectedCandidateIndex)
     }
 
-    fun setSelectedCandidateIndex(index: Int) {
+    fun setSelectedCandidateIndex(index: Int, scrollToItem: Boolean = true) {
         val clamped = clampCandidateIndex(index)
         selectedCandidateIndex = clamped
 
@@ -127,7 +127,9 @@ class ImeUi {
             adapterVertical.setSelectedIndex(clamped)
         }
 
-        scrollSelectionIntoView(clamped)
+        if (scrollToItem && currentCandidates.isNotEmpty()) {
+            scrollSelectionIntoView(clamped)
+        }
     }
 
     fun resetSelectedCandidateIndex() {
@@ -158,6 +160,30 @@ class ImeUi {
         recyclerVertical.post {
             recyclerVertical.scrollToPosition(index)
         }
+    }
+
+    private fun installHorizontalSelectionSync() {
+        recyclerHorizontal.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (newState != RecyclerView.SCROLL_STATE_IDLE) return
+                if (currentCandidates.isEmpty()) return
+
+                val lm = recyclerView.layoutManager as? LinearLayoutManager ?: return
+
+                val firstCompletelyVisible = lm.findFirstCompletelyVisibleItemPosition()
+                val firstVisible = lm.findFirstVisibleItemPosition()
+
+                val target = when {
+                    firstCompletelyVisible != RecyclerView.NO_POSITION -> firstCompletelyVisible
+                    firstVisible != RecyclerView.NO_POSITION -> firstVisible
+                    else -> return
+                }
+
+                if (target != getSelectedCandidateIndex()) {
+                    setSelectedCandidateIndex(target, scrollToItem = false)
+                }
+            }
+        })
     }
 
     fun applyFont(fontFamily: String, fontScale: Float) {
@@ -274,6 +300,8 @@ class ImeUi {
 
         recyclerHorizontal.adapter = adapterHorizontal
         recyclerVertical.adapter = adapterVertical
+
+        installHorizontalSelectionSync()
 
         installRecyclerAutoFont(recyclerHorizontal)
         installRecyclerAutoFont(recyclerVertical)
