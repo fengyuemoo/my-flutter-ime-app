@@ -5,6 +5,7 @@ import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.db.DictionaryDbHelper
 import com.example.myapp.dict.model.Candidate
 import java.util.Locale
+import kotlin.math.abs
 
 class SQLiteDictionaryEngine(
     private val context: Context
@@ -145,63 +146,131 @@ class SQLiteDictionaryEngine(
         if (!isLoaded) return emptyList()
 
         val normalizedStack = pinyinStack
-            .map { it.trim().lowercase(Locale.ROOT) }
+            .map { normalizePinyinToken(it) }
             .filter { it.isNotEmpty() }
 
         if (normalizedStack.isEmpty()) return emptyList()
 
+        data class ScoredStackCandidate(
+            val candidate: Candidate,
+            val sourceRank: Int,
+            val exactInput: Boolean,
+            val prefixInput: Boolean,
+            val exactT9WithRaw: Boolean,
+            val prefixT9WithRaw: Boolean,
+            val pinyinCountMatched: Boolean,
+            val syllableDistance: Int,
+            val score: Int
+        )
+
         val db = dbHelper.readableDatabase
-        val result = ArrayList<Candidate>()
-        val seen = HashSet<String>()
+        val result = LinkedHashMap<String, ScoredStackCandidate>()
+        val normalizedRawDigits = rawDigits.filter { it in '0'..'9' }
         val totalLimit = 300
 
-        fun addUnique(list: List<Candidate>, forcedPinyinCount: Int) {
+        fun pushAll(
+            list: List<Candidate>,
+            sourceRank: Int,
+            forcedPinyinCount: Int
+        ) {
             for (cand in list) {
-                if (!seen.add(cand.word)) continue
-                result.add(
-                    cand.copy(
-                        pinyinCount = forcedPinyinCount.coerceAtLeast(1),
-                        matchedLength = rawDigits.length
-                    )
+                val scored = scoreStackCandidate(
+                    cand = cand,
+                    stack = normalizedStack,
+                    rawDigits = normalizedRawDigits,
+                    sourceRank = sourceRank,
+                    forcedPinyinCount = forcedPinyinCount
                 )
+
+                val existing = result[scored.candidate.word]
+                if (existing == null || isBetter(scored, existing)) {
+                    result[scored.candidate.word] = scored
+                }
+
                 if (result.size >= totalLimit) return
             }
         }
 
         for (count in normalizedStack.size downTo 1) {
-            if (result.size >= totalLimit) break
-
             val joined = normalizedStack.take(count).joinToString("")
-            val list = queries.queryDb(
+
+            val exactList = queries.queryDb(
                 db = db,
                 input = joined,
                 isT9 = false,
                 lang = 0,
-                limit = if (count == normalizedStack.size) 120 else 80,
+                limit = if (count == normalizedStack.size) 140 else 90,
                 offset = 0,
                 matchedLen = joined.length,
                 exactMatch = true,
                 pinyinFilter = null
             )
+            pushAll(
+                list = exactList,
+                sourceRank = (normalizedStack.size - count) * 10,
+                forcedPinyinCount = count
+            )
 
-            addUnique(
-                list = list,
+            val prefixList = queries.queryDb(
+                db = db,
+                input = joined,
+                isT9 = false,
+                lang = 0,
+                limit = if (count == normalizedStack.size) 120 else 70,
+                offset = 0,
+                matchedLen = joined.length,
+                exactMatch = false,
+                pinyinFilter = joined
+            )
+            pushAll(
+                list = prefixList,
+                sourceRank = (normalizedStack.size - count) * 10 + 1,
                 forcedPinyinCount = count
             )
 
             if (count == 1 && result.size < totalLimit) {
-                addUnique(
-                    list = queries.querySingleCharByInputExact(
-                        db = db,
-                        input = joined,
-                        limit = 180
-                    ),
+                val exactSingle = queries.querySingleCharByInputExact(
+                    db = db,
+                    input = joined,
+                    limit = 180
+                )
+                pushAll(
+                    list = exactSingle,
+                    sourceRank = 100,
+                    forcedPinyinCount = 1
+                )
+
+                val prefixSingle = queries.querySingleCharByInputPrefix(
+                    db = db,
+                    prefix = joined
+                )
+                pushAll(
+                    list = prefixSingle,
+                    sourceRank = 101,
                     forcedPinyinCount = 1
                 )
             }
+
+            if (result.size >= totalLimit) break
         }
 
-        return result
+        return result.values
+            .sortedWith(
+                compareByDescending<ScoredStackCandidate> { it.score }
+                    .thenByDescending { if (it.exactInput) 1 else 0 }
+                    .thenByDescending { if (it.prefixInput) 1 else 0 }
+                    .thenByDescending { if (it.exactT9WithRaw) 1 else 0 }
+                    .thenByDescending { if (it.prefixT9WithRaw) 1 else 0 }
+                    .thenByDescending { if (it.pinyinCountMatched) 1 else 0 }
+                    .thenBy { it.syllableDistance }
+                    .thenBy { it.sourceRank }
+                    .thenByDescending { it.candidate.priority }
+                    .thenByDescending { it.candidate.word.length }
+                    .thenByDescending { it.candidate.syllables }
+                    .thenBy { it.candidate.word }
+            )
+            .map { it.candidate }
+            .take(totalLimit)
     }
 
     override fun getSuggestions(
@@ -295,6 +364,131 @@ class SQLiteDictionaryEngine(
 
         val first = digits.firstOrNull() ?: return false
         return T9Lookup.charsFromDigit(first).isNotEmpty()
+    }
+
+    private fun scoreStackCandidate(
+        cand: Candidate,
+        stack: List<String>,
+        rawDigits: String,
+        sourceRank: Int,
+        forcedPinyinCount: Int
+    ): ScoredStackCandidate {
+        val normalizedInput = normalizePinyinConcat(cand.pinyin ?: cand.input)
+        val stackConcat = normalizePinyinConcat(stack.joinToString(""))
+        val rawT9 = rawDigits
+        val candT9 = T9Lookup.encodeLetters(normalizedInput)
+
+        val exactInput = normalizedInput.isNotEmpty() && normalizedInput == stackConcat
+        val prefixInput = normalizedInput.isNotEmpty() &&
+            (normalizedInput.startsWith(stackConcat) || stackConcat.startsWith(normalizedInput))
+
+        val exactT9WithRaw = rawT9.isNotEmpty() && candT9 == rawT9
+        val prefixT9WithRaw = rawT9.isNotEmpty() &&
+            (candT9.startsWith(rawT9) || rawT9.startsWith(candT9))
+
+        val resolvedSyllables = resolveSyllables(cand, normalizedInput)
+        val stackSize = stack.size
+        val effectivePinyinCount = forcedPinyinCount
+            .coerceAtLeast(1)
+            .coerceAtMost(stackSize)
+
+        val syllableDistance = abs(resolvedSyllables - effectivePinyinCount)
+        val pinyinCountMatched = syllableDistance == 0
+
+        val sourceBonus = when {
+            sourceRank == 0 -> 5000
+            sourceRank == 1 -> 3600
+            sourceRank < 20 -> 2500 - sourceRank * 40
+            else -> 700 - sourceRank * 3
+        }
+
+        val exactInputBonus = if (exactInput) 1400 else 0
+        val prefixInputBonus = if (prefixInput) 620 else 0
+        val exactT9Bonus = if (exactT9WithRaw) 320 else 0
+        val prefixT9Bonus = if (prefixT9WithRaw) 140 else 0
+        val pinyinCountBonus = if (pinyinCountMatched) 260 else 0
+        val phraseBonus = if (cand.word.length > 1) 220 else 0
+        val charBonus = cand.word.length * 26
+        val freqBonus = cand.priority.coerceAtLeast(0) / 1000
+
+        val syllablePenalty = syllableDistance * 90
+        val shorterThanStackPenalty =
+            if (resolvedSyllables < effectivePinyinCount) (effectivePinyinCount - resolvedSyllables) * 120 else 0
+
+        val score = sourceBonus +
+            exactInputBonus +
+            prefixInputBonus +
+            exactT9Bonus +
+            prefixT9Bonus +
+            pinyinCountBonus +
+            phraseBonus +
+            charBonus +
+            freqBonus -
+            syllablePenalty -
+            shorterThanStackPenalty
+
+        val normalizedCandidate = cand.copy(
+            matchedLength = rawDigits.length,
+            pinyinCount = effectivePinyinCount,
+            pinyin = cand.pinyin ?: cand.input
+        )
+
+        return ScoredStackCandidate(
+            candidate = normalizedCandidate,
+            sourceRank = sourceRank,
+            exactInput = exactInput,
+            prefixInput = prefixInput,
+            exactT9WithRaw = exactT9WithRaw,
+            prefixT9WithRaw = prefixT9WithRaw,
+            pinyinCountMatched = pinyinCountMatched,
+            syllableDistance = syllableDistance,
+            score = score
+        )
+    }
+
+    private fun isBetter(
+        a: ScoredStackCandidate,
+        b: ScoredStackCandidate
+    ): Boolean {
+        return when {
+            a.score != b.score -> a.score > b.score
+            a.exactInput != b.exactInput -> a.exactInput
+            a.prefixInput != b.prefixInput -> a.prefixInput
+            a.exactT9WithRaw != b.exactT9WithRaw -> a.exactT9WithRaw
+            a.prefixT9WithRaw != b.prefixT9WithRaw -> a.prefixT9WithRaw
+            a.pinyinCountMatched != b.pinyinCountMatched -> a.pinyinCountMatched
+            a.syllableDistance != b.syllableDistance -> a.syllableDistance < b.syllableDistance
+            a.sourceRank != b.sourceRank -> a.sourceRank < b.sourceRank
+            a.candidate.priority != b.candidate.priority -> a.candidate.priority > b.candidate.priority
+            a.candidate.word.length != b.candidate.word.length -> a.candidate.word.length > b.candidate.word.length
+            else -> a.candidate.word < b.candidate.word
+        }
+    }
+
+    private fun resolveSyllables(cand: Candidate, normalizedPinyin: String): Int {
+        if (cand.syllables > 0) return cand.syllables
+
+        val splitByApostrophe = normalizedPinyin
+            .split("'")
+            .map { it.trim() }
+            .count { it.isNotEmpty() }
+
+        if (splitByApostrophe > 0) return splitByApostrophe
+
+        val parsed = analyzer.splitConcatPinyinToSyllables(
+            normalizedPinyin.replace("'", "")
+        )
+        if (parsed.isNotEmpty()) return parsed.size
+
+        return 1
+    }
+
+    private fun normalizePinyinConcat(raw: String): String {
+        return raw
+            .trim()
+            .lowercase(Locale.ROOT)
+            .replace("ü", "v")
+            .replace("'", "")
     }
 
     private fun normalizePinyinToken(raw: String): String {
