@@ -958,19 +958,19 @@ class CnT9CandidateEngine(
         }
 
         if (session.rawT9Digits.isNotEmpty()) {
-            val inputLen = resolveDigitsToConsume(cand)
+            val consumeDigits = resolveDigitsToConsume(cand)
                 .coerceAtLeast(1)
                 .coerceAtMost(session.rawT9Digits.length)
 
             val pickCand = cand.copy(
-                input = session.rawT9Digits.take(inputLen),
                 pinyinCount = 0
             )
 
             when (val result = session.pickCandidate(
                 cand = pickCand,
                 useT9Layout = true,
-                isChinese = true
+                isChinese = true,
+                t9ConsumedDigitsCount = consumeDigits
             )) {
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()

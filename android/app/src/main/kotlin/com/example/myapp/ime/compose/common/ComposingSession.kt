@@ -303,7 +303,8 @@ class ComposingSession {
         cand: Candidate,
         useT9Layout: Boolean,
         isChinese: Boolean,
-        restorePinyinCountOnUndo: Int = -1
+        restorePinyinCountOnUndo: Int = -1,
+        t9ConsumedDigitsCount: Int = -1
     ): PickResult {
         if (useT9Layout) {
             _committedPrefix += cand.word
@@ -350,9 +351,15 @@ class ComposingSession {
                 return PickResult.Commit(_committedPrefix)
             }
 
-            val consumeDigits = cand.input.length
-                .coerceAtLeast(1)
+            val explicitConsumeDigits = t9ConsumedDigitsCount
                 .coerceAtMost(_rawT9Digits.length)
+
+            val consumeDigits = when {
+                explicitConsumeDigits > 0 -> explicitConsumeDigits
+                else -> cand.input.length
+                    .coerceAtLeast(1)
+                    .coerceAtMost(_rawT9Digits.length)
+            }
 
             val consumedDigits = _rawT9Digits.substring(0, consumeDigits)
             val consumedCuts = consumeDigitsPrefixForCuts(consumeDigits)
