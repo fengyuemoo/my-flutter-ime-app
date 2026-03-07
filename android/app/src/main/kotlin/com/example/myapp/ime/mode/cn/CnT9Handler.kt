@@ -815,6 +815,11 @@ class CnT9CandidateEngine(
         return if (selected in currentCandidates.indices) selected else 0
     }
 
+    private fun preferredCandidateOrNull(): Candidate? {
+        val idx = preferredCandidateIndexOrNull() ?: return null
+        return currentCandidates.getOrNull(idx)
+    }
+
     fun syncFilterButton() {
         ui.setFilterButton(isSingleCharMode)
     }
@@ -845,13 +850,25 @@ class CnT9CandidateEngine(
         ui.setCandidates(currentCandidates)
     }
 
+    private fun clearOutputOverrides() {
+        composingPreviewOverride = null
+        enterCommitTextOverride = null
+    }
+
+    private fun applyBuildOutput(out: ImeModeHandler.Output) {
+        composingPreviewOverride = out.composingPreviewText
+        enterCommitTextOverride = out.enterCommitText
+        currentCandidates = ArrayList(out.candidates)
+        resetUiSelectionToTop()
+        renderComposingUi(out)
+    }
+
     fun updateCandidates() {
         syncFilterButton()
         currentCandidates.clear()
 
         if (!session.isComposing()) {
-            composingPreviewOverride = null
-            enterCommitTextOverride = null
+            clearOutputOverrides()
             resetUiSelectionToTop()
 
             if (isExpanded) isExpanded = false
@@ -865,12 +882,7 @@ class CnT9CandidateEngine(
             singleCharMode = isSingleCharMode
         )
 
-        composingPreviewOverride = out.composingPreviewText
-        enterCommitTextOverride = out.enterCommitText
-        currentCandidates = ArrayList(out.candidates)
-
-        resetUiSelectionToTop()
-        renderComposingUi(out)
+        applyBuildOutput(out)
     }
 
     fun handleSpaceKey() {
@@ -883,8 +895,14 @@ class CnT9CandidateEngine(
     }
 
     fun commitFirstCandidateOnEnter(): Boolean {
-        val preferred = preferredCandidateIndexOrNull() ?: return false
-        commitCandidateAt(preferred)
+        val preferredIndex = preferredCandidateIndexOrNull() ?: return false
+        val preferredCandidate = preferredCandidateOrNull() ?: return false
+
+        if (!shouldCommitPreferredCandidateOnEnter(preferredIndex, preferredCandidate)) {
+            return false
+        }
+
+        commitCandidateAt(preferredIndex)
         return true
     }
 
@@ -940,9 +958,7 @@ class CnT9CandidateEngine(
         }
 
         if (session.rawT9Digits.isNotEmpty()) {
-            val inputLen = T9Lookup.encodeLetters(
-                cand.input.replace("'", "")
-            ).length
+            val inputLen = resolveDigitsToConsume(cand)
                 .coerceAtLeast(1)
                 .coerceAtMost(session.rawT9Digits.length)
 
@@ -989,6 +1005,94 @@ class CnT9CandidateEngine(
         commitCandidateAt(idx)
     }
 
+    private fun shouldCommitPreferredCandidateOnEnter(
+        preferredIndex: Int,
+        cand: Candidate
+    ): Boolean {
+        if (!session.isComposing()) return false
+
+        if (preferredIndex > 0) {
+            return true
+        }
+
+        if (currentCandidates.size == 1) {
+            return true
+        }
+
+        if (isRawCommitMode()) {
+            return true
+        }
+
+        if (session.rawT9Digits.isEmpty()) {
+            return session.pinyinStack.isNotEmpty()
+        }
+
+        val preview = normalizedEnterPreview() ?: return false
+        val candPreview = normalizedCandidatePreview(cand)
+        val expectedSyllables = estimateCurrentComposingSyllables()
+        val consumeSyllables = resolveConsumeSyllables(cand)
+
+        if (candPreview.isNotEmpty() && candPreview == preview) {
+            return true
+        }
+
+        if (candPreview.isNotEmpty() &&
+            preview.startsWith(candPreview) &&
+            cand.word.length > 1 &&
+            consumeSyllables >= min(2, expectedSyllables)
+        ) {
+            return true
+        }
+
+        if (session.pinyinStack.isNotEmpty() &&
+            session.rawT9Digits.length <= 2 &&
+            cand.word.length > 1 &&
+            consumeSyllables >= min(2, expectedSyllables)
+        ) {
+            return true
+        }
+
+        return false
+    }
+
+    private fun normalizedEnterPreview(): String? {
+        val raw = enterCommitTextOverride
+            ?: composingPreviewOverride
+            ?: return null
+
+        val normalized = raw
+            .trim()
+            .lowercase(Locale.ROOT)
+            .filter { it in 'a'..'z' || it == '\'' }
+            .replace("'", "")
+
+        return normalized.takeIf { it.isNotEmpty() }
+    }
+
+    private fun normalizedCandidatePreview(cand: Candidate): String {
+        return (cand.pinyin ?: cand.input)
+            .trim()
+            .lowercase(Locale.ROOT)
+            .replace("ü", "v")
+            .replace("'", "")
+    }
+
+    private fun estimateCurrentComposingSyllables(): Int {
+        return session.pinyinStack.size + estimateRawDigitSyllables(session.rawT9Digits)
+    }
+
+    private fun estimateRawDigitSyllables(digits: String): Int {
+        if (digits.isEmpty()) return 0
+        return when {
+            digits.length <= 2 -> 1
+            digits.length <= 5 -> 2
+            digits.length <= 8 -> 3
+            digits.length <= 11 -> 4
+            digits.length <= 14 -> 5
+            else -> (digits.length + 2) / 3
+        }
+    }
+
     private fun materializeSegmentsIfNeeded(targetSyllables: Int) {
         if (!dictEngine.isLoaded) return
 
@@ -1007,6 +1111,7 @@ class CnT9CandidateEngine(
     }
 
     private fun resolveConsumeSyllables(cand: Candidate): Int {
+        if (cand.pinyinCount > 0) return cand.pinyinCount
         if (cand.syllables > 0) return cand.syllables
 
         cand.pinyin?.let { py ->
@@ -1018,6 +1123,20 @@ class CnT9CandidateEngine(
         if (split > 0) return split
 
         return 1
+    }
+
+    private fun resolveDigitsToConsume(cand: Candidate): Int {
+        val source = (cand.pinyin ?: cand.input)
+            .lowercase(Locale.ROOT)
+            .replace("'", "")
+            .replace("ü", "v")
+
+        val digits = T9Lookup.encodeLetters(source)
+        if (digits.isNotEmpty()) return digits.length
+
+        return T9Lookup.encodeLetters(
+            cand.input.replace("'", "")
+        ).length
     }
 
     private fun splitCandidatePinyin(raw: String): Int {
