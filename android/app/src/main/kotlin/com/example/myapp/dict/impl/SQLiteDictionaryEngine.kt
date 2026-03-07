@@ -37,6 +37,18 @@ class SQLiteDictionaryEngine(
         queries = queries
     )
 
+    private data class ScoredStackCandidate(
+        val candidate: Candidate,
+        val sourceRank: Int,
+        val exactInput: Boolean,
+        val prefixInput: Boolean,
+        val exactT9WithRaw: Boolean,
+        val prefixT9WithRaw: Boolean,
+        val pinyinCountMatched: Boolean,
+        val syllableDistance: Int,
+        val score: Int
+    )
+
     @Volatile
     override var isLoaded: Boolean = false
         private set
@@ -150,18 +162,6 @@ class SQLiteDictionaryEngine(
             .filter { it.isNotEmpty() }
 
         if (normalizedStack.isEmpty()) return emptyList()
-
-        data class ScoredStackCandidate(
-            val candidate: Candidate,
-            val sourceRank: Int,
-            val exactInput: Boolean,
-            val prefixInput: Boolean,
-            val exactT9WithRaw: Boolean,
-            val prefixT9WithRaw: Boolean,
-            val pinyinCountMatched: Boolean,
-            val syllableDistance: Int,
-            val score: Int
-        )
 
         val db = dbHelper.readableDatabase
         val result = LinkedHashMap<String, ScoredStackCandidate>()
