@@ -5,13 +5,20 @@ import android.database.sqlite.SQLiteDatabase
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.db.DictionaryDbHelper
 import com.example.myapp.dict.model.Candidate
+import java.util.LinkedHashSet
+import java.util.Locale
+import kotlin.math.min
 
-class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
+class SQLiteDictionaryEngine(
+    private val context: Context
+) : Dictionary {
 
     private val dbHelper = DictionaryDbHelper(context)
     private val queries = SQLiteWordQueries()
 
     private val allPinyins: List<String> = PinyinTable.allPinyins
+    private val allPinyinsLower: List<String> = allPinyins.map { it.lowercase(Locale.ROOT) }
+
     private val analyzer = PinyinInputAnalyzer(allPinyins)
 
     private val chineseApostropheSuggester = ChineseApostropheSuggester(
@@ -41,112 +48,184 @@ class SQLiteDictionaryEngine(private val context: Context) : Dictionary {
 
     override fun setReady(ready: Boolean, info: String?) {
         isLoaded = ready
-        if (info != null) debugInfo = info
+        if (info != null) {
+            debugInfo = info
+        }
     }
 
-    /**
-     * CN-T9 sidebar: “下一节”候选（单列滚动）。
-     *
-     * 规则：
-     * - 完整拼音音节：仅允许 digits 以该音节的 T9 code 开头（严格不超过输入长度）
-     * - 声母节：zh/ch/sh 也作为“完成一个节”（同样严格前缀）
-     * - 单字母节：总是追加 digits[0] 对应的 a-z 小写字母（不输出大写/数字）
-     */
     override fun getPinyinPossibilities(digits: String): List<String> {
-        if (digits.isEmpty()) return emptyList()
+        val normalizedDigits = digits.filter { it in '0'..'9' }
+        if (normalizedDigits.isEmpty()) return emptyList()
 
-        data class Item(val text: String, val code: String, val typeRank: Int)
-        // typeRank: 0=完整音节, 1=声母(zh/ch/sh)
-
-        val items = ArrayList<Item>()
-
-        // 1) 完整音节：只允许 “digits.startsWith(t9Code)”
-        for (pinyinRaw in allPinyins) {
-            val pinyin = pinyinRaw.lowercase()
-            val t9 = T9Lookup.encodeLetters(pinyin)
-            if (t9.isNotEmpty() && digits.startsWith(t9)) {
-                items.add(Item(text = pinyin, code = t9, typeRank = 0))
-            }
-        }
-
-        // 2) 声母节：zh/ch/sh 也当作“完成一个节”
-        val initials = listOf("zh", "ch", "sh")
-        for (init in initials) {
-            val code = T9Lookup.encodeLetters(init)
-            if (code.isNotEmpty() && digits.startsWith(code)) {
-                items.add(Item(text = init, code = code, typeRank = 1))
-            }
-        }
-
-        // 排序：更长 code 优先（更具体），完整音节优先于声母，其次按字母序
-        val sorted = items.sortedWith(
-            compareBy<Item>(
-                { -it.code.length },
-                { it.typeRank },
-                { it.text }
-            )
+        data class Item(
+            val text: String,
+            val code: String,
+            val score: Int
         )
 
-        val out = LinkedHashSet<String>()
-        for (it in sorted) out.add(it.text)
+        val out = ArrayList<Item>()
+        val seen = HashSet<String>()
 
-        // 3) 单字母节：追加当前首位 digit 对应的小写字母（w/x/y/z, g/h/i ...）
-        val firstDigit = digits[0]
-        for (s0 in T9Lookup.charsFromDigit(firstDigit)) {
-            val s = s0.lowercase().trim()
-            if (s.length == 1 && s[0] in 'a'..'z') out.add(s)
+        fun push(text: String, score: Int) {
+            val normalized = text.lowercase(Locale.ROOT).trim()
+            if (normalized.isEmpty()) return
+
+            val code = T9Lookup.encodeLetters(normalized)
+            if (code.isEmpty()) return
+            if (!normalizedDigits.startsWith(code)) return
+            if (!seen.add(normalized)) return
+
+            out.add(
+                Item(
+                    text = normalized,
+                    code = code,
+                    score = score
+                )
+            )
         }
 
-        return out.toList()
+        for (pinyin in allPinyinsLower) {
+            val code = T9Lookup.encodeLetters(pinyin)
+            if (code.isNotEmpty() && normalizedDigits.startsWith(code)) {
+                val score = 300 + code.length * 20
+                push(pinyin, score)
+            }
+        }
+
+        for (initial in listOf("zh", "ch", "sh")) {
+            val code = T9Lookup.encodeLetters(initial)
+            if (code.isNotEmpty() && normalizedDigits.startsWith(code)) {
+                val score = 220 + code.length * 15
+                push(initial, score)
+            }
+        }
+
+        val firstDigit = normalizedDigits.firstOrNull()
+        if (firstDigit != null) {
+            for (ch in T9Lookup.charsFromDigit(firstDigit)) {
+                push(ch.lowercase(Locale.ROOT), 40)
+            }
+        }
+
+        return out.sortedWith(
+            compareByDescending<Item> { it.score }
+                .thenByDescending { it.code.length }
+                .thenByDescending { it.text.length }
+                .thenBy { it.text }
+        ).map { it.text }
     }
 
-    override fun getSuggestionsFromPinyinStack(pinyinStack: List<String>, rawDigits: String): List<Candidate> {
+    override fun getSuggestionsFromPinyinStack(
+        pinyinStack: List<String>,
+        rawDigits: String
+    ): List<Candidate> {
         if (!isLoaded) return emptyList()
+
+        val normalizedStack = pinyinStack
+            .map { it.trim().lowercase(Locale.ROOT) }
+            .filter { it.isNotEmpty() }
+
+        if (normalizedStack.isEmpty()) return emptyList()
+
         val db = dbHelper.readableDatabase
+        val result = ArrayList<Candidate>()
+        val seen = HashSet<String>()
+        val totalLimit = 300
 
-        val resultList = ArrayList<Candidate>()
-        val seenWords = HashSet<String>()
-        val limit = 300
+        fun addUnique(list: List<Candidate>, forcedPinyinCount: Int) {
+            for (cand in list) {
+                if (!seen.add(cand.word)) continue
+                result.add(
+                    cand.copy(
+                        pinyinCount = forcedPinyinCount.coerceAtLeast(1),
+                        matchedLength = rawDigits.length
+                    )
+                )
+                if (result.size >= totalLimit) return
+            }
+        }
 
-        for (i in pinyinStack.size downTo 1) {
-            val currentStack = pinyinStack.subList(0, i)
-            val pinyinStr = currentStack.joinToString("").lowercase()
+        for (count in normalizedStack.size downTo 1) {
+            if (result.size >= totalLimit) break
 
-            val res = queries.queryDb(
+            val joined = normalizedStack.take(count).joinToString("")
+            val list = queries.queryDb(
                 db = db,
-                input = pinyinStr,
+                input = joined,
                 isT9 = false,
                 lang = 0,
-                limit = if (i == pinyinStack.size) 80 else 50,
+                limit = if (count == normalizedStack.size) 120 else 80,
                 offset = 0,
-                matchedLen = pinyinStr.length,
+                matchedLen = joined.length,
                 exactMatch = true,
                 pinyinFilter = null
             )
 
-            for (c in res) {
-                if (i == 1 && c.word.length != 1) continue
-                if (seenWords.add(c.word)) {
-                    resultList.add(c.copy(pinyinCount = i))
-                }
+            addUnique(
+                list = list,
+                forcedPinyinCount = count
+            )
+
+            if (count == 1 && result.size < totalLimit) {
+                addUnique(
+                    list = queries.querySingleCharByInputExact(
+                        db = db,
+                        input = joined,
+                        limit = 180
+                    ),
+                    forcedPinyinCount = 1
+                )
             }
-            if (resultList.size >= limit) break
         }
 
-        return resultList
+        return result
     }
 
-    override fun getSuggestions(input: String, isT9: Boolean, isChineseMode: Boolean): List<Candidate> {
+    override fun getSuggestions(
+        input: String,
+        isT9: Boolean,
+        isChineseMode: Boolean
+    ): List<Candidate> {
         if (!isLoaded) return emptyList()
 
         val db = dbHelper.readableDatabase
-        val norm = if (!isT9) input.lowercase() else input
+        val normalized = if (isT9) {
+            input.filter { it in '0'..'9' }
+        } else {
+            input.trim().lowercase(Locale.ROOT)
+        }
+
+        if (normalized.isEmpty()) return emptyList()
 
         return when {
-            !isChineseMode -> englishSuggester.suggest(db, norm, isT9)
-            isT9 -> chineseT9Suggester.suggest(db, norm)
-            norm.contains("'") -> chineseApostropheSuggester.suggest(db, norm)
-            else -> chineseQwertySuggester.suggest(db, norm)
+            !isChineseMode -> {
+                englishSuggester.suggest(
+                    db = db,
+                    input = normalized,
+                    isT9 = isT9
+                )
+            }
+
+            isT9 -> {
+                chineseT9Suggester.suggest(
+                    db = db,
+                    digits = normalized
+                )
+            }
+
+            normalized.contains("'") -> {
+                chineseApostropheSuggester.suggest(
+                    db = db,
+                    rawInputLower = normalized
+                )
+            }
+
+            else -> {
+                chineseQwertySuggester.suggest(
+                    db = db,
+                    normLower = normalized
+                )
+            }
         }
     }
 }
