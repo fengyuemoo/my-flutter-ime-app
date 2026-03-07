@@ -25,6 +25,8 @@ class CandidateStripAdapter(
     private val items = ArrayList<Candidate>()
     var themeMode = 0
 
+    private var selectedIndex: Int = 0
+
     private fun thinTypeface(): Typeface {
         return Typeface.create("sans-serif-light", Typeface.NORMAL)
     }
@@ -32,10 +34,50 @@ class CandidateStripAdapter(
     fun submitList(newItems: List<Candidate>) {
         items.clear()
         items.addAll(newItems)
+        selectedIndex = clampIndex(selectedIndex)
         notifyDataSetChanged()
     }
 
     fun getItem(position: Int): Candidate? = items.getOrNull(position)
+
+    fun getSelectedIndex(): Int = clampIndex(selectedIndex)
+
+    fun setSelectedIndex(index: Int) {
+        val newIndex = clampIndex(index)
+        if (newIndex == selectedIndex) return
+
+        val oldIndex = selectedIndex
+        selectedIndex = newIndex
+
+        if (oldIndex in items.indices) {
+            notifyItemChanged(oldIndex)
+        } else {
+            notifyDataSetChanged()
+        }
+
+        if (selectedIndex in items.indices) {
+            notifyItemChanged(selectedIndex)
+        }
+    }
+
+    fun moveSelection(delta: Int): Int {
+        if (items.isEmpty()) {
+            selectedIndex = 0
+            return selectedIndex
+        }
+        val next = clampIndex(selectedIndex + delta)
+        setSelectedIndex(next)
+        return selectedIndex
+    }
+
+    fun resetSelection() {
+        setSelectedIndex(0)
+    }
+
+    private fun clampIndex(index: Int): Int {
+        if (items.isEmpty()) return 0
+        return index.coerceIn(0, items.lastIndex)
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val ctx = parent.context
@@ -61,7 +103,6 @@ class CandidateStripAdapter(
             isClickable = true
             isFocusable = true
 
-            // CHANGED: 只改粗细，不改字号
             typeface = thinTypeface()
         }
 
@@ -74,14 +115,27 @@ class CandidateStripAdapter(
         tv.text = candidate.word
 
         val isDark = themeMode == 1
-        tv.setTextColor(if (isDark) Color.WHITE else Color.BLACK)
+        val isSelected = position == selectedIndex
 
-        val isPrimary = position == 0
-        tv.background = buildChipBackground(tv.context, isDark, isPrimary)
+        tv.setTextColor(
+            when {
+                isSelected && isDark -> Color.WHITE
+                isSelected && !isDark -> Color.BLACK
+                isDark -> Color.WHITE
+                else -> Color.BLACK
+            }
+        )
+
+        tv.background = buildChipBackground(
+            ctx = tv.context,
+            isDark = isDark,
+            isPrimary = isSelected
+        )
 
         tv.setOnClickListener {
             val idx = holder.bindingAdapterPosition
             if (idx != RecyclerView.NO_POSITION) {
+                setSelectedIndex(idx)
                 onItemClick(idx)
             }
         }
@@ -107,12 +161,20 @@ class CandidateStripAdapter(
         val fillBottom = if (isPrimary) primaryFillBottom else normalFillBottom
         val stroke = if (isPrimary) primaryStroke else normalStroke
 
-        val content = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(fillTop, fillBottom)).apply {
+        val content = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(fillTop, fillBottom)
+        ).apply {
             cornerRadius = radius
             setStroke(strokeW, stroke)
         }
 
-        val rippleColor = if (isDark) Color.parseColor("#33FFFFFF") else Color.parseColor("#14000000")
+        val rippleColor = if (isDark) {
+            Color.parseColor("#33FFFFFF")
+        } else {
+            Color.parseColor("#14000000")
+        }
+
         val mask = GradientDrawable().apply {
             cornerRadius = radius
             setColor(Color.WHITE)

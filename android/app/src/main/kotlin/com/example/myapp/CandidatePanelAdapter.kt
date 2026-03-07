@@ -28,6 +28,8 @@ class CandidatePanelAdapter(
     private val items = ArrayList<Candidate>()
     var themeMode = 0
 
+    private var selectedIndex: Int = 0
+
     private val panelTextSp = 15f
     private val paddingHdp = 10f
     private val paddingVdp = 8f
@@ -43,10 +45,50 @@ class CandidatePanelAdapter(
     fun submitList(newItems: List<Candidate>) {
         items.clear()
         items.addAll(newItems)
+        selectedIndex = clampIndex(selectedIndex)
         notifyDataSetChanged()
     }
 
     fun getItem(position: Int): Candidate? = items.getOrNull(position)
+
+    fun getSelectedIndex(): Int = clampIndex(selectedIndex)
+
+    fun setSelectedIndex(index: Int) {
+        val newIndex = clampIndex(index)
+        if (newIndex == selectedIndex) return
+
+        val oldIndex = selectedIndex
+        selectedIndex = newIndex
+
+        if (oldIndex in items.indices) {
+            notifyItemChanged(oldIndex)
+        } else {
+            notifyDataSetChanged()
+        }
+
+        if (selectedIndex in items.indices) {
+            notifyItemChanged(selectedIndex)
+        }
+    }
+
+    fun moveSelection(delta: Int): Int {
+        if (items.isEmpty()) {
+            selectedIndex = 0
+            return selectedIndex
+        }
+        val next = clampIndex(selectedIndex + delta)
+        setSelectedIndex(next)
+        return selectedIndex
+    }
+
+    fun resetSelection() {
+        setSelectedIndex(0)
+    }
+
+    private fun clampIndex(index: Int): Int {
+        if (items.isEmpty()) return 0
+        return index.coerceIn(0, items.lastIndex)
+    }
 
     fun getSpanSize(
         position: Int,
@@ -68,7 +110,6 @@ class CandidatePanelAdapter(
         val paint = TextPaint().apply {
             isAntiAlias = true
             textSize = textPx
-            // CHANGED: 测量也用细体，保证 span 计算与显示一致
             typeface = thinTypeface()
         }
 
@@ -76,9 +117,7 @@ class CandidatePanelAdapter(
         val needPx = textWidth + extraPx
 
         val colWidth = totalWidthPx.toFloat() / spanCount.toFloat()
-        val spans = ceil(needPx / colWidth).toInt().coerceIn(1, spanCount)
-
-        return spans
+        return ceil(needPx / colWidth).toInt().coerceIn(1, spanCount)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -108,8 +147,6 @@ class CandidatePanelAdapter(
 
             isClickable = true
             isFocusable = true
-
-            // CHANGED: 只改粗细，不改字号
             typeface = thinTypeface()
         }
 
@@ -122,11 +159,22 @@ class CandidatePanelAdapter(
         tv.text = candidate.word
 
         val isDark = themeMode == 1
-        tv.setTextColor(if (isDark) Color.WHITE else Color.BLACK)
-        tv.background = buildPanelChipBackground(tv.context, isDark)
+        val isSelected = position == selectedIndex
+
+        tv.setTextColor(
+            when {
+                isSelected && isDark -> Color.WHITE
+                isSelected && !isDark -> Color.BLACK
+                isDark -> Color.WHITE
+                else -> Color.BLACK
+            }
+        )
+        tv.background = buildPanelChipBackground(tv.context, isDark, isSelected)
 
         val parentRv = tv.parent
-        val totalWidthPx = (parentRv as? RecyclerView)?.let { it.width - it.paddingLeft - it.paddingRight } ?: 0
+        val totalWidthPx = (parentRv as? RecyclerView)?.let {
+            it.width - it.paddingLeft - it.paddingRight
+        } ?: 0
 
         if (totalWidthPx > 0) {
             val spanCount = 4
@@ -149,6 +197,7 @@ class CandidatePanelAdapter(
         tv.setOnClickListener {
             val idx = holder.bindingAdapterPosition
             if (idx != RecyclerView.NO_POSITION) {
+                setSelectedIndex(idx)
                 onItemClick(idx)
             }
         }
@@ -156,15 +205,27 @@ class CandidatePanelAdapter(
 
     override fun getItemCount(): Int = items.size
 
-    private fun buildPanelChipBackground(ctx: Context, isDark: Boolean): Drawable {
+    private fun buildPanelChipBackground(
+        ctx: Context,
+        isDark: Boolean,
+        isSelected: Boolean
+    ): Drawable {
         fun Int.dp(): Float = this * ctx.resources.displayMetrics.density
 
         val radius = 12.dp()
         val strokeW = 1.dp().roundToInt()
 
-        val fillBottom = if (isDark) Color.parseColor("#2A2A2A") else Color.parseColor("#FFFFFF")
-        val fillTop = if (isDark) Color.parseColor("#303030") else Color.parseColor("#FFFFFF")
-        val stroke = if (isDark) Color.parseColor("#2FFFFFFF") else Color.parseColor("#1A000000")
+        val normalFillBottom = if (isDark) Color.parseColor("#2A2A2A") else Color.parseColor("#FFFFFF")
+        val normalFillTop = if (isDark) Color.parseColor("#303030") else Color.parseColor("#FFFFFF")
+        val normalStroke = if (isDark) Color.parseColor("#2FFFFFFF") else Color.parseColor("#1A000000")
+
+        val selectedFillBottom = if (isDark) Color.parseColor("#343434") else Color.parseColor("#DCEBFF")
+        val selectedFillTop = if (isDark) Color.parseColor("#3A3A3A") else Color.parseColor("#E8F2FF")
+        val selectedStroke = if (isDark) Color.parseColor("#88FFFFFF") else Color.parseColor("#661A5DFF")
+
+        val fillBottom = if (isSelected) selectedFillBottom else normalFillBottom
+        val fillTop = if (isSelected) selectedFillTop else normalFillTop
+        val stroke = if (isSelected) selectedStroke else normalStroke
 
         val content = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,

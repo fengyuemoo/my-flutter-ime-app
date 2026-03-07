@@ -27,7 +27,6 @@ import java.util.WeakHashMap
 
 object FontApplier {
     private val baseTextSizePx = WeakHashMap<TextView, Float>()
-
     private val typefaceCache = HashMap<String, Typeface>()
 
     private fun resolveTypeface(view: View, spec: String): Typeface {
@@ -98,8 +97,10 @@ class ImeUi {
     private var currentFontFamily: String = "sans-serif-light"
     private var currentFontScale: Float = 1.0f
 
-    // NEW: when non-null, btnFilter's text is "locked" to this value and setFilterButton() won't override it.
     private var expandedPanelFilterOverrideText: CharSequence? = null
+
+    private var currentCandidates: List<Candidate> = emptyList()
+    private var selectedCandidateIndex: Int = 0
 
     fun setComposingPreviewListener(listener: ((String?) -> Unit)?) {
         composingPreviewListener = listener
@@ -110,6 +111,54 @@ class ImeUi {
     fun getThemeButton(): Button = rootView.findViewById(R.id.btntooltheme)
     fun getLayoutButton(): Button = rootView.findViewById(R.id.btntoollayout)
     fun getFontButton(): ImageButton = btnToolFont
+
+    fun getSelectedCandidateIndex(): Int {
+        return clampCandidateIndex(selectedCandidateIndex)
+    }
+
+    fun setSelectedCandidateIndex(index: Int) {
+        val clamped = clampCandidateIndex(index)
+        selectedCandidateIndex = clamped
+
+        if (this::adapterHorizontal.isInitialized) {
+            adapterHorizontal.setSelectedIndex(clamped)
+        }
+        if (this::adapterVertical.isInitialized) {
+            adapterVertical.setSelectedIndex(clamped)
+        }
+
+        scrollSelectionIntoView(clamped)
+    }
+
+    fun resetSelectedCandidateIndex() {
+        setSelectedCandidateIndex(0)
+    }
+
+    fun moveSelectedCandidate(delta: Int): Int {
+        if (currentCandidates.isEmpty()) {
+            selectedCandidateIndex = 0
+            return 0
+        }
+        val next = clampCandidateIndex(selectedCandidateIndex + delta)
+        setSelectedCandidateIndex(next)
+        return selectedCandidateIndex
+    }
+
+    private fun clampCandidateIndex(index: Int): Int {
+        if (currentCandidates.isEmpty()) return 0
+        return index.coerceIn(0, currentCandidates.lastIndex)
+    }
+
+    private fun scrollSelectionIntoView(index: Int) {
+        if (!this::recyclerHorizontal.isInitialized || !this::recyclerVertical.isInitialized) return
+        if (currentCandidates.isEmpty()) return
+        if (index !in currentCandidates.indices) return
+
+        recyclerHorizontal.smoothScrollToPosition(index)
+        recyclerVertical.post {
+            recyclerVertical.scrollToPosition(index)
+        }
+    }
 
     fun applyFont(fontFamily: String, fontScale: Float) {
         currentFontFamily = fontFamily
@@ -130,12 +179,10 @@ class ImeUi {
             }
 
             override fun onChildViewDetachedFromWindow(view: View) {
-                // no-op
             }
         })
     }
 
-    // NEW: lock/unlock the expanded panel filter button label.
     fun setExpandedPanelFilterOverride(text: CharSequence?) {
         expandedPanelFilterOverrideText = text
         if (text != null) {
@@ -144,7 +191,6 @@ class ImeUi {
         }
     }
 
-    // Backward-compatible: old signature (Candidate payload).
     fun inflate(
         inflater: LayoutInflater,
         onCandidateClick: (Candidate) -> Unit
@@ -156,7 +202,6 @@ class ImeUi {
         )
     }
 
-    // New: index-based click (preferred). NOTE: Different name to avoid JVM signature clash.
     fun inflateWithIndex(
         inflater: LayoutInflater,
         onCandidateIndexClick: (Int) -> Unit
@@ -192,12 +237,15 @@ class ImeUi {
         recyclerVertical = rootView.findViewById(R.id.recyclercandidatesvertical)
 
         adapterHorizontal = CandidateStripAdapter { index ->
+            setSelectedCandidateIndex(index)
             onCandidateIndexClick?.invoke(index) ?: run {
                 val c = adapterHorizontal.getItem(index) ?: return@CandidateStripAdapter
                 onCandidateClick?.invoke(c)
             }
         }
+
         adapterVertical = CandidatePanelAdapter { index ->
+            setSelectedCandidateIndex(index)
             onCandidateIndexClick?.invoke(index) ?: run {
                 val c = adapterVertical.getItem(index) ?: return@CandidatePanelAdapter
                 onCandidateClick?.invoke(c)
@@ -268,9 +316,21 @@ class ImeUi {
     }
 
     fun setCandidates(list: List<Candidate>) {
-        adapterHorizontal.submitList(list)
-        adapterVertical.submitList(list)
-        recyclerHorizontal.scrollToPosition(0)
+        currentCandidates = list.toList()
+
+        adapterHorizontal.submitList(currentCandidates)
+        adapterVertical.submitList(currentCandidates)
+
+        selectedCandidateIndex = clampCandidateIndex(selectedCandidateIndex)
+        adapterHorizontal.setSelectedIndex(selectedCandidateIndex)
+        adapterVertical.setSelectedIndex(selectedCandidateIndex)
+
+        if (currentCandidates.isEmpty()) {
+            recyclerHorizontal.scrollToPosition(0)
+        } else {
+            scrollSelectionIntoView(selectedCandidateIndex)
+        }
+
         recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
     }
 
@@ -278,7 +338,12 @@ class ImeUi {
         if (expanded) {
             btnExpand.animate().rotation(180f).setDuration(200).start()
             expandedPanel.visibility = View.VISIBLE
-            recyclerVertical.post { adapterVertical.notifyDataSetChanged() }
+            recyclerVertical.post {
+                adapterVertical.notifyDataSetChanged()
+                if (currentCandidates.isNotEmpty()) {
+                    recyclerVertical.scrollToPosition(getSelectedCandidateIndex())
+                }
+            }
         } else {
             btnExpand.animate().rotation(0f).setDuration(200).start()
             expandedPanel.visibility = View.GONE
@@ -286,6 +351,11 @@ class ImeUi {
             if (isComposing) {
                 candidateStrip.visibility = View.VISIBLE
                 toolbarContainer.visibility = View.GONE
+                if (currentCandidates.isNotEmpty()) {
+                    recyclerHorizontal.post {
+                        recyclerHorizontal.smoothScrollToPosition(getSelectedCandidateIndex())
+                    }
+                }
             } else {
                 toolbarContainer.visibility = View.VISIBLE
                 candidateStrip.visibility = View.GONE
@@ -294,7 +364,6 @@ class ImeUi {
     }
 
     fun setFilterButton(singleCharMode: Boolean) {
-        // NEW: if overridden (EN mode), keep the override and do not render CN filter UI.
         val override = expandedPanelFilterOverrideText
         if (override != null) {
             btnFilter.text = override
