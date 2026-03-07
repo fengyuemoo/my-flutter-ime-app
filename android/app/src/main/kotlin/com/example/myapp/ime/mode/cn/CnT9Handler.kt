@@ -11,6 +11,7 @@ import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.mode.ImeModeHandler
 import com.example.myapp.ime.ui.ImeUi
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.min
 
 object CnT9Handler : ImeModeHandler {
@@ -40,9 +41,13 @@ object CnT9Handler : ImeModeHandler {
 
     private data class CandidateScore(
         val exactSegments: Int,
+        val exactChars: Int,
         val prefixSegments: Int,
+        val prefixChars: Int,
         val consumedDigits: Int,
         val uncoveredDigits: Int,
+        val syllableDistance: Int,
+        val exactInput: Boolean,
         val planRank: Int,
         val priority: Int,
         val syllables: Int,
@@ -93,11 +98,18 @@ object CnT9Handler : ImeModeHandler {
             queried
         }
 
-        val finalList = ArrayList<Candidate>(filtered)
-        rerankCandidates(
+        val finalList = ArrayList<Candidate>()
+        finalList.addAll(filtered)
+
+        val scoreCache = buildScoreCache(
             candidates = finalList,
             plans = plans,
             rawDigits = rawDigits
+        )
+
+        sortCandidates(
+            candidates = finalList,
+            scoreCache = scoreCache
         )
 
         if (finalList.size > MAX_DISPLAY_CANDIDATES) {
@@ -120,15 +132,20 @@ object CnT9Handler : ImeModeHandler {
         }
 
         val bestPlan = plans.firstOrNull()
+        val topCandidate = finalList.firstOrNull()
+        val topScore = topCandidate?.let { scoreCache[it] }
+
         val previewCore = buildPreviewCore(
             bestPlan = bestPlan,
-            topCandidate = finalList.firstOrNull(),
-            stackSegs = stackSegs
+            topCandidate = topCandidate,
+            topScore = topScore
         )
 
         val composingPreviewText = buildString {
             append(session.committedPrefix)
-            if (previewCore.isNotEmpty()) append(previewCore)
+            if (previewCore.isNotEmpty()) {
+                append(previewCore)
+            }
         }.takeIf { it.isNotBlank() }
 
         val enterCommitText = previewCore
@@ -245,27 +262,39 @@ object CnT9Handler : ImeModeHandler {
         )
     }
 
-    private fun rerankCandidates(
-        candidates: ArrayList<Candidate>,
+    private fun buildScoreCache(
+        candidates: List<Candidate>,
         plans: List<PathPlan>,
         rawDigits: String
-    ) {
-        if (candidates.isEmpty() || plans.isEmpty()) return
+    ): Map<Candidate, CandidateScore?> {
+        if (candidates.isEmpty() || plans.isEmpty()) return emptyMap()
 
-        val scoreCache = HashMap<Candidate, CandidateScore?>(candidates.size)
+        val out = HashMap<Candidate, CandidateScore?>(candidates.size)
         for (cand in candidates) {
-            scoreCache[cand] = bestScoreForCandidate(cand, plans, rawDigits)
+            out[cand] = bestScoreForCandidate(cand, plans, rawDigits)
         }
+        return out
+    }
+
+    private fun sortCandidates(
+        candidates: ArrayList<Candidate>,
+        scoreCache: Map<Candidate, CandidateScore?>
+    ) {
+        if (candidates.isEmpty()) return
 
         candidates.sortWith(
             compareByDescending<Candidate> { scoreCache[it]?.exactSegments ?: 0 }
+                .thenByDescending { scoreCache[it]?.exactChars ?: 0 }
                 .thenByDescending { scoreCache[it]?.prefixSegments ?: 0 }
+                .thenByDescending { scoreCache[it]?.prefixChars ?: 0 }
                 .thenByDescending { scoreCache[it]?.consumedDigits ?: 0 }
                 .thenBy { scoreCache[it]?.uncoveredDigits ?: Int.MAX_VALUE }
+                .thenBy { scoreCache[it]?.syllableDistance ?: Int.MAX_VALUE }
+                .thenByDescending { if (scoreCache[it]?.exactInput == true) 1 else 0 }
                 .thenBy { scoreCache[it]?.planRank ?: Int.MAX_VALUE }
                 .thenByDescending { scoreCache[it]?.priority ?: it.priority }
-                .thenByDescending { scoreCache[it]?.syllables ?: it.syllables }
                 .thenByDescending { scoreCache[it]?.wordLength ?: it.word.length }
+                .thenByDescending { scoreCache[it]?.syllables ?: it.syllables }
                 .thenByDescending { scoreCache[it]?.inputLength ?: it.input.length }
                 .thenBy { it.word }
         )
@@ -303,8 +332,10 @@ object CnT9Handler : ImeModeHandler {
         val planSegs = plan.segments
         val n = min(planSegs.size, candidateSyllables.size)
 
-        var exact = 0
-        var prefix = 0
+        var exactSegments = 0
+        var exactChars = 0
+        var prefixSegments = 0
+        var prefixChars = 0
         var consumedDigits = 0
 
         for (i in 0 until n) {
@@ -315,14 +346,17 @@ object CnT9Handler : ImeModeHandler {
                 .coerceAtLeast(1)
 
             if (expected == actual) {
-                exact++
-                prefix++
+                exactSegments++
+                exactChars += expected.length
+                prefixSegments++
+                prefixChars += expected.length
                 consumedDigits += segDigits
                 continue
             }
 
             if (actual.startsWith(expected)) {
-                prefix++
+                prefixSegments++
+                prefixChars += expected.length
                 consumedDigits += segDigits
                 continue
             }
@@ -330,11 +364,18 @@ object CnT9Handler : ImeModeHandler {
             break
         }
 
+        val planConcat = normalizePinyinConcat(plan.segments.joinToString(""))
+        val candConcat = normalizedCandidateConcatPinyin(cand)
+
         return CandidateScore(
-            exactSegments = exact,
-            prefixSegments = prefix,
+            exactSegments = exactSegments,
+            exactChars = exactChars,
+            prefixSegments = prefixSegments,
+            prefixChars = prefixChars,
             consumedDigits = consumedDigits,
             uncoveredDigits = (rawDigits.length - consumedDigits).coerceAtLeast(0),
+            syllableDistance = abs(candidateSyllables.size - planSegs.size),
+            exactInput = candConcat.isNotEmpty() && candConcat == planConcat,
             planRank = plan.rank,
             priority = cand.priority,
             syllables = if (cand.syllables > 0) cand.syllables else candidateSyllables.size,
@@ -346,13 +387,17 @@ object CnT9Handler : ImeModeHandler {
     private fun isBetter(a: CandidateScore, b: CandidateScore): Boolean {
         return when {
             a.exactSegments != b.exactSegments -> a.exactSegments > b.exactSegments
+            a.exactChars != b.exactChars -> a.exactChars > b.exactChars
             a.prefixSegments != b.prefixSegments -> a.prefixSegments > b.prefixSegments
+            a.prefixChars != b.prefixChars -> a.prefixChars > b.prefixChars
             a.consumedDigits != b.consumedDigits -> a.consumedDigits > b.consumedDigits
             a.uncoveredDigits != b.uncoveredDigits -> a.uncoveredDigits < b.uncoveredDigits
+            a.syllableDistance != b.syllableDistance -> a.syllableDistance < b.syllableDistance
+            a.exactInput != b.exactInput -> a.exactInput
             a.planRank != b.planRank -> a.planRank < b.planRank
             a.priority != b.priority -> a.priority > b.priority
-            a.syllables != b.syllables -> a.syllables > b.syllables
             a.wordLength != b.wordLength -> a.wordLength > b.wordLength
+            a.syllables != b.syllables -> a.syllables > b.syllables
             else -> a.inputLength > b.inputLength
         }
     }
@@ -360,18 +405,77 @@ object CnT9Handler : ImeModeHandler {
     private fun buildPreviewCore(
         bestPlan: PathPlan?,
         topCandidate: Candidate?,
-        stackSegs: List<String>
+        topScore: CandidateScore?
     ): String {
-        if (bestPlan != null && bestPlan.segments.isNotEmpty()) {
-            return bestPlan.segments.joinToString("'")
+        val planSegments = bestPlan?.segments.orEmpty()
+        if (planSegments.isEmpty()) {
+            return topCandidate
+                ?.let { resolveCandidateSyllables(it) }
+                .orEmpty()
+                .joinToString("'")
         }
 
-        val topSyllables = topCandidate?.let { resolveCandidateSyllables(it) }.orEmpty()
-        if (topSyllables.isNotEmpty()) {
-            return (stackSegs + topSyllables).joinToString("'")
+        val topSyllables = topCandidate
+            ?.let { resolveCandidateSyllables(it) }
+            .orEmpty()
+
+        if (topSyllables.isEmpty() || topScore == null || bestPlan == null) {
+            return planSegments.joinToString("'")
         }
 
-        return stackSegs.joinToString("'")
+        if (!shouldTrustTopCandidate(bestPlan, topScore)) {
+            return planSegments.joinToString("'")
+        }
+
+        val confirmedCount = topScore.prefixSegments
+            .coerceAtLeast(0)
+            .coerceAtMost(topSyllables.size)
+            .coerceAtMost(planSegments.size)
+
+        val merged = buildList {
+            addAll(topSyllables.take(confirmedCount))
+            addAll(planSegments.drop(confirmedCount))
+        }
+
+        return merged.joinToString("'")
+    }
+
+    private fun shouldTrustTopCandidate(
+        bestPlan: PathPlan,
+        topScore: CandidateScore
+    ): Boolean {
+        if (bestPlan.segments.isEmpty()) return false
+
+        if (topScore.exactInput && topScore.uncoveredDigits == 0) {
+            return true
+        }
+
+        if (bestPlan.segments.size == 1) {
+            return topScore.prefixSegments >= 1 &&
+                topScore.syllableDistance <= 1
+        }
+
+        val needExact = min(2, bestPlan.segments.size)
+        return topScore.exactSegments >= needExact &&
+            topScore.prefixSegments >= needExact &&
+            topScore.syllableDistance <= 1
+    }
+
+    private fun normalizedCandidateConcatPinyin(cand: Candidate): String {
+        val fromPinyin = cand.pinyin
+            ?.let { normalizePinyinConcat(it) }
+            .orEmpty()
+
+        if (fromPinyin.isNotEmpty()) return fromPinyin
+        return normalizePinyinConcat(cand.input)
+    }
+
+    private fun normalizePinyinConcat(raw: String): String {
+        return raw
+            .trim()
+            .lowercase(Locale.ROOT)
+            .replace("'", "")
+            .replace("ü", "v")
     }
 
     private fun resolveCandidateSyllables(cand: Candidate): List<String> {
