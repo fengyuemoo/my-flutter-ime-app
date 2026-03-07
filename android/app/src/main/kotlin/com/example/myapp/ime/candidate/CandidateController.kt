@@ -2,6 +2,7 @@ package com.example.myapp.ime.candidate
 
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
+import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.mode.cn.CnQwertyCandidateEngine
@@ -82,6 +83,24 @@ class CandidateController(
         }
     }
 
+    private fun currentSession(): ComposingSession {
+        return when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> sessions.cnQwerty
+            ModeKey.CN_T9 -> sessions.cnT9
+            ModeKey.EN_QWERTY -> sessions.enQwerty
+            ModeKey.EN_T9 -> sessions.enT9
+        }
+    }
+
+    private fun currentUseT9Layout(): Boolean {
+        return when (currentModeKey()) {
+            ModeKey.CN_QWERTY -> false
+            ModeKey.CN_T9 -> true
+            ModeKey.EN_QWERTY -> false
+            ModeKey.EN_T9 -> true
+        }
+    }
+
     // Handler computed composing preview override (CN-Qwerty segmentation / CN-T9 preview line)
     fun getComposingPreviewOverride(): String? {
         return when (currentModeKey()) {
@@ -100,6 +119,27 @@ class CandidateController(
             ModeKey.EN_QWERTY -> enQwertyEngine.getEnterCommitTextOverride()
             ModeKey.EN_T9 -> enT9Engine.getEnterCommitTextOverride()
         }
+    }
+
+    fun resolveComposingPreviewText(): String? {
+        val override = getComposingPreviewOverride()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        if (override != null) {
+            return override
+        }
+
+        return currentSession()
+            .displayText(useT9Layout = currentUseT9Layout())
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    fun resolveEnterCommitText(): String? {
+        return getEnterCommitTextOverride()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
     }
 
     // --- UiStateActions ---
