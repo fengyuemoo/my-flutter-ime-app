@@ -533,6 +533,16 @@ class CnT9CandidateEngine(
         return (ui.rootView.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     }
 
+    private fun resetUiSelectionToTop() {
+        ui.resetSelectedCandidateIndex()
+    }
+
+    private fun preferredCandidateIndexOrNull(): Int? {
+        if (currentCandidates.isEmpty()) return null
+        val selected = ui.getSelectedCandidateIndex()
+        return if (selected in currentCandidates.indices) selected else 0
+    }
+
     fun syncFilterButton() {
         ui.setFilterButton(isSingleCharMode)
     }
@@ -540,6 +550,7 @@ class CnT9CandidateEngine(
     fun toggleSingleCharMode() {
         isSingleCharMode = !isSingleCharMode
         syncFilterButton()
+        resetUiSelectionToTop()
         updateCandidates()
     }
 
@@ -569,6 +580,8 @@ class CnT9CandidateEngine(
         if (!session.isComposing()) {
             composingPreviewOverride = null
             enterCommitTextOverride = null
+            resetUiSelectionToTop()
+
             if (isExpanded) isExpanded = false
             renderIdleUi()
             return
@@ -584,20 +597,22 @@ class CnT9CandidateEngine(
         enterCommitTextOverride = out.enterCommitText
         currentCandidates = ArrayList(out.candidates)
 
+        resetUiSelectionToTop()
         renderComposingUi(out)
     }
 
     fun handleSpaceKey() {
-        if (currentCandidates.isNotEmpty()) {
-            commitCandidateAt(0)
+        val preferred = preferredCandidateIndexOrNull()
+        if (preferred != null) {
+            commitCandidateAt(preferred)
         } else {
             commitRaw(" ")
         }
     }
 
     fun commitFirstCandidateOnEnter(): Boolean {
-        if (currentCandidates.isEmpty()) return false
-        commitCandidateAt(0)
+        val preferred = preferredCandidateIndexOrNull() ?: return false
+        commitCandidateAt(preferred)
         return true
     }
 
@@ -611,9 +626,12 @@ class CnT9CandidateEngine(
             return
         }
 
+        ui.setSelectedCandidateIndex(index)
+
         val cand = currentCandidates[index]
 
         if (isRawCommitMode()) {
+            resetUiSelectionToTop()
             commitRaw(cand.word)
             clearComposing()
             return
@@ -634,11 +652,13 @@ class CnT9CandidateEngine(
                 isChinese = true
             )) {
                 is ComposingSession.PickResult.Commit -> {
+                    resetUiSelectionToTop()
                     commitRaw(result.text)
                     clearComposing()
                 }
 
                 is ComposingSession.PickResult.Updated -> {
+                    resetUiSelectionToTop()
                     updateCandidates()
                     updateComposingView()
                 }
@@ -656,11 +676,13 @@ class CnT9CandidateEngine(
                 isChinese = true
             )) {
                 is ComposingSession.PickResult.Commit -> {
+                    resetUiSelectionToTop()
                     commitRaw(result.text)
                     clearComposing()
                 }
 
                 is ComposingSession.PickResult.Updated -> {
+                    resetUiSelectionToTop()
                     updateCandidates()
                     updateComposingView()
                 }
@@ -668,6 +690,7 @@ class CnT9CandidateEngine(
             return
         }
 
+        resetUiSelectionToTop()
         commitRaw(cand.word)
         clearComposing()
     }
@@ -720,7 +743,9 @@ class CnT9CandidateEngine(
 
     private fun splitCandidatePinyin(raw: String): Int {
         if (raw.isBlank()) return 0
-        val all = PinyinTable.allPinyins.map { it.lowercase(Locale.ROOT).replace("ü", "v") }.toHashSet()
+        val all = PinyinTable.allPinyins
+            .map { it.lowercase(Locale.ROOT).replace("ü", "v") }
+            .toHashSet()
         val normalized = raw.replace("ü", "v")
 
         var i = 0
