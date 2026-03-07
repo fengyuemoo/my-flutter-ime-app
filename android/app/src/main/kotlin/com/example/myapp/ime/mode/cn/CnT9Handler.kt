@@ -133,7 +133,7 @@ object CnT9Handler : ImeModeHandler {
 
         val enterCommitText = previewCore
             .lowercase(Locale.ROOT)
-            .filter { it in 'a'..'z' || it == '\'' }
+            .filter { it in 'a'..'z' }
             .takeIf { it.isNotEmpty() }
 
         return ImeModeHandler.Output(
