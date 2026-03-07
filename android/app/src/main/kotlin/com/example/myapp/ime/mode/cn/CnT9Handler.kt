@@ -30,7 +30,7 @@ object CnT9Handler : ImeModeHandler {
     private const val MAX_QUERY_PER_PLAN = 80
     private const val MAX_SIDEBAR_ITEMS = 24
 
-    private data class PathPlan(
+    internal data class PathPlan(
         val rank: Int,
         val segments: List<String>,
         val consumedDigits: Int
