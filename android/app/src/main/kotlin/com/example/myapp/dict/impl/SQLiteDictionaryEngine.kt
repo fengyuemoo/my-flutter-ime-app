@@ -1,13 +1,10 @@
 package com.example.myapp.dict.impl
 
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.db.DictionaryDbHelper
 import com.example.myapp.dict.model.Candidate
-import java.util.LinkedHashSet
 import java.util.Locale
-import kotlin.math.min
 
 class SQLiteDictionaryEngine(
     private val context: Context
@@ -60,14 +57,18 @@ class SQLiteDictionaryEngine(
         data class Item(
             val text: String,
             val code: String,
+            val exactLenMatch: Boolean,
+            val isFullSyllable: Boolean,
+            val isInitialOnly: Boolean,
+            val remainderCanContinue: Boolean,
             val score: Int
         )
 
         val out = ArrayList<Item>()
         val seen = HashSet<String>()
 
-        fun push(text: String, score: Int) {
-            val normalized = text.lowercase(Locale.ROOT).trim()
+        fun push(text: String) {
+            val normalized = normalizePinyinToken(text)
             if (normalized.isEmpty()) return
 
             val code = T9Lookup.encodeLetters(normalized)
@@ -75,44 +76,66 @@ class SQLiteDictionaryEngine(
             if (!normalizedDigits.startsWith(code)) return
             if (!seen.add(normalized)) return
 
+            val isInitialOnly = normalized == "zh" || normalized == "ch" || normalized == "sh"
+            val isFullSyllable = analyzer.isFullSyllable(normalized) && !isInitialOnly
+            val exactLenMatch = code.length == normalizedDigits.length
+
+            val remainderDigits = normalizedDigits.substring(code.length)
+            val remainderCanContinue = when {
+                remainderDigits.isEmpty() -> true
+                else -> hasLikelyContinuation(remainderDigits)
+            }
+
+            val score = buildPinyinPossibilityScore(
+                text = normalized,
+                code = code,
+                exactLenMatch = exactLenMatch,
+                isFullSyllable = isFullSyllable,
+                isInitialOnly = isInitialOnly,
+                remainderCanContinue = remainderCanContinue
+            )
+
             out.add(
                 Item(
                     text = normalized,
                     code = code,
+                    exactLenMatch = exactLenMatch,
+                    isFullSyllable = isFullSyllable,
+                    isInitialOnly = isInitialOnly,
+                    remainderCanContinue = remainderCanContinue,
                     score = score
                 )
             )
         }
 
         for (pinyin in allPinyinsLower) {
-            val code = T9Lookup.encodeLetters(pinyin)
-            if (code.isNotEmpty() && normalizedDigits.startsWith(code)) {
-                val score = 300 + code.length * 20
-                push(pinyin, score)
-            }
+            push(pinyin)
         }
 
         for (initial in listOf("zh", "ch", "sh")) {
-            val code = T9Lookup.encodeLetters(initial)
-            if (code.isNotEmpty() && normalizedDigits.startsWith(code)) {
-                val score = 220 + code.length * 15
-                push(initial, score)
-            }
+            push(initial)
         }
 
         val firstDigit = normalizedDigits.firstOrNull()
         if (firstDigit != null) {
-            for (ch in T9Lookup.charsFromDigit(firstDigit)) {
-                push(ch.lowercase(Locale.ROOT), 40)
+            for (fallback in T9Lookup.charsFromDigit(firstDigit)) {
+                push(fallback)
             }
         }
 
-        return out.sortedWith(
-            compareByDescending<Item> { it.score }
-                .thenByDescending { it.code.length }
-                .thenByDescending { it.text.length }
-                .thenBy { it.text }
-        ).map { it.text }
+        return out
+            .sortedWith(
+                compareByDescending<Item> { it.score }
+                    .thenByDescending { if (it.exactLenMatch) 1 else 0 }
+                    .thenByDescending { if (it.isFullSyllable) 1 else 0 }
+                    .thenByDescending { if (it.remainderCanContinue) 1 else 0 }
+                    .thenByDescending { if (it.isInitialOnly) 1 else 0 }
+                    .thenByDescending { it.code.length }
+                    .thenByDescending { it.text.length }
+                    .thenBy { it.text }
+            )
+            .map { it.text }
+            .take(24)
     }
 
     override fun getSuggestionsFromPinyinStack(
@@ -227,5 +250,57 @@ class SQLiteDictionaryEngine(
                 )
             }
         }
+    }
+
+    private fun buildPinyinPossibilityScore(
+        text: String,
+        code: String,
+        exactLenMatch: Boolean,
+        isFullSyllable: Boolean,
+        isInitialOnly: Boolean,
+        remainderCanContinue: Boolean
+    ): Int {
+        var score = 0
+
+        score += code.length * 60
+        score += text.length * 8
+
+        if (exactLenMatch) score += 700
+        if (isFullSyllable) score += 420
+        if (isInitialOnly) score += 180
+        if (remainderCanContinue) score += 160
+
+        if (text.length == 1) score -= 260
+        if (!isFullSyllable && !isInitialOnly && text.length <= 2) score -= 120
+
+        return score
+    }
+
+    private fun hasLikelyContinuation(digits: String): Boolean {
+        if (digits.isEmpty()) return true
+
+        for (pinyin in allPinyinsLower) {
+            val code = T9Lookup.encodeLetters(pinyin)
+            if (code.isNotEmpty() && digits.startsWith(code)) {
+                return true
+            }
+        }
+
+        for (initial in listOf("zh", "ch", "sh")) {
+            val code = T9Lookup.encodeLetters(initial)
+            if (code.isNotEmpty() && digits.startsWith(code)) {
+                return true
+            }
+        }
+
+        val first = digits.firstOrNull() ?: return false
+        return T9Lookup.charsFromDigit(first).isNotEmpty()
+    }
+
+    private fun normalizePinyinToken(raw: String): String {
+        return raw
+            .trim()
+            .lowercase(Locale.ROOT)
+            .replace("ü", "v")
     }
 }
