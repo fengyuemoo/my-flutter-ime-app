@@ -44,7 +44,10 @@ class ComposingSession {
             val word: String,
             val consumedPinyins: List<String>,
             val consumedDigitChunks: List<String>,
-            val consumedCutChunks: List<List<Int>>
+            val consumedCutChunks: List<List<Int>>,
+            // undo 时：前 restorePinyinCountOnUndo 个 segment 恢复回 stack，
+            // 其余 segment 恢复回 raw digits（用于“提交前临时自动物化”的部分）
+            val restorePinyinCountOnUndo: Int
         ) : PickRecord()
 
         data class T9Digits(
@@ -296,7 +299,12 @@ class ComposingSession {
         }
     }
 
-    fun pickCandidate(cand: Candidate, useT9Layout: Boolean, isChinese: Boolean): PickResult {
+    fun pickCandidate(
+        cand: Candidate,
+        useT9Layout: Boolean,
+        isChinese: Boolean,
+        restorePinyinCountOnUndo: Int = -1
+    ): PickResult {
         if (useT9Layout) {
             _committedPrefix += cand.word
 
@@ -309,12 +317,19 @@ class ComposingSession {
                 val consumedDigitChunks = _t9DigitsStack.take(consumePinyin)
                 val consumedCutChunks = _t9CutsStack.take(consumePinyin)
 
+                val restoreCount = if (restorePinyinCountOnUndo >= 0) {
+                    restorePinyinCountOnUndo.coerceIn(0, consumePinyin)
+                } else {
+                    consumePinyin
+                }
+
                 pickHistory.add(
                     PickRecord.T9(
                         word = cand.word,
                         consumedPinyins = consumedPinyins,
                         consumedDigitChunks = consumedDigitChunks,
-                        consumedCutChunks = consumedCutChunks
+                        consumedCutChunks = consumedCutChunks,
+                        restorePinyinCountOnUndo = restoreCount
                     )
                 )
 
@@ -436,9 +451,28 @@ class ComposingSession {
             }
 
             is PickRecord.T9 -> {
-                _pinyinStack.addAll(0, last.consumedPinyins)
-                _t9DigitsStack.addAll(0, last.consumedDigitChunks)
-                _t9CutsStack.addAll(0, last.consumedCutChunks)
+                val restoreStackCount = last.restorePinyinCountOnUndo
+                    .coerceIn(0, last.consumedPinyins.size)
+
+                if (restoreStackCount > 0) {
+                    _pinyinStack.addAll(0, last.consumedPinyins.take(restoreStackCount))
+                    _t9DigitsStack.addAll(0, last.consumedDigitChunks.take(restoreStackCount))
+                    _t9CutsStack.addAll(0, last.consumedCutChunks.take(restoreStackCount))
+                }
+
+                val rawDigitChunks = last.consumedDigitChunks.drop(restoreStackCount)
+                val rawCutChunks = last.consumedCutChunks.drop(restoreStackCount)
+
+                val restoredDigits = rawDigitChunks.joinToString("")
+                if (restoredDigits.isNotEmpty()) {
+                    _rawT9Digits = restoredDigits + _rawT9Digits
+                    val restoredCuts = flattenCutChunks(
+                        digitChunks = rawDigitChunks,
+                        cutChunks = rawCutChunks
+                    )
+                    restoreCutsOnPrepend(restoredDigits.length, restoredCuts)
+                    trimCutsToLength(_rawT9Digits.length)
+                }
             }
 
             is PickRecord.T9Digits -> {

@@ -133,7 +133,7 @@ object CnT9Handler : ImeModeHandler {
 
         val enterCommitText = previewCore
             .lowercase(Locale.ROOT)
-            .filter { it in 'a'..'z' }
+            .filter { it in 'a'..'z' || it == '\'' }
             .takeIf { it.isNotEmpty() }
 
         return ImeModeHandler.Output(
@@ -287,7 +287,7 @@ object CnT9Handler : ImeModeHandler {
                 candidateSyllables = syllables,
                 rawDigits = rawDigits
             )
-            if (best == null || isBetter(score, best!!)) {
+            if (best == null || isBetter(score, best)) {
                 best = score
             }
         }
@@ -805,6 +805,8 @@ class CnT9CandidateEngine(
         }
 
         val consumeSyllables = resolveConsumeSyllables(cand).coerceAtLeast(1)
+        val stackSizeBeforeMaterialize = session.pinyinStack.size
+
         materializeSegmentsIfNeeded(consumeSyllables)
 
         val availableStack = session.pinyinStack.size
@@ -815,7 +817,8 @@ class CnT9CandidateEngine(
             when (val result = session.pickCandidate(
                 cand = pickCand,
                 useT9Layout = true,
-                isChinese = true
+                isChinese = true,
+                restorePinyinCountOnUndo = stackSizeBeforeMaterialize.coerceAtMost(consume)
             )) {
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
