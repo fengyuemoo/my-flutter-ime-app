@@ -439,17 +439,6 @@ class ComposingSession {
                 _pinyinStack.addAll(0, last.consumedPinyins)
                 _t9DigitsStack.addAll(0, last.consumedDigitChunks)
                 _t9CutsStack.addAll(0, last.consumedCutChunks)
-
-                val restoredDigits = last.consumedDigitChunks.joinToString("")
-                if (restoredDigits.isNotEmpty()) {
-                    _rawT9Digits = restoredDigits + _rawT9Digits
-                    val restoredCuts = flattenCutChunks(
-                        digitChunks = last.consumedDigitChunks,
-                        cutChunks = last.consumedCutChunks
-                    )
-                    restoreCutsOnPrepend(restoredDigits.length, restoredCuts)
-                    trimCutsToLength(_rawT9Digits.length)
-                }
             }
 
             is PickRecord.T9Digits -> {
