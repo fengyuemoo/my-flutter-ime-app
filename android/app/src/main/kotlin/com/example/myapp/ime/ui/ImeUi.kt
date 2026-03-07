@@ -98,6 +98,7 @@ class ImeUi {
     private var currentFontScale: Float = 1.0f
 
     private var expandedPanelFilterOverrideText: CharSequence? = null
+    private var currentComposingPreviewText: String? = null
 
     private var currentCandidates: List<Candidate> = emptyList()
     private var selectedCandidateIndex: Int = 0
@@ -308,6 +309,7 @@ class ImeUi {
 
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
+        currentComposingPreviewText = null
         tvComposingPreview.text = ""
         tvComposingPreview.visibility = View.GONE
 
@@ -337,9 +339,26 @@ class ImeUi {
         }
     }
 
+    private fun renderComposingPreview(text: String?) {
+        val normalized = text
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        currentComposingPreviewText = normalized
+
+        if (normalized == null) {
+            tvComposingPreview.text = ""
+            tvComposingPreview.visibility = View.GONE
+            return
+        }
+
+        tvComposingPreview.text = normalized
+        tvComposingPreview.visibility = View.VISIBLE
+        FontApplier.apply(tvComposingPreview, currentFontFamily, currentFontScale)
+    }
+
     fun setComposingPreview(text: String?) {
-        tvComposingPreview.text = ""
-        tvComposingPreview.visibility = View.GONE
+        renderComposingPreview(text)
         composingPreviewListener?.invoke(text)
     }
 
@@ -458,12 +477,12 @@ class ImeUi {
         toolbarContainer.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
 
-        tvComposingPreview.visibility = View.GONE
         tvComposingPreview.setBackgroundColor(
             if (themeMode == 1) panelDark else Color.parseColor("#F5F5F5")
         )
         tvComposingPreview.setTextColor(if (themeMode == 1) textDark else textLight)
 
         applyFont(currentFontFamily, currentFontScale)
+        renderComposingPreview(currentComposingPreviewText)
     }
 }
