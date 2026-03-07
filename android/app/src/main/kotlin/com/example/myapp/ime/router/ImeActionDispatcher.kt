@@ -102,9 +102,23 @@ class ImeActionDispatcher(
 
     private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
 
-    private fun applyResolvedComposingPreview() {
-        if (!::ui.isInitialized || !::candidateController.isInitialized) return
-        ui.setComposingPreview(candidateController.resolveComposingPreviewText())
+    private fun syncResolvedComposingToUiAndEditor() {
+        if (!::ui.isInitialized || !::candidateController.isInitialized || !::keyboardController.isInitialized) return
+
+        val preview = candidateController.resolveComposingPreviewText()
+        ui.setComposingPreview(preview)
+
+        val ic = inputConnectionProvider()
+        val mode = keyboardController.getMainMode()
+        if (mode.isChinese) {
+            ic?.setComposingText("", 0)
+        } else {
+            if (preview.isNullOrEmpty()) {
+                ic?.setComposingText("", 0)
+            } else {
+                ic?.setComposingText(preview, 1)
+            }
+        }
     }
 
     private fun applyEnQwertyPredictPrefIfNeeded(mode: KeyboardMode) {
@@ -164,6 +178,7 @@ class ImeActionDispatcher(
             oldOnKeyboardChanged?.invoke()
             currentEngineOrNull()?.syncEnglishPredictUi()
             syncSymbolPanelUi()
+            refreshComposingView()
         }
 
         val oldOnModeChanged = keyboardController.onModeChanged
@@ -176,7 +191,7 @@ class ImeActionDispatcher(
 
         currentEngineOrNull()?.syncEnglishPredictUi()
         syncSymbolPanelUi()
-        applyResolvedComposingPreview()
+        refreshComposingView()
     }
 
     private fun handleMainModeChanged(newMode: KeyboardMode) {
@@ -214,7 +229,7 @@ class ImeActionDispatcher(
                         assertSessionCleared(target, from = "handleMainModeChanged ${oldMode} -> ${target} (new)")
 
                         syncSymbolPanelUi()
-                        applyResolvedComposingPreview()
+                        refreshComposingView()
                     }
                 }
 
@@ -245,7 +260,7 @@ class ImeActionDispatcher(
     }
 
     fun refreshComposingView() {
-        applyResolvedComposingPreview()
+        syncResolvedComposingToUiAndEditor()
     }
 
     fun refreshCandidates() {
@@ -256,36 +271,41 @@ class ImeActionDispatcher(
 
     override fun clearComposing() {
         currentEngineOrNull()?.clearComposing()
-        applyResolvedComposingPreview()
+        refreshComposingView()
     }
 
     override fun handleComposingInput(text: String) {
         currentEngineOrNull()?.handleComposingInput(text)
+        refreshComposingView()
     }
 
     override fun handleT9Input(digit: String) {
         currentEngineOrNull()?.handleT9Input(digit)
+        refreshComposingView()
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
         val engine = currentEngineOrNull() ?: return
         engine.beforeModeSwitch()
         engine.onPinyinSidebarClick(pinyin)
+        refreshComposingView()
     }
 
     override fun commitText(text: String) {
         inputConnectionProvider()?.commitText(text, 1)
         currentEngineOrNull()?.clearComposing()
-        applyResolvedComposingPreview()
+        refreshComposingView()
     }
 
     override fun handleSpaceKey() {
         val engine = currentEngineOrNull() ?: run {
             inputConnectionProvider()?.commitText(" ", 1)
+            refreshComposingView()
             return
         }
         engine.beforeModeSwitch()
         engine.handleSpaceKey()
+        refreshComposingView()
     }
 
     override fun handleBackspace() {
@@ -294,6 +314,7 @@ class ImeActionDispatcher(
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
         }
+        refreshComposingView()
     }
 
     override fun handleSpecialKey(keyLabel: String) {
@@ -318,7 +339,7 @@ class ImeActionDispatcher(
                 val ic = inputConnectionProvider() ?: return
                 ic.commitText(enterOverride, 1)
                 currentEngineOrNull()?.clearComposing()
-                applyResolvedComposingPreview()
+                refreshComposingView()
                 return
             }
 
@@ -328,6 +349,7 @@ class ImeActionDispatcher(
                 ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
                 ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
             }
+            refreshComposingView()
             return
         }
 
@@ -356,6 +378,7 @@ class ImeActionDispatcher(
         keyboardController.openPanel(PanelType.NUMERIC)
 
         engine?.syncEnglishPredictUi()
+        refreshComposingView()
     }
 
     override fun openSymbolPanel() {
@@ -371,6 +394,7 @@ class ImeActionDispatcher(
 
         engine?.syncEnglishPredictUi()
         syncSymbolPanelUi()
+        refreshComposingView()
     }
 
     override fun closeSymbolPanel() {
@@ -381,6 +405,7 @@ class ImeActionDispatcher(
         keyboardController.closePanel()
 
         engine?.syncEnglishPredictUi()
+        refreshComposingView()
     }
 
     override fun exitNumericMode() {
@@ -439,6 +464,7 @@ class ImeActionDispatcher(
         }
 
         currentEngineOrNull()?.setEnglishPredict(enabled)
+        refreshComposingView()
     }
 
     override fun toggleEnglishPredict() {

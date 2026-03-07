@@ -24,7 +24,6 @@ internal object DebugFlags {
 
 abstract class ModeInputEngine {
     abstract fun refreshCandidates()
-    abstract fun refreshComposingView()
 
     abstract fun clearComposing()
 
@@ -63,7 +62,6 @@ abstract class CnBaseInputEngine(
 
     private fun afterSessionMutated() {
         refreshCandidates()
-        refreshComposingView()
         syncEnglishPredictUi()
     }
 
@@ -92,21 +90,6 @@ abstract class CnBaseInputEngine(
 
     override fun refreshCandidates() {
         candidateController.updateCandidates()
-    }
-
-    override fun refreshComposingView() {
-        val ic = inputConnectionProvider()
-        val previewText = candidateController.resolveComposingPreviewText()
-
-        if (previewText.isNullOrEmpty()) {
-            ui.setComposingPreview(null)
-            ic?.setComposingText("", 0)
-            return
-        }
-
-        ui.setComposingPreview(previewText)
-
-        // CN: do not write composing preview into editor.
     }
 
     override fun clearComposing() {
@@ -184,7 +167,6 @@ abstract class CnBaseInputEngine(
             is StrategyResult.DirectCommit -> commitAndReset(result.text)
             is StrategyResult.ComposingUpdate -> {
                 refreshCandidates()
-                refreshComposingView()
             }
             is StrategyResult.Noop -> {}
         }
@@ -205,7 +187,6 @@ abstract class EnBaseInputEngine(
 
     private fun afterSessionMutated() {
         refreshCandidates()
-        refreshComposingView()
         syncEnglishPredictUi()
     }
 
@@ -228,20 +209,6 @@ abstract class EnBaseInputEngine(
 
     override fun refreshCandidates() {
         candidateController.updateCandidates()
-    }
-
-    override fun refreshComposingView() {
-        val ic = inputConnectionProvider()
-        val previewText = candidateController.resolveComposingPreviewText()
-
-        if (previewText.isNullOrEmpty()) {
-            ui.setComposingPreview(null)
-            ic?.setComposingText("", 0)
-            return
-        }
-
-        ui.setComposingPreview(previewText)
-        ic?.setComposingText(previewText, 1)
     }
 
     override fun clearComposing() {
@@ -327,7 +294,6 @@ abstract class EnBaseInputEngine(
             is StrategyResult.SessionMutated -> afterSessionMutated()
             is StrategyResult.DirectCommit -> commitAndReset(result.text)
             is StrategyResult.ComposingUpdate -> {
-                refreshComposingView()
                 refreshCandidates()
             }
             is StrategyResult.Noop -> {}
