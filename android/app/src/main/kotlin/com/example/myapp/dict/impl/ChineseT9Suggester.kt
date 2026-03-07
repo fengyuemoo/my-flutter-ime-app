@@ -2,14 +2,23 @@ package com.example.myapp.dict.impl
 
 import android.database.sqlite.SQLiteDatabase
 import com.example.myapp.dict.model.Candidate
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.max
 
 class ChineseT9Suggester(
     private val queries: SQLiteWordQueries
 ) {
+
     private data class ScoredCandidate(
         val candidate: Candidate,
-        val exact: Boolean,
-        val singleChar: Boolean,
+        val sourceRank: Int,
+        val exactT9: Boolean,
+        val exactPinyinT9: Boolean,
+        val startsWithT9: Boolean,
+        val fullPinyinMatch: Boolean,
+        val syllableDistance: Int,
+        val charLength: Int,
         val score: Int
     )
 
@@ -22,34 +31,23 @@ class ChineseT9Suggester(
 
         fun pushAll(
             list: List<Candidate>,
-            exact: Boolean,
-            singleChar: Boolean,
-            baseScore: Int
+            sourceRank: Int,
+            exactT9: Boolean,
+            singleCharFallback: Boolean
         ) {
             for (cand in list) {
-                val score = buildScore(
+                val scored = scoreCandidate(
                     cand = cand,
                     digits = normalized,
-                    exact = exact,
-                    singleChar = singleChar,
                     estimatedSyllables = estimatedSyllables,
-                    baseScore = baseScore
+                    sourceRank = sourceRank,
+                    singleCharFallback = singleCharFallback,
+                    exactT9 = exactT9
                 )
 
-                val normalizedCand = cand.copy(
-                    matchedLength = normalized.length
-                )
-
-                val incoming = ScoredCandidate(
-                    candidate = normalizedCand,
-                    exact = exact,
-                    singleChar = singleChar,
-                    score = score
-                )
-
-                val existing = result[normalizedCand.word]
-                if (existing == null || incoming.score > existing.score) {
-                    result[normalizedCand.word] = incoming
+                val existing = result[scored.candidate.word]
+                if (existing == null || isBetter(scored, existing)) {
+                    result[scored.candidate.word] = scored
                 }
             }
         }
@@ -67,9 +65,9 @@ class ChineseT9Suggester(
         )
         pushAll(
             list = exactPhrase,
-            exact = true,
-            singleChar = false,
-            baseScore = 4000
+            sourceRank = 0,
+            exactT9 = true,
+            singleCharFallback = false
         )
 
         val prefixPhrase = queries.queryDb(
@@ -77,7 +75,7 @@ class ChineseT9Suggester(
             input = normalized,
             isT9 = true,
             lang = 0,
-            limit = 160,
+            limit = 180,
             offset = 0,
             matchedLen = normalized.length,
             exactMatch = false,
@@ -85,9 +83,9 @@ class ChineseT9Suggester(
         )
         pushAll(
             list = prefixPhrase,
-            exact = false,
-            singleChar = false,
-            baseScore = 2600
+            sourceRank = 1,
+            exactT9 = false,
+            singleCharFallback = false
         )
 
         val exactSingle = queries.querySingleCharByT9Prefix(
@@ -97,22 +95,21 @@ class ChineseT9Suggester(
         )
         pushAll(
             list = exactSingle,
-            exact = false,
-            singleChar = true,
-            baseScore = 1200
+            sourceRank = 2,
+            exactT9 = false,
+            singleCharFallback = true
         )
 
         if (normalized.length >= 2) {
             var cut = normalized.length - 1
-            while (cut >= 1 && result.size < 260) {
+            while (cut >= 1 && result.size < 280) {
                 val prefix = normalized.substring(0, cut)
-
                 val shorterPrefix = queries.queryDb(
                     db = db,
                     input = prefix,
                     isT9 = true,
                     lang = 0,
-                    limit = 40,
+                    limit = 50,
                     offset = 0,
                     matchedLen = prefix.length,
                     exactMatch = true,
@@ -121,11 +118,10 @@ class ChineseT9Suggester(
 
                 pushAll(
                     list = shorterPrefix,
-                    exact = false,
-                    singleChar = false,
-                    baseScore = 800 - (normalized.length - cut) * 40
+                    sourceRank = 3 + (normalized.length - cut),
+                    exactT9 = false,
+                    singleCharFallback = false
                 )
-
                 cut--
             }
         }
@@ -133,42 +129,105 @@ class ChineseT9Suggester(
         return result.values
             .sortedWith(
                 compareByDescending<ScoredCandidate> { it.score }
-                    .thenByDescending { if (it.exact) 1 else 0 }
-                    .thenByDescending { if (it.singleChar) 0 else 1 }
+                    .thenByDescending { if (it.exactT9) 1 else 0 }
+                    .thenByDescending { if (it.exactPinyinT9) 1 else 0 }
+                    .thenByDescending { if (it.startsWithT9) 1 else 0 }
+                    .thenByDescending { if (it.fullPinyinMatch) 1 else 0 }
+                    .thenBy { it.syllableDistance }
+                    .thenBy { it.sourceRank }
                     .thenByDescending { it.candidate.priority }
+                    .thenByDescending { it.charLength }
                     .thenByDescending { it.candidate.syllables }
-                    .thenByDescending { it.candidate.word.length }
                     .thenBy { it.candidate.word }
             )
             .map { it.candidate }
             .take(300)
     }
 
-    private fun buildScore(
+    private fun scoreCandidate(
         cand: Candidate,
         digits: String,
-        exact: Boolean,
-        singleChar: Boolean,
         estimatedSyllables: Int,
-        baseScore: Int
-    ): Int {
-        val pinyin = cand.pinyin.orEmpty()
-        val t9Len = T9Lookup.encodeLetters(pinyin).length
-        val syllables = cand.syllables.coerceAtLeast(estimateSyllablesFromPinyin(pinyin))
-        val lengthBonus = cand.word.length * 20
-        val freqBonus = cand.priority.coerceAtLeast(0) / 1000
-        val exactBonus = if (exact) 500 else 0
-        val singlePenalty = if (singleChar) 300 else 0
-        val t9DistancePenalty = kotlin.math.abs(t9Len - digits.length) * 35
-        val syllableDistancePenalty = kotlin.math.abs(syllables - estimatedSyllables) * 60
+        sourceRank: Int,
+        singleCharFallback: Boolean,
+        exactT9: Boolean
+    ): ScoredCandidate {
+        val normPinyin = normalizePinyin(cand.pinyin ?: cand.input)
+        val candT9 = T9Lookup.encodeLetters(normPinyin)
+        val syllables = resolveSyllables(cand, normPinyin)
+        val charLength = cand.word.length
 
-        return baseScore +
+        val exactPinyinT9 = candT9.isNotEmpty() && candT9 == digits
+        val startsWithT9 = candT9.isNotEmpty() && candT9.startsWith(digits)
+        val fullPinyinMatch = normPinyin.isNotEmpty() && candT9.isNotEmpty()
+
+        val sourceBonus = when (sourceRank) {
+            0 -> 4800
+            1 -> 3200
+            2 -> 1200
+            else -> max(300, 900 - sourceRank * 90)
+        }
+
+        val exactT9Bonus = if (exactT9) 1200 else 0
+        val exactPinyinBonus = if (exactPinyinT9) 900 else 0
+        val prefixBonus = if (startsWithT9) 320 else 0
+        val phraseBonus = if (charLength > 1) 260 else 0
+        val singlePenalty = if (singleCharFallback) 420 else 0
+        val t9DistancePenalty = abs(candT9.length - digits.length) * 55
+        val syllableDistancePenalty = abs(syllables - estimatedSyllables) * 85
+        val overLongPenalty = if (candT9.length > digits.length) (candT9.length - digits.length) * 25 else 0
+        val freqBonus = cand.priority.coerceAtLeast(0) / 1000
+        val charBonus = charLength * 24
+        val syllableBonus = syllables * 18
+
+        val score = sourceBonus +
+            exactT9Bonus +
+            exactPinyinBonus +
+            prefixBonus +
+            phraseBonus +
             freqBonus +
-            lengthBonus +
-            exactBonus -
+            charBonus +
+            syllableBonus -
             singlePenalty -
             t9DistancePenalty -
-            syllableDistancePenalty
+            syllableDistancePenalty -
+            overLongPenalty
+
+        val normalizedCandidate = cand.copy(
+            matchedLength = digits.length,
+            pinyin = cand.pinyin ?: cand.input,
+            pinyinCount = 0
+        )
+
+        return ScoredCandidate(
+            candidate = normalizedCandidate,
+            sourceRank = sourceRank,
+            exactT9 = exactT9,
+            exactPinyinT9 = exactPinyinT9,
+            startsWithT9 = startsWithT9,
+            fullPinyinMatch = fullPinyinMatch,
+            syllableDistance = abs(syllables - estimatedSyllables),
+            charLength = charLength,
+            score = score
+        )
+    }
+
+    private fun isBetter(
+        a: ScoredCandidate,
+        b: ScoredCandidate
+    ): Boolean {
+        return when {
+            a.score != b.score -> a.score > b.score
+            a.exactT9 != b.exactT9 -> a.exactT9
+            a.exactPinyinT9 != b.exactPinyinT9 -> a.exactPinyinT9
+            a.startsWithT9 != b.startsWithT9 -> a.startsWithT9
+            a.fullPinyinMatch != b.fullPinyinMatch -> a.fullPinyinMatch
+            a.syllableDistance != b.syllableDistance -> a.syllableDistance < b.syllableDistance
+            a.sourceRank != b.sourceRank -> a.sourceRank < b.sourceRank
+            a.candidate.priority != b.candidate.priority -> a.candidate.priority > b.candidate.priority
+            a.charLength != b.charLength -> a.charLength > b.charLength
+            else -> a.candidate.word < b.candidate.word
+        }
     }
 
     private fun estimateSyllables(digits: String): Int {
@@ -178,16 +237,60 @@ class ChineseT9Suggester(
             digits.length <= 5 -> 2
             digits.length <= 8 -> 3
             digits.length <= 11 -> 4
+            digits.length <= 14 -> 5
             else -> (digits.length + 2) / 3
         }
     }
 
-    private fun estimateSyllablesFromPinyin(pinyin: String): Int {
-        if (pinyin.isBlank()) return 0
-        return pinyin.split("'")
+    private fun resolveSyllables(cand: Candidate, normalizedPinyin: String): Int {
+        if (cand.syllables > 0) return cand.syllables
+
+        val bySplit = normalizedPinyin
+            .split("'")
             .map { it.trim() }
             .count { it.isNotEmpty() }
-            .takeIf { it > 0 }
-            ?: 0
+
+        if (bySplit > 0) return bySplit
+
+        return estimateSyllablesFromConcatPinyin(normalizedPinyin)
+    }
+
+    private fun estimateSyllablesFromConcatPinyin(pinyin: String): Int {
+        if (pinyin.isBlank()) return 0
+
+        var count = 0
+        var i = 0
+        val normalized = pinyin.replace("ü", "v")
+
+        while (i < normalized.length) {
+            var matched = false
+            val tryMax = minOf(6, normalized.length - i)
+            for (len in tryMax downTo 1) {
+                val sub = normalized.substring(i, i + len)
+                if (isPinyinLike(sub)) {
+                    count++
+                    i += len
+                    matched = true
+                    break
+                }
+            }
+            if (!matched) {
+                i++
+            }
+        }
+
+        return count.coerceAtLeast(1)
+    }
+
+    private fun isPinyinLike(text: String): Boolean {
+        if (text.isEmpty()) return false
+        return text.all { it in 'a'..'z' || it == 'v' }
+    }
+
+    private fun normalizePinyin(raw: String): String {
+        return raw
+            .trim()
+            .lowercase(Locale.ROOT)
+            .replace("ü", "v")
     }
 }
