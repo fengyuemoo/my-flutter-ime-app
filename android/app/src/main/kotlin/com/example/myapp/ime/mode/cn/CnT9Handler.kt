@@ -15,25 +15,35 @@ import kotlin.math.min
 
 object CnT9Handler : ImeModeHandler {
 
-    private val allPinyinsLower: List<String> = PinyinTable.allPinyins.map { it.lowercase(Locale.ROOT) }
-    private val pinyinSet: Set<String> = allPinyinsLower.toHashSet()
-    private val maxPyLen: Int = allPinyinsLower.maxOfOrNull { it.length } ?: 8
+    private val allPinyinsLower: List<String> =
+        PinyinTable.allPinyins.map { it.lowercase(Locale.ROOT) }
+
+    private val normalizedPinyinSet: Set<String> =
+        allPinyinsLower.map { it.replace("ü", "v") }.toHashSet()
+
+    private val maxPyLen: Int = normalizedPinyinSet.maxOfOrNull { it.length } ?: 8
 
     private const val MAX_DISPLAY_CANDIDATES = 120
-    private const val MAX_ALT_FIRST_SEGMENTS = 12
+    private const val MAX_PLAN_COUNT = 12
+    private const val PART_BEAM_WIDTH = 8
+    private const val PART_STEP_OPTIONS = 8
     private const val MAX_QUERY_PER_PLAN = 80
+    private const val MAX_SIDEBAR_ITEMS = 24
 
     private data class PathPlan(
         val rank: Int,
-        val segments: List<String>
+        val segments: List<String>,
+        val consumedDigits: Int
     ) {
         val text: String = segments.joinToString("'")
     }
 
     private data class CandidateScore(
-        val fullExactSegments: Int,
-        val prefixMatchedSegments: Int,
+        val exactSegments: Int,
+        val prefixSegments: Int,
+        val consumedDigits: Int,
         val uncoveredDigits: Int,
+        val planRank: Int,
         val priority: Int,
         val syllables: Int,
         val wordLength: Int,
@@ -48,17 +58,13 @@ object CnT9Handler : ImeModeHandler {
         val rawDigits = session.rawT9Digits
         val stackSegs = session.pinyinStack.map { it.lowercase(Locale.ROOT) }
 
-        val sidebar = if (dictEngine.isLoaded && rawDigits.isNotEmpty()) {
-            dictEngine.getPinyinPossibilities(rawDigits)
-                .map { it.lowercase(Locale.ROOT).trim() }
-                .filter { it.isNotEmpty() }
-                .distinct()
-        } else {
-            emptyList()
-        }
+        val sidebar = buildSidebar(
+            dictEngine = dictEngine,
+            rawDigits = rawDigits
+        )
 
-        val mainAutoSegs = if (dictEngine.isLoaded && rawDigits.isNotEmpty()) {
-            SentenceDecoder.decodeAllSegments(
+        val autoPlans = if (dictEngine.isLoaded && rawDigits.isNotEmpty()) {
+            SentencePlanner.planAll(
                 digits = rawDigits,
                 manualCuts = session.t9ManualCuts,
                 dict = dictEngine
@@ -67,35 +73,27 @@ object CnT9Handler : ImeModeHandler {
             emptyList()
         }
 
-        val mainSegments = buildList {
-            addAll(stackSegs)
-            addAll(mainAutoSegs)
-        }
-
         val plans = buildPlans(
-            dict = dictEngine,
             stackSegs = stackSegs,
-            rawDigits = rawDigits,
-            manualCuts = session.t9ManualCuts,
-            sidebar = sidebar,
-            mainAutoSegs = mainAutoSegs
+            autoPlans = autoPlans
         )
 
-        val recalled = if (dictEngine.isLoaded && plans.isNotEmpty()) {
-            queryCandidatesByPlans(dictEngine, plans)
+        val queried = if (dictEngine.isLoaded && plans.isNotEmpty()) {
+            queryCandidatesByPlans(
+                dict = dictEngine,
+                plans = plans
+            )
         } else {
             emptyList()
         }
 
         val filtered = if (singleCharMode) {
-            recalled.filter { it.word.length == 1 }
+            queried.filter { it.word.length == 1 }
         } else {
-            recalled
+            queried
         }
 
-        val finalList = ArrayList<Candidate>()
-        finalList.addAll(filtered)
-
+        val finalList = ArrayList<Candidate>(filtered)
         rerankCandidates(
             candidates = finalList,
             plans = plans,
@@ -121,21 +119,21 @@ object CnT9Handler : ImeModeHandler {
             )
         }
 
+        val bestPlan = plans.firstOrNull()
         val previewCore = buildPreviewCore(
+            bestPlan = bestPlan,
             topCandidate = finalList.firstOrNull(),
-            fallbackSegments = mainSegments
+            stackSegs = stackSegs
         )
 
         val composingPreviewText = buildString {
             append(session.committedPrefix)
-            if (previewCore.isNotEmpty()) {
-                append(previewCore)
-            }
+            if (previewCore.isNotEmpty()) append(previewCore)
         }.takeIf { it.isNotBlank() }
 
         val enterCommitText = previewCore
             .lowercase(Locale.ROOT)
-            .filter { it in 'a'..'z' }
+            .filter { it in 'a'..'z' || it == '\'' }
             .takeIf { it.isNotEmpty() }
 
         return ImeModeHandler.Output(
@@ -146,87 +144,44 @@ object CnT9Handler : ImeModeHandler {
         )
     }
 
-    private fun buildPlans(
-        dict: Dictionary,
-        stackSegs: List<String>,
-        rawDigits: String,
-        manualCuts: List<Int>,
-        sidebar: List<String>,
-        mainAutoSegs: List<String>
-    ): List<PathPlan> {
-        val plans = ArrayList<PathPlan>()
+    private fun buildSidebar(
+        dictEngine: Dictionary,
+        rawDigits: String
+    ): List<String> {
+        if (!dictEngine.isLoaded || rawDigits.isEmpty()) return emptyList()
 
-        val mainPlanSegments = buildList {
-            addAll(stackSegs)
-            addAll(mainAutoSegs)
-        }
-        if (mainPlanSegments.isNotEmpty()) {
-            plans.add(PathPlan(rank = 0, segments = mainPlanSegments))
-        }
+        val fromDict = dictEngine.getPinyinPossibilities(rawDigits)
+            .map { it.lowercase(Locale.ROOT).trim() }
+            .filter { it.isNotEmpty() }
 
-        if (!dict.isLoaded || rawDigits.isEmpty() || sidebar.isEmpty()) {
-            return plans
-        }
-
-        val mainFirst = mainAutoSegs.firstOrNull()?.lowercase(Locale.ROOT)
-        var altRank = 1
-
-        for (first in sidebar) {
-            if (altRank > MAX_ALT_FIRST_SEGMENTS) break
-
-            val firstSeg = first.lowercase(Locale.ROOT).trim()
-            if (firstSeg.isEmpty()) continue
-            if (firstSeg == mainFirst) continue
-
-            val firstCode = T9Lookup.encodeLetters(firstSeg)
-            if (firstCode.isEmpty()) continue
-            if (firstCode.length > rawDigits.length) continue
-
-            val remainDigits = rawDigits.substring(firstCode.length)
-            val shiftedCuts = shiftCutsAfterConsume(
-                cuts = manualCuts,
-                consumedLen = firstCode.length,
-                remainLen = remainDigits.length
-            )
-
-            val tailSegs = SentenceDecoder.decodeAllSegments(
-                digits = remainDigits,
-                manualCuts = shiftedCuts,
-                dict = dict
-            )
-
-            val segs = buildList {
-                addAll(stackSegs)
-                add(firstSeg)
-                addAll(tailSegs)
-            }
-
-            if (segs.isNotEmpty()) {
-                plans.add(PathPlan(rank = altRank, segments = segs))
-                altRank++
-            }
-        }
-
-        return plans
+        return (fromDict + T9Lookup.charsFromDigit(rawDigits.first()).map { it.lowercase(Locale.ROOT) })
+            .distinct()
+            .take(MAX_SIDEBAR_ITEMS)
     }
 
-    private fun shiftCutsAfterConsume(
-        cuts: List<Int>,
-        consumedLen: Int,
-        remainLen: Int
-    ): List<Int> {
-        if (cuts.isEmpty()) return emptyList()
+    private fun buildPlans(
+        stackSegs: List<String>,
+        autoPlans: List<PathPlan>
+    ): List<PathPlan> {
+        if (stackSegs.isEmpty() && autoPlans.isEmpty()) return emptyList()
 
-        val out = ArrayList<Int>()
-        for (c in cuts) {
-            if (c <= consumedLen) continue
-            val shifted = c - consumedLen
-            if (shifted in 1 until remainLen) {
-                out.add(shifted)
-            }
+        if (autoPlans.isEmpty()) {
+            return listOf(
+                PathPlan(
+                    rank = 0,
+                    segments = stackSegs,
+                    consumedDigits = 0
+                )
+            )
         }
-        out.sort()
-        return out
+
+        return autoPlans.map { auto ->
+            PathPlan(
+                rank = auto.rank,
+                segments = stackSegs + auto.segments,
+                consumedDigits = auto.consumedDigits
+            )
+        }
     }
 
     private fun queryCandidatesByPlans(
@@ -236,25 +191,58 @@ object CnT9Handler : ImeModeHandler {
         val out = LinkedHashMap<String, Candidate>()
 
         for (plan in plans) {
-            if (plan.text.isBlank()) continue
+            if (plan.segments.isEmpty()) continue
 
-            val list = dict.getSuggestions(
-                input = plan.text,
-                isT9 = false,
-                isChineseMode = true
+            val exactByStack = dict.getSuggestionsFromPinyinStack(
+                pinyinStack = plan.segments,
+                rawDigits = ""
             )
 
             var taken = 0
-            for (cand in list) {
-                if (!out.containsKey(cand.word)) {
-                    out[cand.word] = cand
+            for (cand in exactByStack) {
+                val normalized = normalizeCandidateAgainstPlan(cand, plan)
+                if (!out.containsKey(normalized.word)) {
+                    out[normalized.word] = normalized
                     taken++
                     if (taken >= MAX_QUERY_PER_PLAN) break
+                }
+            }
+
+            if (taken < MAX_QUERY_PER_PLAN) {
+                val exactByJoined = dict.getSuggestions(
+                    input = plan.text,
+                    isT9 = false,
+                    isChineseMode = true
+                )
+
+                for (cand in exactByJoined) {
+                    val normalized = normalizeCandidateAgainstPlan(cand, plan)
+                    if (!out.containsKey(normalized.word)) {
+                        out[normalized.word] = normalized
+                        taken++
+                        if (taken >= MAX_QUERY_PER_PLAN) break
+                    }
                 }
             }
         }
 
         return out.values.toList()
+    }
+
+    private fun normalizeCandidateAgainstPlan(
+        cand: Candidate,
+        plan: PathPlan
+    ): Candidate {
+        val count = resolveCandidateSyllables(cand)
+            .size
+            .coerceAtLeast(if (cand.syllables > 0) cand.syllables else 0)
+            .coerceAtLeast(1)
+
+        return cand.copy(
+            input = plan.text,
+            matchedLength = plan.consumedDigits,
+            pinyinCount = count
+        )
     }
 
     private fun rerankCandidates(
@@ -270,9 +258,11 @@ object CnT9Handler : ImeModeHandler {
         }
 
         candidates.sortWith(
-            compareByDescending<Candidate> { scoreCache[it]?.fullExactSegments ?: 0 }
-                .thenByDescending { scoreCache[it]?.prefixMatchedSegments ?: 0 }
+            compareByDescending<Candidate> { scoreCache[it]?.exactSegments ?: 0 }
+                .thenByDescending { scoreCache[it]?.prefixSegments ?: 0 }
+                .thenByDescending { scoreCache[it]?.consumedDigits ?: 0 }
                 .thenBy { scoreCache[it]?.uncoveredDigits ?: Int.MAX_VALUE }
+                .thenBy { scoreCache[it]?.planRank ?: Int.MAX_VALUE }
                 .thenByDescending { scoreCache[it]?.priority ?: it.priority }
                 .thenByDescending { scoreCache[it]?.syllables ?: it.syllables }
                 .thenByDescending { scoreCache[it]?.wordLength ?: it.word.length }
@@ -291,24 +281,17 @@ object CnT9Handler : ImeModeHandler {
 
         var best: CandidateScore? = null
         for (plan in plans) {
-            val score = scoreAgainstPlan(cand, plan, syllables, rawDigits)
+            val score = scoreAgainstPlan(
+                cand = cand,
+                plan = plan,
+                candidateSyllables = syllables,
+                rawDigits = rawDigits
+            )
             if (best == null || isBetter(score, best!!)) {
                 best = score
             }
         }
         return best
-    }
-
-    private fun isBetter(a: CandidateScore, b: CandidateScore): Boolean {
-        return when {
-            a.fullExactSegments != b.fullExactSegments -> a.fullExactSegments > b.fullExactSegments
-            a.prefixMatchedSegments != b.prefixMatchedSegments -> a.prefixMatchedSegments > b.prefixMatchedSegments
-            a.uncoveredDigits != b.uncoveredDigits -> a.uncoveredDigits < b.uncoveredDigits
-            a.priority != b.priority -> a.priority > b.priority
-            a.syllables != b.syllables -> a.syllables > b.syllables
-            a.wordLength != b.wordLength -> a.wordLength > b.wordLength
-            else -> a.inputLength > b.inputLength
-        }
     }
 
     private fun scoreAgainstPlan(
@@ -320,25 +303,26 @@ object CnT9Handler : ImeModeHandler {
         val planSegs = plan.segments
         val n = min(planSegs.size, candidateSyllables.size)
 
-        var fullExact = 0
-        var prefixMatched = 0
+        var exact = 0
+        var prefix = 0
         var consumedDigits = 0
 
         for (i in 0 until n) {
-            val seg = planSegs[i].lowercase(Locale.ROOT)
-            val syl = candidateSyllables[i].lowercase(Locale.ROOT)
+            val expected = planSegs[i].lowercase(Locale.ROOT)
+            val actual = candidateSyllables[i].lowercase(Locale.ROOT)
+            val segDigits = T9Lookup.encodeLetters(expected)
+                .length
+                .coerceAtLeast(1)
 
-            val segDigits = T9Lookup.encodeLetters(seg).length.coerceAtLeast(1)
-
-            if (seg == syl) {
-                fullExact++
-                prefixMatched++
+            if (expected == actual) {
+                exact++
+                prefix++
                 consumedDigits += segDigits
                 continue
             }
 
-            if (syl.startsWith(seg)) {
-                prefixMatched++
+            if (actual.startsWith(expected)) {
+                prefix++
                 consumedDigits += segDigits
                 continue
             }
@@ -346,17 +330,48 @@ object CnT9Handler : ImeModeHandler {
             break
         }
 
-        val uncoveredDigits = (rawDigits.length - consumedDigits).coerceAtLeast(0)
-
         return CandidateScore(
-            fullExactSegments = fullExact,
-            prefixMatchedSegments = prefixMatched,
-            uncoveredDigits = uncoveredDigits,
+            exactSegments = exact,
+            prefixSegments = prefix,
+            consumedDigits = consumedDigits,
+            uncoveredDigits = (rawDigits.length - consumedDigits).coerceAtLeast(0),
+            planRank = plan.rank,
             priority = cand.priority,
             syllables = if (cand.syllables > 0) cand.syllables else candidateSyllables.size,
             wordLength = cand.word.length,
             inputLength = cand.input.length
         )
+    }
+
+    private fun isBetter(a: CandidateScore, b: CandidateScore): Boolean {
+        return when {
+            a.exactSegments != b.exactSegments -> a.exactSegments > b.exactSegments
+            a.prefixSegments != b.prefixSegments -> a.prefixSegments > b.prefixSegments
+            a.consumedDigits != b.consumedDigits -> a.consumedDigits > b.consumedDigits
+            a.uncoveredDigits != b.uncoveredDigits -> a.uncoveredDigits < b.uncoveredDigits
+            a.planRank != b.planRank -> a.planRank < b.planRank
+            a.priority != b.priority -> a.priority > b.priority
+            a.syllables != b.syllables -> a.syllables > b.syllables
+            a.wordLength != b.wordLength -> a.wordLength > b.wordLength
+            else -> a.inputLength > b.inputLength
+        }
+    }
+
+    private fun buildPreviewCore(
+        bestPlan: PathPlan?,
+        topCandidate: Candidate?,
+        stackSegs: List<String>
+    ): String {
+        if (bestPlan != null && bestPlan.segments.isNotEmpty()) {
+            return bestPlan.segments.joinToString("'")
+        }
+
+        val topSyllables = topCandidate?.let { resolveCandidateSyllables(it) }.orEmpty()
+        if (topSyllables.isNotEmpty()) {
+            return (stackSegs + topSyllables).joinToString("'")
+        }
+
+        return stackSegs.joinToString("'")
     }
 
     private fun resolveCandidateSyllables(cand: Candidate): List<String> {
@@ -375,40 +390,26 @@ object CnT9Handler : ImeModeHandler {
         return emptyList()
     }
 
-    private fun buildPreviewCore(
-        topCandidate: Candidate?,
-        fallbackSegments: List<String>
-    ): String {
-        val topSyllables = topCandidate?.let { resolveCandidateSyllables(it) }.orEmpty()
-        return if (topSyllables.isNotEmpty()) {
-            topSyllables.joinToString("'")
-        } else {
-            fallbackSegments.joinToString("'")
-        }
-    }
-
     private fun splitConcatPinyinToSyllables(rawLower: String): List<String> {
         if (rawLower.isEmpty()) return emptyList()
-        if (!rawLower.all { it in 'a'..'z' || it == 'ü' }) return emptyList()
 
         val normalized = rawLower.replace("ü", "v")
-        val normalizedSet = pinyinSet.map { it.replace("ü", "v") }.toHashSet()
-        val out = ArrayList<String>()
+        if (!normalized.all { it in 'a'..'z' || it == 'v' }) return emptyList()
 
+        val out = ArrayList<String>()
         var i = 0
+
         while (i < normalized.length) {
             val remain = normalized.length - i
             val tryMax = min(maxPyLen, remain)
 
             var matched: String? = null
-            var l = tryMax
-            while (l >= 1) {
-                val sub = normalized.substring(i, i + l)
-                if (normalizedSet.contains(sub)) {
+            for (len in tryMax downTo 1) {
+                val sub = normalized.substring(i, i + len)
+                if (normalizedPinyinSet.contains(sub)) {
                     matched = sub
                     break
                 }
-                l--
             }
 
             if (matched == null) return emptyList()
@@ -419,23 +420,81 @@ object CnT9Handler : ImeModeHandler {
         return out
     }
 
-    internal object SentenceDecoder {
+    internal object SentencePlanner {
 
-        fun decodeAllSegments(
+        private data class Choice(
+            val text: String,
+            val codeLen: Int,
+            val score: Int
+        )
+
+        private data class PartState(
+            val pos: Int,
+            val segments: List<String>,
+            val score: Int
+        )
+
+        fun planAll(
             digits: String,
             manualCuts: List<Int>,
             dict: Dictionary
-        ): List<String> {
+        ): List<PathPlan> {
             if (digits.isEmpty()) return emptyList()
 
             val parts = splitDigitsByCuts(digits, manualCuts)
             if (parts.isEmpty()) return emptyList()
 
-            val out = ArrayList<String>()
+            var combined = listOf(
+                PartState(
+                    pos = 0,
+                    segments = emptyList(),
+                    score = 0
+                )
+            )
+
             for (part in parts) {
-                out.addAll(decodeOnePart(part, dict))
+                val decodedPart = decodePart(part, dict)
+                if (decodedPart.isEmpty()) {
+                    combined = combined.map { state ->
+                        state.copy(
+                            segments = state.segments + defaultLetterForDigit(part.first()),
+                            score = state.score + 10
+                        )
+                    }
+                    continue
+                }
+
+                val next = ArrayList<PartState>()
+                for (prefix in combined) {
+                    for (suffix in decodedPart) {
+                        next.add(
+                            PartState(
+                                pos = 0,
+                                segments = prefix.segments + suffix.segments,
+                                score = prefix.score + suffix.score
+                            )
+                        )
+                    }
+                }
+
+                combined = next
+                    .sortedWith(
+                        compareByDescending<PartState> { it.score }
+                            .thenByDescending { joinedCodeLength(it.segments) }
+                            .thenBy { it.segments.joinToString("'") }
+                    )
+                    .distinctBy { it.segments.joinToString("'") }
+                    .take(MAX_PLAN_COUNT)
             }
-            return out
+
+            return combined.mapIndexed { index, state ->
+                PathPlan(
+                    rank = index,
+                    segments = state.segments,
+                    consumedDigits = joinedCodeLength(state.segments)
+                        .coerceAtMost(digits.length)
+                )
+            }
         }
 
         fun decodeNextSegment(
@@ -443,37 +502,130 @@ object CnT9Handler : ImeModeHandler {
             manualCuts: List<Int>,
             dict: Dictionary
         ): String? {
-            return decodeAllSegments(digits, manualCuts, dict).firstOrNull()
+            if (digits.isEmpty()) return null
+            val plans = planAll(digits, manualCuts, dict)
+            return plans.firstOrNull()?.segments?.firstOrNull()
         }
 
-        private fun decodeOnePart(part: String, dict: Dictionary): List<String> {
+        private fun decodePart(
+            part: String,
+            dict: Dictionary
+        ): List<PartState> {
             if (part.isEmpty()) return emptyList()
 
-            val out = ArrayList<String>()
-            var remain = part
+            var beam = listOf(
+                PartState(
+                    pos = 0,
+                    segments = emptyList(),
+                    score = 0
+                )
+            )
 
-            while (remain.isNotEmpty()) {
-                val next = dict.getPinyinPossibilities(remain)
-                    .firstOrNull()
-                    ?.lowercase(Locale.ROOT)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: defaultLetterForDigit(remain[0])
+            while (beam.any { it.pos < part.length }) {
+                val next = ArrayList<PartState>()
 
-                out.add(next)
+                for (state in beam) {
+                    if (state.pos >= part.length) {
+                        next.add(state)
+                        continue
+                    }
 
-                val consume = T9Lookup.encodeLetters(next)
-                    .length
-                    .coerceAtLeast(1)
-                    .coerceAtMost(remain.length)
+                    val remain = part.substring(state.pos)
+                    val choices = buildChoices(remain, dict)
 
-                remain = remain.substring(consume)
+                    for (choice in choices.take(PART_STEP_OPTIONS)) {
+                        val nextPos = (state.pos + choice.codeLen).coerceAtMost(part.length)
+                        next.add(
+                            PartState(
+                                pos = nextPos,
+                                segments = state.segments + choice.text,
+                                score = state.score + choice.score
+                            )
+                        )
+                    }
+                }
+
+                beam = next
+                    .sortedWith(
+                        compareByDescending<PartState> { it.score }
+                            .thenByDescending { it.pos }
+                            .thenBy { it.segments.joinToString("'") }
+                    )
+                    .distinctBy { "${it.pos}|${it.segments.joinToString("'")}" }
+                    .take(PART_BEAM_WIDTH)
+
+                if (beam.isEmpty()) break
+                if (beam.all { it.pos >= part.length }) break
             }
 
-            return out
+            return beam
+                .filter { it.pos >= part.length }
+                .sortedWith(
+                    compareByDescending<PartState> { it.score }
+                        .thenBy { it.segments.joinToString("'") }
+                )
+                .distinctBy { it.segments.joinToString("'") }
+                .take(MAX_PLAN_COUNT)
         }
 
-        private fun splitDigitsByCuts(digits: String, manualCuts: List<Int>): List<String> {
+        private fun buildChoices(
+            digits: String,
+            dict: Dictionary
+        ): List<Choice> {
+            val out = ArrayList<Choice>()
+            val seen = HashSet<String>()
+
+            val items = dict.getPinyinPossibilities(digits)
+                .map { it.lowercase(Locale.ROOT).trim() }
+                .filter { it.isNotEmpty() }
+
+            for (item in items) {
+                if (!seen.add(item)) continue
+                val codeLen = T9Lookup.encodeLetters(item)
+                    .length
+                    .coerceAtLeast(1)
+                    .coerceAtMost(digits.length)
+
+                val normalized = item.replace("ü", "v")
+                val score = when {
+                    normalizedPinyinSet.contains(normalized) -> 300 + codeLen * 30
+                    item == "zh" || item == "ch" || item == "sh" -> 240 + codeLen * 25
+                    item.length == 1 -> 80 + codeLen * 10
+                    else -> 120 + codeLen * 10
+                }
+
+                out.add(
+                    Choice(
+                        text = item,
+                        codeLen = codeLen,
+                        score = score
+                    )
+                )
+            }
+
+            val fallback = defaultLetterForDigit(digits.first())
+            if (fallback.isNotEmpty() && seen.add(fallback)) {
+                out.add(
+                    Choice(
+                        text = fallback,
+                        codeLen = 1,
+                        score = 20
+                    )
+                )
+            }
+
+            return out.sortedWith(
+                compareByDescending<Choice> { it.score }
+                    .thenByDescending { it.codeLen }
+                    .thenByDescending { it.text.length }
+                    .thenBy { it.text }
+            )
+        }
+
+        private fun splitDigitsByCuts(
+            digits: String,
+            manualCuts: List<Int>
+        ): List<String> {
             if (digits.isEmpty()) return emptyList()
 
             val cuts = manualCuts
@@ -487,28 +639,44 @@ object CnT9Handler : ImeModeHandler {
 
             val out = ArrayList<String>()
             var prev = 0
+
             for (cut in cuts) {
                 if (cut > prev) {
                     out.add(digits.substring(prev, cut))
                 }
                 prev = cut
             }
+
             if (prev < digits.length) {
                 out.add(digits.substring(prev))
             }
+
             return out
         }
 
         private fun defaultLetterForDigit(d: Char): String {
-            val list = T9Lookup.charsFromDigit(d)
-            val s = list.firstOrNull()?.lowercase(Locale.ROOT)?.trim()
-            return if (!s.isNullOrEmpty()) s.substring(0, 1) else "?"
+            return T9Lookup.charsFromDigit(d)
+                .firstOrNull()
+                ?.lowercase(Locale.ROOT)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: ""
+        }
+
+        private fun joinedCodeLength(segments: List<String>): Int {
+            var total = 0
+            for (seg in segments) {
+                total += T9Lookup.encodeLetters(seg).length
+            }
+            return total
         }
     }
 }
 
 /**
- * Rewritten baseline candidate engine for CN-T9 sentence mode.
+ * CN-T9 candidate engine:
+ * - UI/提交门面继续保留
+ * - 句级分段/候选生成交给 CnT9Handler
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -627,7 +795,6 @@ class CnT9CandidateEngine(
         }
 
         ui.setSelectedCandidateIndex(index)
-
         val cand = currentCandidates[index]
 
         if (isRawCommitMode()) {
@@ -638,7 +805,6 @@ class CnT9CandidateEngine(
         }
 
         val consumeSyllables = resolveConsumeSyllables(cand).coerceAtLeast(1)
-
         materializeSegmentsIfNeeded(consumeSyllables)
 
         val availableStack = session.pinyinStack.size
@@ -667,8 +833,16 @@ class CnT9CandidateEngine(
         }
 
         if (session.rawT9Digits.isNotEmpty()) {
-            val inputLen = cand.input.length.coerceAtLeast(1).coerceAtMost(session.rawT9Digits.length)
-            val pickCand = cand.copy(input = cand.input.take(inputLen), pinyinCount = 0)
+            val inputLen = T9Lookup.encodeLetters(
+                cand.input.replace("'", "")
+            ).length
+                .coerceAtLeast(1)
+                .coerceAtMost(session.rawT9Digits.length)
+
+            val pickCand = cand.copy(
+                input = session.rawT9Digits.take(inputLen),
+                pinyinCount = 0
+            )
 
             when (val result = session.pickCandidate(
                 cand = pickCand,
@@ -712,7 +886,7 @@ class CnT9CandidateEngine(
         if (!dictEngine.isLoaded) return
 
         while (session.pinyinStack.size < targetSyllables && session.rawT9Digits.isNotEmpty()) {
-            val next = CnT9Handler.SentenceDecoder.decodeNextSegment(
+            val next = CnT9Handler.SentencePlanner.decodeNextSegment(
                 digits = session.rawT9Digits,
                 manualCuts = session.t9ManualCuts,
                 dict = dictEngine
@@ -729,13 +903,11 @@ class CnT9CandidateEngine(
         if (cand.syllables > 0) return cand.syllables
 
         cand.pinyin?.let { py ->
-            val normalized = py.lowercase(Locale.ROOT).replace("'", "")
-            val split = splitCandidatePinyin(normalized)
+            val split = splitCandidatePinyin(py.lowercase(Locale.ROOT).replace("'", ""))
             if (split > 0) return split
         }
 
-        val input = cand.input.lowercase(Locale.ROOT).replace("'", "")
-        val split = splitCandidatePinyin(input)
+        val split = splitCandidatePinyin(cand.input.lowercase(Locale.ROOT).replace("'", ""))
         if (split > 0) return split
 
         return 1
@@ -743,18 +915,21 @@ class CnT9CandidateEngine(
 
     private fun splitCandidatePinyin(raw: String): Int {
         if (raw.isBlank()) return 0
+
         val all = PinyinTable.allPinyins
             .map { it.lowercase(Locale.ROOT).replace("ü", "v") }
             .toHashSet()
+
         val normalized = raw.replace("ü", "v")
+        val maxLen = all.maxOfOrNull { it.length } ?: 8
 
         var i = 0
         var count = 0
-        val maxLen = all.maxOfOrNull { it.length } ?: 8
 
         while (i < normalized.length) {
             val remain = normalized.length - i
             val tryMax = min(maxLen, remain)
+
             var found = false
             for (len in tryMax downTo 1) {
                 val sub = normalized.substring(i, i + len)
@@ -765,6 +940,7 @@ class CnT9CandidateEngine(
                     break
                 }
             }
+
             if (!found) return 0
         }
 
