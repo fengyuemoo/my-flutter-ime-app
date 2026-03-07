@@ -41,11 +41,9 @@ class ImeActionDispatcher(
 
     private var lastKnownMainMode: KeyboardMode? = null
 
-    // --- Prevent re-entrance for mode switching ---
     private var inHandleMainModeChanged: Boolean = false
     private var deferredMainMode: KeyboardMode? = null
 
-    // --- EN-QWERTY predict preference (default ON) ---
     private val prefs by lazy { context.getSharedPreferences("ime_settings", Context.MODE_PRIVATE) }
 
     companion object {
@@ -58,8 +56,6 @@ class ImeActionDispatcher(
     private fun saveEnQwertyPredictPref(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_EN_QWERTY_PREDICT_ENABLED, enabled).apply()
     }
-
-    // --- Debug assertions for B semantic ---
 
     private fun sessionByMode(mode: KeyboardMode): ComposingSession {
         return when {
@@ -82,8 +78,6 @@ class ImeActionDispatcher(
             throw AssertionError(msg)
         }
     }
-
-    // --- helpers ---
 
     private fun enginesReady(): Boolean =
         ::ui.isInitialized && ::keyboardController.isInitialized && ::candidateController.isInitialized &&
@@ -108,12 +102,15 @@ class ImeActionDispatcher(
 
     private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
 
+    private fun applyResolvedComposingPreview() {
+        if (!::ui.isInitialized || !::candidateController.isInitialized) return
+        ui.setComposingPreview(candidateController.resolveComposingPreviewText())
+    }
+
     private fun applyEnQwertyPredictPrefIfNeeded(mode: KeyboardMode) {
-        // Only apply default/pref when entering English QWERTY.
         if (!mode.isChinese && !mode.useT9Layout) {
             engineByModeOrNull(mode)?.setEnglishPredict(loadEnQwertyPredictPref())
         }
-        // EN-T9: do nothing ("不管") — its strategy keeps its own in-memory state (default true).
     }
 
     fun attach(
@@ -129,7 +126,6 @@ class ImeActionDispatcher(
         @Suppress("UNUSED_PARAMETER")
         val ignored = onToolbarUpdate
 
-        // Build 4 engines (each binds its fixed session).
         cnQwertyEngine = CnQwertyInputEngine(
             context = context,
             ui = ui,
@@ -163,7 +159,6 @@ class ImeActionDispatcher(
 
         lastKnownMainMode = keyboardController.getMainMode()
 
-        // Chain callbacks (avoid breaking any existing hooks).
         val oldOnKeyboardChanged = keyboardController.onKeyboardChanged
         keyboardController.onKeyboardChanged = {
             oldOnKeyboardChanged?.invoke()
@@ -177,26 +172,19 @@ class ImeActionDispatcher(
             handleMainModeChanged(newMode)
         }
 
-        // If we are already in EN-QWERTY when attached, apply pref once.
         applyEnQwertyPredictPrefIfNeeded(mainMode())
 
         currentEngineOrNull()?.syncEnglishPredictUi()
         syncSymbolPanelUi()
+        applyResolvedComposingPreview()
     }
 
-    /**
-     * B semantic: whenever main mode changes (language OR layout), clear composing for both
-     * old and new mode sessions, and run per-mode before/after hooks.
-     *
-     * This catches layout switching even if it is triggered outside ImeActions.
-     */
     private fun handleMainModeChanged(newMode: KeyboardMode) {
         if (!enginesReady()) {
             lastKnownMainMode = newMode
             return
         }
 
-        // Prevent re-entrance: remember only the latest mode requested while handling.
         if (inHandleMainModeChanged) {
             deferredMainMode = newMode
             return
@@ -216,20 +204,17 @@ class ImeActionDispatcher(
                     if (oldEngine != null && newEngine != null) {
                         oldEngine.beforeModeSwitch()
 
-                        // B: switching clears composing (clear old + clear new).
                         oldEngine.clearComposing()
                         newEngine.clearComposing()
                         newEngine.afterModeSwitch()
 
-                        // NEW: only EN-QWERTY auto-apply predict pref; EN-T9 not touched.
                         applyEnQwertyPredictPrefIfNeeded(target)
 
-                        // Debug assert: both sessions must be cleared after switching.
                         assertSessionCleared(oldMode, from = "handleMainModeChanged ${oldMode} -> ${target} (old)")
                         assertSessionCleared(target, from = "handleMainModeChanged ${oldMode} -> ${target} (new)")
 
-                        // If symbol panel is open, its content may depend on isChineseMainMode.
                         syncSymbolPanelUi()
+                        applyResolvedComposingPreview()
                     }
                 }
 
@@ -259,22 +244,19 @@ class ImeActionDispatcher(
         }
     }
 
-    // --- External refresh API ---
-
     fun refreshComposingView() {
-        currentEngineOrNull()?.refreshComposingView()
+        applyResolvedComposingPreview()
     }
 
     fun refreshCandidates() {
         currentEngineOrNull()?.refreshCandidates()
     }
 
-    // --- ImeActions ---
-
     override fun inputConnection(): InputConnection? = inputConnectionProvider()
 
     override fun clearComposing() {
         currentEngineOrNull()?.clearComposing()
+        applyResolvedComposingPreview()
     }
 
     override fun handleComposingInput(text: String) {
@@ -294,6 +276,7 @@ class ImeActionDispatcher(
     override fun commitText(text: String) {
         inputConnectionProvider()?.commitText(text, 1)
         currentEngineOrNull()?.clearComposing()
+        applyResolvedComposingPreview()
     }
 
     override fun handleSpaceKey() {
@@ -318,19 +301,27 @@ class ImeActionDispatcher(
 
         engine.beforeModeSwitch()
 
-        // CN-T9: 分词 = 在“已输入 digits 的末尾”插入一个手动切分点（不选拼音，不消费 digits）
         if (keyLabel == "分词") {
             val mode = mainMode()
             if (mode.isChinese && mode.useT9Layout) {
                 sessions.cnT9.insertT9ManualCutAtEnd()
                 engine.refreshCandidates()
-                engine.refreshComposingView()
+                refreshComposingView()
             }
             return
         }
 
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
+            val enterOverride = candidateController.resolveEnterCommitText()
+            if (!enterOverride.isNullOrEmpty()) {
+                val ic = inputConnectionProvider() ?: return
+                ic.commitText(enterOverride, 1)
+                currentEngineOrNull()?.clearComposing()
+                applyResolvedComposingPreview()
+                return
+            }
+
             val consumed = engine.handleEnter(inputConnectionProvider())
             if (!consumed) {
                 val ic = inputConnectionProvider() ?: return
@@ -347,14 +338,12 @@ class ImeActionDispatcher(
 
     override fun switchToEnglishMode() {
         if (!::keyboardController.isInitialized) return
-        // Clearing + hooks are handled in onModeChanged (B).
         keyboardController.setLanguage(false)
         syncSymbolPanelUi()
     }
 
     override fun switchToChineseMode() {
         if (!::keyboardController.isInitialized) return
-        // Clearing + hooks are handled in onModeChanged (B).
         keyboardController.setLanguage(true)
         syncSymbolPanelUi()
     }
@@ -435,7 +424,6 @@ class ImeActionDispatcher(
         val mode = mainMode()
         val engineValue = currentEngineOrNull()?.getEnglishPredictEnabled()
 
-        // Only EN-QWERTY uses preference as the "default" source; other modes return engine state.
         return if (!mode.isChinese && !mode.useT9Layout) {
             engineValue ?: loadEnQwertyPredictPref()
         } else {
@@ -446,7 +434,6 @@ class ImeActionDispatcher(
     override fun setEnglishPredict(enabled: Boolean) {
         val mode = mainMode()
 
-        // Only persist user's choice for EN-QWERTY; EN-T9 不管（不写偏好）。
         if (!mode.isChinese && !mode.useT9Layout) {
             saveEnQwertyPredictPref(enabled)
         }
