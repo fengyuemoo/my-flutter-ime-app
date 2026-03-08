@@ -951,7 +951,6 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     updateCandidates()
-                    updateComposingView()
                 }
             }
             return
@@ -981,7 +980,6 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     updateCandidates()
-                    updateComposingView()
                 }
             }
             return
