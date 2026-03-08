@@ -19,7 +19,6 @@ class CandidateController(
     private val sessions: ComposingSessionHub,
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
-    private val updateComposingView: () -> Unit,
 ) : UiStateActions {
 
     private val cnQwertyEngine = CnQwertyCandidateEngine(
@@ -29,7 +28,6 @@ class CandidateController(
         session = sessions.cnQwerty,
         commitRaw = commitRaw,
         clearComposing = clearComposing,
-        updateComposingView = updateComposingView,
         isRawCommitMode = { keyboardController.isRawCommitMode() }
     )
 
@@ -40,7 +38,6 @@ class CandidateController(
         session = sessions.cnT9,
         commitRaw = commitRaw,
         clearComposing = clearComposing,
-        updateComposingView = updateComposingView,
         isRawCommitMode = { keyboardController.isRawCommitMode() }
     )
 
@@ -51,7 +48,6 @@ class CandidateController(
         session = sessions.enQwerty,
         commitRaw = commitRaw,
         clearComposing = clearComposing,
-        updateComposingView = updateComposingView,
         isRawCommitMode = { keyboardController.isRawCommitMode() }
     )
 
@@ -62,7 +58,6 @@ class CandidateController(
         session = sessions.enT9,
         commitRaw = commitRaw,
         clearComposing = clearComposing,
-        updateComposingView = updateComposingView,
         isRawCommitMode = { keyboardController.isRawCommitMode() }
     )
 

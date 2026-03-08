@@ -83,21 +83,13 @@ class ImeGraph(
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
-            lateinit var candidateController: CandidateController
-
-            val updateComposingView: () -> Unit = {
-                val preview = candidateController.resolveComposingPreviewText()
-                ui.setComposingPreview(preview)
-            }
-
-            candidateController = CandidateController(
+            val candidateController = CandidateController(
                 ui = ui,
                 keyboardController = keyboardController,
                 dictEngine = dictManager.dictionary,
                 sessions = sessions,
                 commitRaw = { text -> inputConnectionProvider()?.commitText(text, 1) },
-                clearComposing = { dispatcher.clearComposing() },
-                updateComposingView = updateComposingView
+                clearComposing = { dispatcher.clearComposing() }
             )
 
             val toolbarController = ToolbarController(
