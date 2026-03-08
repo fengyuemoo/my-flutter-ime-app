@@ -167,9 +167,6 @@ abstract class CnBaseInputEngine(
         when (result) {
             is StrategyResult.SessionMutated -> afterSessionMutated()
             is StrategyResult.DirectCommit -> commitAndReset(result.text)
-            is StrategyResult.ComposingUpdate -> {
-                refreshCandidates()
-            }
             is StrategyResult.Noop -> {}
         }
     }
@@ -295,9 +292,6 @@ abstract class EnBaseInputEngine(
         when (result) {
             is StrategyResult.SessionMutated -> afterSessionMutated()
             is StrategyResult.DirectCommit -> commitAndReset(result.text)
-            is StrategyResult.ComposingUpdate -> {
-                refreshCandidates()
-            }
             is StrategyResult.Noop -> {}
         }
     }
