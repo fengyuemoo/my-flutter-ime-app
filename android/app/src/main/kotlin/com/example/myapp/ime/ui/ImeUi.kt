@@ -92,8 +92,6 @@ class ImeUi {
 
     private lateinit var btnToolFont: ImageButton
 
-    private var composingPreviewListener: ((String?) -> Unit)? = null
-
     private var currentFontFamily: String = "sans-serif-light"
     private var currentFontScale: Float = 1.0f
 
@@ -102,10 +100,6 @@ class ImeUi {
 
     private var currentCandidates: List<Candidate> = emptyList()
     private var selectedCandidateIndex: Int = 0
-
-    fun setComposingPreviewListener(listener: ((String?) -> Unit)?) {
-        composingPreviewListener = listener
-    }
 
     fun getExpandButton(): ImageButton = btnExpand
     fun getFilterButton(): Button = btnFilter
@@ -358,8 +352,13 @@ class ImeUi {
     }
 
     fun setComposingPreview(text: String?) {
-        renderComposingPreview(text)
-        composingPreviewListener?.invoke(text)
+        val normalized = text
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        if (normalized == currentComposingPreviewText) return
+
+        renderComposingPreview(normalized)
     }
 
     fun setCandidates(list: List<Candidate>) {
