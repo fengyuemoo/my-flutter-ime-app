@@ -102,29 +102,34 @@ class ImeActionDispatcher(
 
     private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
 
-    private fun syncResolvedComposingToUiAndEditor() {
-        if (!::ui.isInitialized || !::candidateController.isInitialized || !::keyboardController.isInitialized) return
-
+    private fun resolveUnifiedPreviewText(): String? {
         val transientPreview = currentEngineOrNull()
             ?.getTransientComposingPreviewText()
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
 
-        val preview = transientPreview ?: candidateController.resolveComposingPreviewText()
+        if (transientPreview != null) return transientPreview
+
+        return candidateController.resolveComposingPreviewText()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun syncResolvedComposingToUiAndEditor() {
+        if (!::ui.isInitialized || !::candidateController.isInitialized || !::keyboardController.isInitialized) return
+
+        val preview = resolveUnifiedPreviewText()
 
         ui.setComposingPreview(preview)
 
-        val ic = inputConnectionProvider()
-        val mode = keyboardController.getMainMode()
-        if (mode.isChinese) {
-            ic?.setComposingText("", 0)
-        } else {
-            if (preview.isNullOrEmpty()) {
-                ic?.setComposingText("", 0)
-            } else {
-                ic?.setComposingText(preview, 1)
-            }
+        val ic = inputConnectionProvider() ?: return
+
+        if (preview.isNullOrEmpty()) {
+            ic.setComposingText("", 0)
+            return
         }
+
+        ic.setComposingText(preview, 1)
     }
 
     private fun applyEnQwertyPredictPrefIfNeeded(mode: KeyboardMode) {
