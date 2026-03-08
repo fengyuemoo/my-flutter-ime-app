@@ -167,7 +167,6 @@ class EnT9CandidateEngine(
 
             is ComposingSession.PickResult.Updated -> {
                 updateCandidates()
-                updateComposingView()
             }
         }
     }

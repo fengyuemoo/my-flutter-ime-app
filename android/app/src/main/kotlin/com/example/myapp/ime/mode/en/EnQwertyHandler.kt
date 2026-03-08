@@ -167,7 +167,6 @@ class EnQwertyCandidateEngine(
 
             is ComposingSession.PickResult.Updated -> {
                 updateCandidates()
-                updateComposingView()
             }
         }
     }
