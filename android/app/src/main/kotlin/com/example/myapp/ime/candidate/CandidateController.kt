@@ -2,6 +2,7 @@ package com.example.myapp.ime.candidate
 
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
+import com.example.myapp.ime.compose.cn.t9.CnT9PreeditBuilder
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
@@ -20,6 +21,8 @@ class CandidateController(
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
 ) : UiStateActions {
+
+    private val cnT9PreeditBuilder = CnT9PreeditBuilder()
 
     private val cnQwertyEngine = CnQwertyCandidateEngine(
         ui = ui,
@@ -96,11 +99,18 @@ class CandidateController(
         }
     }
 
+    private fun buildCnT9PreeditModel() = cnT9PreeditBuilder.build(
+        session = sessions.cnT9,
+        composingPreviewOverride = cnT9Engine.getComposingPreviewOverride(),
+        enterCommitOverride = cnT9Engine.getEnterCommitTextOverride(),
+        focusedSegmentIndex = null
+    )
+
     // Handler computed composing preview override (CN-Qwerty segmentation / CN-T9 preview line)
     fun getComposingPreviewOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getComposingPreviewOverride()
-            ModeKey.CN_T9 -> cnT9Engine.getComposingPreviewOverride()
+            ModeKey.CN_T9 -> buildCnT9PreeditModel().text
             ModeKey.EN_QWERTY -> enQwertyEngine.getComposingPreviewOverride()
             ModeKey.EN_T9 -> enT9Engine.getComposingPreviewOverride()
         }
@@ -110,31 +120,51 @@ class CandidateController(
     fun getEnterCommitTextOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getEnterCommitTextOverride()
-            ModeKey.CN_T9 -> cnT9Engine.getEnterCommitTextOverride()
+            ModeKey.CN_T9 -> buildCnT9PreeditModel().enterCommitText
             ModeKey.EN_QWERTY -> enQwertyEngine.getEnterCommitTextOverride()
             ModeKey.EN_T9 -> enT9Engine.getEnterCommitTextOverride()
         }
     }
 
     fun resolveComposingPreviewText(): String? {
-        val override = getComposingPreviewOverride()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+        return when (currentModeKey()) {
+            ModeKey.CN_T9 -> {
+                buildCnT9PreeditModel().text
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            }
 
-        if (override != null) {
-            return override
+            else -> {
+                val override = getComposingPreviewOverride()
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+
+                if (override != null) {
+                    return override
+                }
+
+                currentSession()
+                    .displayText(useT9Layout = currentUseT9Layout())
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            }
         }
-
-        return currentSession()
-            .displayText(useT9Layout = currentUseT9Layout())
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
     }
 
     fun resolveEnterCommitText(): String? {
-        return getEnterCommitTextOverride()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+        return when (currentModeKey()) {
+            ModeKey.CN_T9 -> {
+                buildCnT9PreeditModel().enterCommitText
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            }
+
+            else -> {
+                getEnterCommitTextOverride()
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            }
+        }
     }
 
     // --- UiStateActions ---
