@@ -18,10 +18,10 @@ class CnT9ComposeStrategy(
     }
 
     override fun onT9Input(digit: String): StrategyResult {
-        if (digit.isEmpty()) return StrategyResult.Noop
-        if (!digit.all { it in '0'..'9' }) return StrategyResult.Noop
+        val normalizedDigits = digit.filter { it in '0'..'9' }
+        if (normalizedDigits.isEmpty()) return StrategyResult.Noop
 
-        session().appendT9Digit(digit)
+        session().appendT9Digit(normalizedDigits)
         return StrategyResult.SessionMutated
     }
 
