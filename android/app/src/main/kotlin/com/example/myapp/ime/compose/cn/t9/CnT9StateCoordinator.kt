@@ -39,6 +39,16 @@ class CnT9StateCoordinator(
     ): CnT9StateSnapshot {
         val old = mutator.state
 
+        val eventFocusedIndex = when (event) {
+            is CnT9StateEvent.SidebarSegmentFocused -> event.index
+            else -> null
+        }
+
+        val resolvedFocusedIndex = eventFocusedIndex
+            ?.takeIf { it in session.pinyinStack.indices }
+            ?: old.safeFocusedSegmentIndex()
+                ?.takeIf { it in session.pinyinStack.indices }
+
         val rebuilt = CnT9SessionState(
             rawDigits = session.rawT9Digits,
             committedPrefix = session.committedPrefix,
@@ -51,8 +61,7 @@ class CnT9StateCoordinator(
                 )
             },
             manualCuts = emptySet(),
-            focusedSegmentIndex = old.safeFocusedSegmentIndex()
-                ?.takeIf { it < session.pinyinStack.size },
+            focusedSegmentIndex = resolvedFocusedIndex,
             selectedCandidateIndex = old.selectedCandidateIndex,
             isCandidatesExpanded = old.isCandidatesExpanded,
             revision = old.revision

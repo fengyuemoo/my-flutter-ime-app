@@ -23,6 +23,11 @@ class CandidateController(
 ) : UiStateActions {
 
     private val cnT9PreeditBuilder = CnT9PreeditBuilder()
+    private var cnT9FocusedSegmentIndexProvider: (() -> Int?)? = null
+
+    fun setCnT9FocusedSegmentIndexProvider(provider: (() -> Int?)?) {
+        cnT9FocusedSegmentIndexProvider = provider
+    }
 
     private val cnQwertyEngine = CnQwertyCandidateEngine(
         ui = ui,
@@ -103,10 +108,9 @@ class CandidateController(
         session = sessions.cnT9,
         composingPreviewOverride = cnT9Engine.getComposingPreviewOverride(),
         enterCommitOverride = cnT9Engine.getEnterCommitTextOverride(),
-        focusedSegmentIndex = null
+        focusedSegmentIndex = cnT9FocusedSegmentIndexProvider?.invoke()
     )
 
-    // Handler computed composing preview override (CN-Qwerty segmentation / CN-T9 preview line)
     fun getComposingPreviewOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getComposingPreviewOverride()
@@ -116,7 +120,6 @@ class CandidateController(
         }
     }
 
-    // Handler computed enter-commit override (CN-T9 preview letters commit)
     fun getEnterCommitTextOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getEnterCommitTextOverride()
@@ -167,8 +170,6 @@ class CandidateController(
         }
     }
 
-    // --- UiStateActions ---
-
     override fun toggleCandidatesExpanded() {
         toggleExpand()
     }
@@ -180,8 +181,6 @@ class CandidateController(
     override fun toggleSingleCharMode() {
         toggleSingleCharModeInternal()
     }
-
-    // --- Public behaviors ---
 
     fun syncFilterButton() {
         when (currentModeKey()) {
@@ -237,9 +236,6 @@ class CandidateController(
         }
     }
 
-    /**
-     * Index-driven commit (preferred).
-     */
     fun commitCandidateAt(index: Int) {
         when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.commitCandidateAt(index)
@@ -249,10 +245,6 @@ class CandidateController(
         }
     }
 
-    /**
-     * Backward-compatible: Candidate payload commit.
-     * (UI 已改为 index 驱动后，这个方法应尽量少用。)
-     */
     fun commitCandidate(cand: Candidate) {
         when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.commitCandidate(cand)

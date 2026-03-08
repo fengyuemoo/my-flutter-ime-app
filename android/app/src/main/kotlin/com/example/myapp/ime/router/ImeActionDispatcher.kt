@@ -123,7 +123,6 @@ class ImeActionDispatcher(
         ui.setComposingPreview(preview)
 
         val ic = inputConnectionProvider() ?: return
-
         if (preview.isNullOrEmpty()) {
             ic.setComposingText("", 0)
             return
@@ -182,6 +181,12 @@ class ImeActionDispatcher(
             inputConnectionProvider = { inputConnectionProvider() },
             onTransientPreviewChanged = { refreshComposingView() }
         )
+
+        candidateController.setCnT9FocusedSegmentIndexProvider {
+            (cnT9Engine as? CnT9InputEngine)
+                ?.getStateSnapshot()
+                ?.focusedSegmentIndex
+        }
 
         lastKnownMainMode = keyboardController.getMainMode()
 
