@@ -132,26 +132,22 @@ object CnT9Handler : ImeModeHandler {
         }
 
         val bestPlan = plans.firstOrNull()
-        val topCandidate = finalList.firstOrNull()
-        val topScore = topCandidate?.let { scoreCache[it] }
 
-        val previewCore = buildPreviewCore(
-            bestPlan = bestPlan,
-            topCandidate = topCandidate,
-            topScore = topScore
+        val previewCore = buildStablePreviewCore(
+            bestPlan = bestPlan
         )
 
         val composingPreviewText = buildString {
             append(session.committedPrefix)
-            if (previewCore.isNotEmpty()) {
+            if (!previewCore.isNullOrEmpty()) {
                 append(previewCore)
             }
         }.takeIf { it.isNotBlank() }
 
         val enterCommitText = previewCore
-            .lowercase(Locale.ROOT)
-            .filter { it in 'a'..'z' || it == '\'' }
-            .takeIf { it.isNotEmpty() }
+            ?.lowercase(Locale.ROOT)
+            ?.filter { it in 'a'..'z' || it == '\'' }
+            ?.takeIf { it.isNotEmpty() }
 
         return ImeModeHandler.Output(
             candidates = finalList,
@@ -402,42 +398,24 @@ object CnT9Handler : ImeModeHandler {
         }
     }
 
-    private fun buildPreviewCore(
-        bestPlan: PathPlan?,
-        topCandidate: Candidate?,
-        topScore: CandidateScore?
-    ): String {
+    private fun buildStablePreviewCore(
+        bestPlan: PathPlan?
+    ): String? {
         val planSegments = bestPlan?.segments.orEmpty()
-        if (planSegments.isEmpty()) {
-            return topCandidate
-                ?.let { resolveCandidateSyllables(it) }
-                .orEmpty()
-                .joinToString("'")
-        }
+        if (planSegments.isEmpty()) return null
 
-        val topSyllables = topCandidate
-            ?.let { resolveCandidateSyllables(it) }
-            .orEmpty()
-
-        if (topSyllables.isEmpty() || topScore == null || bestPlan == null) {
-            return planSegments.joinToString("'")
-        }
-
-        if (!shouldTrustTopCandidate(bestPlan, topScore)) {
-            return planSegments.joinToString("'")
-        }
-
-        val confirmedCount = topScore.prefixSegments
-            .coerceAtLeast(0)
-            .coerceAtMost(topSyllables.size)
-            .coerceAtMost(planSegments.size)
-
-        val merged = buildList {
-            addAll(topSyllables.take(confirmedCount))
-            addAll(planSegments.drop(confirmedCount))
-        }
-
-        return merged.joinToString("'")
+        return planSegments
+            .map { seg ->
+                seg.trim()
+                    .lowercase(Locale.ROOT)
+                    .replace("’", "'")
+                    .replace("'", "")
+                    .replace('v', 'ü')
+                    .filter { it in 'a'..'z' || it == 'ü' }
+            }
+            .filter { it.isNotEmpty() }
+            .joinToString("'")
+            .takeIf { it.isNotEmpty() }
     }
 
     private fun shouldTrustTopCandidate(
@@ -928,7 +906,7 @@ class CnT9CandidateEngine(
         val consumeSyllables = resolveConsumeSyllables(cand).coerceAtLeast(1)
         val stackSizeBeforeMaterialize = session.pinyinStack.size
 
-        materializeSegmentsIfNeeded(consumeSyllables)
+        materializeSegmentsIfNeeded(targetSyllables = consumeSyllables)
 
         val availableStack = session.pinyinStack.size
         if (availableStack > 0) {
