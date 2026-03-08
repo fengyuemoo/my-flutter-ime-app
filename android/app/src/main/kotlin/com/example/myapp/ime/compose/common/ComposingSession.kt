@@ -247,18 +247,30 @@ class ComposingSession {
             return true
         }
 
+        return backspaceT9ByDigitGranularity()
+    }
+
+    private fun backspaceT9ByDigitGranularity(): Boolean {
         if (_rawT9Digits.isNotEmpty()) {
-            _rawT9Digits = _rawT9Digits.dropLast(1)
-            trimCutsToLength(_rawT9Digits.length)
+            deleteLastRawT9Digit()
             return true
         }
 
         if (_pinyinStack.isNotEmpty()) {
-            undoLastSidebarSelection()
+            restoreLastMaterializedT9Segment()
             return true
         }
 
         return true
+    }
+
+    private fun deleteLastRawT9Digit() {
+        _rawT9Digits = _rawT9Digits.dropLast(1)
+        trimCutsToLength(_rawT9Digits.length)
+    }
+
+    private fun restoreLastMaterializedT9Segment() {
+        undoLastSidebarSelection()
     }
 
     private fun undoLastSidebarSelection() {
