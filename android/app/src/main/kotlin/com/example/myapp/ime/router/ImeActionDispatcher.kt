@@ -105,7 +105,13 @@ class ImeActionDispatcher(
     private fun syncResolvedComposingToUiAndEditor() {
         if (!::ui.isInitialized || !::candidateController.isInitialized || !::keyboardController.isInitialized) return
 
-        val preview = candidateController.resolveComposingPreviewText()
+        val transientPreview = currentEngineOrNull()
+            ?.getTransientComposingPreviewText()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        val preview = transientPreview ?: candidateController.resolveComposingPreviewText()
+
         ui.setComposingPreview(preview)
 
         val ic = inputConnectionProvider()
@@ -168,7 +174,8 @@ class ImeActionDispatcher(
             keyboardController = keyboardController,
             candidateController = candidateController,
             session = sessions.enT9,
-            inputConnectionProvider = { inputConnectionProvider() }
+            inputConnectionProvider = { inputConnectionProvider() },
+            onTransientPreviewChanged = { refreshComposingView() }
         )
 
         lastKnownMainMode = keyboardController.getMainMode()

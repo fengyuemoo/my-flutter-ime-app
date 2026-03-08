@@ -7,15 +7,13 @@ import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.router.EnBaseInputEngine
 import com.example.myapp.ime.ui.ImeUi
 
-/**
- * EN-T9 input engine.
- */
-class EnT9InputEngine(
+class EnT9InputEngine private constructor(
     ui: ImeUi,
     keyboardController: KeyboardController,
     candidateController: CandidateController,
     session: ComposingSession,
-    inputConnectionProvider: () -> InputConnection?
+    inputConnectionProvider: () -> InputConnection?,
+    private val strategyImpl: EnT9ComposeStrategy
 ) : EnBaseInputEngine(
     ui = ui,
     keyboardController = keyboardController,
@@ -23,8 +21,29 @@ class EnT9InputEngine(
     session = session,
     inputConnectionProvider = inputConnectionProvider,
     useT9Layout = true,
-    strategy = EnT9ComposeStrategy(
-        sessionProvider = { session },
-        inputConnectionProvider = { inputConnectionProvider() }
+    strategy = strategyImpl
+) {
+    constructor(
+        ui: ImeUi,
+        keyboardController: KeyboardController,
+        candidateController: CandidateController,
+        session: ComposingSession,
+        inputConnectionProvider: () -> InputConnection?,
+        onTransientPreviewChanged: () -> Unit
+    ) : this(
+        ui = ui,
+        keyboardController = keyboardController,
+        candidateController = candidateController,
+        session = session,
+        inputConnectionProvider = inputConnectionProvider,
+        strategyImpl = EnT9ComposeStrategy(
+            sessionProvider = { session },
+            inputConnectionProvider = { inputConnectionProvider() },
+            onPreviewStateChanged = onTransientPreviewChanged
+        )
     )
-)
+
+    override fun getTransientComposingPreviewText(): String? {
+        return strategyImpl.getPendingMultiTapPreviewText()
+    }
+}

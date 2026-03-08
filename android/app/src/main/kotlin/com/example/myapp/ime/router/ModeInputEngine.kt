@@ -25,6 +25,8 @@ internal object DebugFlags {
 abstract class ModeInputEngine {
     abstract fun refreshCandidates()
 
+    open fun getTransientComposingPreviewText(): String? = null
+
     abstract fun clearComposing()
 
     abstract fun handleComposingInput(text: String)

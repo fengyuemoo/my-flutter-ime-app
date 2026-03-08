@@ -10,18 +10,15 @@ import com.example.myapp.ime.compose.common.StrategyResult
 
 class EnT9ComposeStrategy(
     private val sessionProvider: () -> ComposingSession,
-    private val inputConnectionProvider: () -> InputConnection?
+    private val inputConnectionProvider: () -> InputConnection?,
+    private val onPreviewStateChanged: () -> Unit
 ) : EnglishComposeStrategy, PendingCommitStrategy {
 
     private fun session(): ComposingSession = sessionProvider()
     private fun ic(): InputConnection? = inputConnectionProvider()
 
-    /**
-     * Per-mode independent state (EN-T9 only).
-     */
     private var englishPredictEnabled: Boolean = true
 
-    // Multi-tap state (only used when englishPredictEnabled == false)
     private var multiTapKey: Char = ' '
     private var multiTapIndex = 0
     private val multiTapHandler = Handler(Looper.getMainLooper())
@@ -49,10 +46,10 @@ class EnT9ComposeStrategy(
         session().clear()
         resetMultiTapState()
         ic()?.setComposingText("", 0)
+        onPreviewStateChanged()
     }
 
     override fun onComposingInput(text: String): StrategyResult {
-        // Not handled in T9
         return StrategyResult.Noop
     }
 
@@ -62,6 +59,7 @@ class EnT9ComposeStrategy(
         return if (englishPredictEnabled) {
             resetMultiTapState()
             session().appendT9Digit(digit)
+            onPreviewStateChanged()
             StrategyResult.SessionMutated
         } else {
             handleMultiTap(digit[0])
@@ -80,20 +78,30 @@ class EnT9ComposeStrategy(
         if (!englishPredictEnabled) {
             if (resetMultiTapState()) {
                 ic()?.setComposingText("", 0)
+                onPreviewStateChanged()
                 return true
             }
         }
         return false
     }
 
+    fun getPendingMultiTapPreviewText(): String? {
+        if (englishPredictEnabled) return null
+        return getMultiTapComposingText()
+            .trim()
+            .takeIf { it.isNotEmpty() }
+    }
+
     private fun handleMultiTap(digit: Char): StrategyResult {
         if (digit == '0' || digit == '1') {
             resetMultiTapState()
+            onPreviewStateChanged()
             return StrategyResult.DirectCommit(digit.toString())
         }
 
         if (!multiTapMap.containsKey(digit)) {
             resetMultiTapState()
+            onPreviewStateChanged()
             return StrategyResult.DirectCommit(digit.toString())
         }
 
@@ -108,9 +116,9 @@ class EnT9ComposeStrategy(
             multiTapIndex = 0
         }
 
-        val composingText = getMultiTapComposingText()
         multiTapHandler.postDelayed(multiTapConfirmRunnable, 800)
-        return StrategyResult.ComposingUpdate(composingText)
+        onPreviewStateChanged()
+        return StrategyResult.Noop
     }
 
     private fun getMultiTapComposingText(): String {
@@ -122,7 +130,10 @@ class EnT9ComposeStrategy(
 
     private fun confirmMultiTapInternalCommitIfAny() {
         multiTapHandler.removeCallbacks(multiTapConfirmRunnable)
-        if (multiTapKey == ' ') return
+        if (multiTapKey == ' ') {
+            onPreviewStateChanged()
+            return
+        }
 
         val textToCommit = getMultiTapComposingText()
         resetMultiTapState()
@@ -132,14 +143,20 @@ class EnT9ComposeStrategy(
             ic?.setComposingText("", 0)
             ic?.commitText(textToCommit, 1)
         }
+
+        onPreviewStateChanged()
     }
 
     private fun confirmMultiTap(): StrategyResult {
         multiTapHandler.removeCallbacks(multiTapConfirmRunnable)
-        if (multiTapKey == ' ') return StrategyResult.Noop
+        if (multiTapKey == ' ') {
+            onPreviewStateChanged()
+            return StrategyResult.Noop
+        }
 
         val textToCommit = getMultiTapComposingText()
         resetMultiTapState()
+        onPreviewStateChanged()
 
         return if (textToCommit.isNotEmpty()) {
             StrategyResult.DirectCommit(textToCommit)
