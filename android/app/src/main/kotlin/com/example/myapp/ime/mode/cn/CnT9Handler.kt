@@ -789,7 +789,6 @@ class CnT9CandidateEngine(
     private val session: ComposingSession,
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
-    private val updateComposingView: () -> Unit,
     private val isRawCommitMode: () -> Boolean
 ) {
     private var isExpanded: Boolean = false

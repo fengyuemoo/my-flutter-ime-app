@@ -20,23 +20,19 @@ object CnQwertyHandler : ImeModeHandler {
 
         val input = session.qwertyInput
 
-        // 1) Candidates (dictionary)
         val candidates = ArrayList<Candidate>()
         if (dictEngine.isLoaded && input.isNotEmpty()) {
             candidates.addAll(dictEngine.getSuggestions(input, isT9 = false, isChineseMode = true))
         }
 
-        // 2) Single char filter (CN only)
         val filtered = if (singleCharMode) {
             candidates.filter { it.word.length == 1 }
         } else {
             candidates
         }
 
-        // 3) CN-mode English reorder strategy (exactly same idea as CandidateComposer)
         val finalCandidates = reorderForChineseModePreferHan(filtered, input)
 
-        // 4) Fallback: show raw input if no candidates
         val finalList =
             if (finalCandidates.isEmpty() && input.isNotEmpty()) {
                 arrayListOf(Candidate(input, input, 0, 0, 0))
@@ -46,7 +42,6 @@ object CnQwertyHandler : ImeModeHandler {
 
         val inputLower = input.lowercase()
 
-        // 缩写词组（yg/ygr/hy/py）强置顶
         if (isAcronymLikeQwerty(inputLower)) {
             promoteChineseCandidateByAcronym(finalList, inputLower)
         }
@@ -56,7 +51,6 @@ object CnQwertyHandler : ImeModeHandler {
         val preview = when {
             inputLower.contains("'") -> inputLower
 
-            // 1) 首候选是英文精确词或变体：预览显示英文（不带分词符）
             top != null && isAsciiWord(top.word) -> {
                 val w = top.word.lowercase()
                 val variants = englishVariantsForPreview(inputLower)
@@ -94,8 +88,6 @@ object CnQwertyHandler : ImeModeHandler {
             composingPreviewText = session.committedPrefix + preview
         )
     }
-
-    // -------- from old CandidateController (CN Qwerty preview & acronym promote) --------
 
     private object PinyinUtil {
         private val pinyinSet: Set<String> = PinyinTable.allPinyins.map { it.lowercase() }.toHashSet()
@@ -245,7 +237,6 @@ object CnQwertyHandler : ImeModeHandler {
         for (i in candidates.indices) {
             val c = candidates[i]
 
-            // 优先用 DB 的 acronym；缺失才回退到从 pinyin 反算
             val ac = c.acronym
                 ?: run {
                     val py = c.pinyin ?: return@run null
@@ -270,8 +261,6 @@ object CnQwertyHandler : ImeModeHandler {
         val matched = candidates.removeAt(bestIdx)
         candidates.add(0, matched)
     }
-
-    // -------- from old CandidateComposer (CN-mode prefer Han) --------
 
     private fun reorderForChineseModePreferHan(
         list: List<Candidate>,
@@ -364,7 +353,6 @@ object CnQwertyHandler : ImeModeHandler {
         return word.all { it in 'a'..'z' || it in 'A'..'Z' }
     }
 
-    // Preview uses a simpler whitelist (matches old CandidateController behavior)
     private fun englishVariantsForPreview(inputLower: String): Set<String> {
         if (inputLower.length < 2) return emptySet()
         val out = LinkedHashSet<String>()
@@ -384,7 +372,6 @@ class CnQwertyCandidateEngine(
     private val session: ComposingSession,
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
-    private val updateComposingView: () -> Unit,
     private val isRawCommitMode: () -> Boolean
 ) {
     private var isExpanded: Boolean = false
