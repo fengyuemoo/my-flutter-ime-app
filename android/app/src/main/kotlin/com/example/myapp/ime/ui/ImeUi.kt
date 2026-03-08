@@ -14,7 +14,6 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -24,6 +23,7 @@ import com.example.myapp.R
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.prefs.KeyboardPrefs
 import java.util.WeakHashMap
+import android.widget.TextView
 
 object FontApplier {
     private val baseTextSizePx = WeakHashMap<TextView, Float>()
@@ -83,7 +83,6 @@ class ImeUi {
     private lateinit var btnExpand: ImageButton
     private lateinit var btnExpandedClose: ImageButton
     private lateinit var btnFilter: Button
-    private lateinit var tvComposingPreview: TextView
 
     private lateinit var recyclerHorizontal: RecyclerView
     private lateinit var recyclerVertical: RecyclerView
@@ -254,7 +253,6 @@ class ImeUi {
         expandedPanel = rootView.findViewById(R.id.expandedcandidatespanel)
         btnExpand = rootView.findViewById(R.id.btnexpandcandidates)
         btnExpandedClose = rootView.findViewById(R.id.expandpanelclose)
-        tvComposingPreview = rootView.findViewById(R.id.tvcomposingpreview)
         btnFilter = rootView.findViewById(R.id.expandpanelfilter)
         btnToolFont = rootView.findViewById(R.id.btntoolfont)
 
@@ -310,8 +308,6 @@ class ImeUi {
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
         currentComposingPreviewText = null
-        tvComposingPreview.text = ""
-        tvComposingPreview.visibility = View.GONE
 
         setComposingPreview(null)
         showIdleState()
@@ -345,17 +341,6 @@ class ImeUi {
             ?.takeIf { it.isNotEmpty() }
 
         currentComposingPreviewText = normalized
-
-        if (normalized == null) {
-            tvComposingPreview.text = ""
-            tvComposingPreview.visibility = View.GONE
-            onComposingPreviewChanged?.invoke(null)
-            return
-        }
-
-        tvComposingPreview.text = normalized
-        tvComposingPreview.visibility = View.VISIBLE
-        FontApplier.apply(tvComposingPreview, currentFontFamily, currentFontScale)
         onComposingPreviewChanged?.invoke(normalized)
     }
 
@@ -476,18 +461,11 @@ class ImeUi {
         val bgDark = Color.parseColor("#222222")
         val panelLight = Color.parseColor("#EEEEEE")
         val panelDark = Color.parseColor("#333333")
-        val textLight = Color.BLACK
-        val textDark = Color.WHITE
 
         rootView.setBackgroundColor(if (themeMode == 1) bgDark else bgLight)
         expandedPanel.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
         toolbarContainer.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
-
-        tvComposingPreview.setBackgroundColor(
-            if (themeMode == 1) panelDark else Color.parseColor("#F5F5F5")
-        )
-        tvComposingPreview.setTextColor(if (themeMode == 1) textDark else textLight)
 
         applyFont(currentFontFamily, currentFontScale)
         renderComposingPreview(currentComposingPreviewText)
