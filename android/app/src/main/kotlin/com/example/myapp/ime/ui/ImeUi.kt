@@ -97,6 +97,7 @@ class ImeUi {
 
     private var expandedPanelFilterOverrideText: CharSequence? = null
     private var currentComposingPreviewText: String? = null
+    private var onComposingPreviewChanged: ((String?) -> Unit)? = null
 
     private var currentCandidates: List<Candidate> = emptyList()
     private var selectedCandidateIndex: Int = 0
@@ -210,6 +211,11 @@ class ImeUi {
             btnFilter.text = text
             FontApplier.apply(btnFilter, currentFontFamily, currentFontScale)
         }
+    }
+
+    fun setComposingPreviewListener(listener: (String?) -> Unit) {
+        onComposingPreviewChanged = listener
+        listener(currentComposingPreviewText)
     }
 
     fun inflate(
@@ -343,12 +349,14 @@ class ImeUi {
         if (normalized == null) {
             tvComposingPreview.text = ""
             tvComposingPreview.visibility = View.GONE
+            onComposingPreviewChanged?.invoke(null)
             return
         }
 
         tvComposingPreview.text = normalized
         tvComposingPreview.visibility = View.VISIBLE
         FontApplier.apply(tvComposingPreview, currentFontFamily, currentFontScale)
+        onComposingPreviewChanged?.invoke(normalized)
     }
 
     fun setComposingPreview(text: String?) {
