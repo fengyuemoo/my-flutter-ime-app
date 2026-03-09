@@ -134,11 +134,82 @@ class CnT9PreeditBuilder {
         if (lockedPrefixSegments.isEmpty()) return plannedSegments
         if (plannedSegments.isEmpty()) return lockedPrefixSegments
 
-        if (plannedSegments.size <= lockedPrefixSegments.size) {
+        val lockedText = joinSegments(lockedPrefixSegments)
+        val plannedText = joinSegments(plannedSegments)
+
+        if (lockedText.isEmpty()) return plannedSegments
+        if (plannedText.isEmpty()) return lockedPrefixSegments
+
+        if (plannedText.startsWith(lockedText)) {
+            val suffixSegments = consumeTextPrefixFromSegments(
+                segments = plannedSegments,
+                prefixCharCount = lockedText.length
+            )
+            return lockedPrefixSegments + suffixSegments
+        }
+
+        val exactSegmentPrefixCount = longestExactSegmentPrefixLength(
+            lockedPrefixSegments,
+            plannedSegments
+        )
+        if (exactSegmentPrefixCount > 0) {
+            return lockedPrefixSegments + plannedSegments.drop(exactSegmentPrefixCount)
+        }
+
+        if (lockedText.startsWith(plannedText)) {
             return lockedPrefixSegments
         }
 
-        return lockedPrefixSegments + plannedSegments.drop(lockedPrefixSegments.size)
+        return lockedPrefixSegments
+    }
+
+    private fun joinSegments(segments: List<String>): String {
+        return segments.joinToString(separator = "")
+    }
+
+    private fun consumeTextPrefixFromSegments(
+        segments: List<String>,
+        prefixCharCount: Int
+    ): List<String> {
+        if (segments.isEmpty()) return emptyList()
+        if (prefixCharCount <= 0) return segments
+
+        val out = ArrayList<String>()
+        var remaining = prefixCharCount
+
+        for (segment in segments) {
+            if (remaining >= segment.length) {
+                remaining -= segment.length
+                continue
+            }
+
+            if (remaining > 0) {
+                val tail = segment.drop(remaining)
+                if (tail.isNotEmpty()) {
+                    out.add(tail)
+                }
+                remaining = 0
+                continue
+            }
+
+            out.add(segment)
+        }
+
+        return out
+    }
+
+    private fun longestExactSegmentPrefixLength(
+        left: List<String>,
+        right: List<String>
+    ): Int {
+        val max = minOf(left.size, right.size)
+        var index = 0
+
+        while (index < max && left[index] == right[index]) {
+            index += 1
+        }
+
+        return index
     }
 
     private fun buildDisplayText(
