@@ -22,6 +22,14 @@ class CnT9PreeditBuilder {
             committedPrefix = committedPrefix
         )
 
+        val normalizedEnterOverride = normalizeDisplayText(enterCommitOverride)
+        val enterOverrideCore = normalizeCoreText(
+            extractCoreText(
+                fullText = normalizedEnterOverride,
+                committedPrefix = committedPrefix
+            )
+        )
+
         val lockedPrefixSegments = session.pinyinStack
             .map { normalizeSyllable(it) }
             .filter { it.isNotEmpty() }
@@ -47,9 +55,9 @@ class CnT9PreeditBuilder {
             )
         }
 
-        val mergedCoreText = mergedSegments
-            .joinToString("'")
-            .takeIf { it.isNotEmpty() }
+        val mergedCoreText = normalizeCoreText(
+            mergedSegments.joinToString("'").takeIf { it.isNotEmpty() }
+        )
 
         val fallbackText = buildFallbackText(
             session = session,
@@ -65,9 +73,13 @@ class CnT9PreeditBuilder {
             else -> normalizedOverride ?: fallbackText
         }
 
-        val enterCommitText = sanitizeEnterCommitText(
-            enterCommitOverride ?: mergedCoreText
-        )
+        val enterCommitCore = when {
+            !mergedCoreText.isNullOrEmpty() -> mergedCoreText
+            !enterOverrideCore.isNullOrEmpty() -> enterOverrideCore
+            else -> null
+        }
+
+        val enterCommitText = sanitizeEnterCommitText(enterCommitCore)
 
         return CnT9PreeditModel(
             text = displayText,
@@ -98,6 +110,13 @@ class CnT9PreeditBuilder {
         } else {
             fullText.takeIf { it.isNotBlank() }
         }
+    }
+
+    private fun normalizeCoreText(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        return splitCoreSegments(raw)
+            .joinToString("'")
+            .takeIf { it.isNotEmpty() }
     }
 
     private fun normalizeSyllable(raw: String): String {
