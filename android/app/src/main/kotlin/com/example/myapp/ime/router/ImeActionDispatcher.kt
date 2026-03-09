@@ -132,11 +132,10 @@ class ImeActionDispatcher(
     private fun syncResolvedComposingToUiAndEditor() {
         if (!::ui.isInitialized || !::candidateController.isInitialized || !::keyboardController.isInitialized) return
 
-        val cnT9Preedit = resolveCnT9PreeditModelOrNull()
-        ui.setCnT9Preedit(cnT9Preedit)
+        // 永远不渲染额外的 T9 preedit 横条
+        ui.setCnT9Preedit(null)
 
-        val preview = cnT9Preedit?.text ?: resolveUnifiedPreviewText()
-
+        val preview = resolveUnifiedPreviewText()
         ui.setComposingPreview(preview)
 
         val ic = inputConnectionProvider() ?: return
@@ -144,7 +143,6 @@ class ImeActionDispatcher(
             ic.setComposingText("", 0)
             return
         }
-
         ic.setComposingText(preview, 1)
     }
 

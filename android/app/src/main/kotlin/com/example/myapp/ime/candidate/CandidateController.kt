@@ -122,7 +122,8 @@ class CandidateController(
     fun getComposingPreviewOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getComposingPreviewOverride()
-            ModeKey.CN_T9 -> buildCnT9PreeditModel().text
+            // CN-T9 不再走 preedit model，直接取 engine override（可为 null）
+            ModeKey.CN_T9 -> cnT9Engine.getComposingPreviewOverride()
             ModeKey.EN_QWERTY -> enQwertyEngine.getComposingPreviewOverride()
             ModeKey.EN_T9 -> enT9Engine.getComposingPreviewOverride()
         }
@@ -140,7 +141,14 @@ class CandidateController(
     fun resolveComposingPreviewText(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_T9 -> {
-                buildCnT9PreeditModel().text
+                // 直接走 engine override → session displayText，完全不走 preedit model
+                val override = cnT9Engine.getComposingPreviewOverride()
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                if (override != null) return override
+
+                currentSession()
+                    .displayText(useT9Layout = true)
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
             }
@@ -150,9 +158,7 @@ class CandidateController(
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
 
-                if (override != null) {
-                    return override
-                }
+                if (override != null) return override
 
                 currentSession()
                     .displayText(useT9Layout = currentUseT9Layout())
@@ -165,6 +171,7 @@ class CandidateController(
     fun resolveEnterCommitText(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_T9 -> {
+                // Enter 判断仍走 preedit model，只取 enterCommitText，不影响 UI
                 buildCnT9PreeditModel().enterCommitText
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
