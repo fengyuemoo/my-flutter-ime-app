@@ -39,28 +39,35 @@ class CnT9InputEngine(
         return stateCoordinator.snapshot()
     }
 
-    fun focusMaterializedSegment(index: Int) {
-        val changed = session.rollbackMaterializedSegmentsFrom(index)
-        if (!changed) {
-            stateCoordinator.syncFromSession(
-                session = session,
-                event = null
-            )
-            return
-        }
+    private fun lastMaterializedIndexOrNull(): Int? {
+        return session.pinyinStack.lastIndex.takeIf { it >= 0 }
+    }
 
-        refreshCandidates()
-
-        val nextFocusedIndex = index.takeIf { it < session.pinyinStack.size }
+    private fun syncState(
+        focusedIndex: Int? = null,
+        fallbackEvent: CnT9StateEvent? = null
+    ) {
+        val event = focusedIndex?.let { CnT9StateEvent.SidebarSegmentFocused(it) } ?: fallbackEvent
         stateCoordinator.syncFromSession(
             session = session,
-            event = nextFocusedIndex?.let { CnT9StateEvent.SidebarSegmentFocused(it) }
+            event = event
         )
+    }
+
+    fun focusMaterializedSegment(index: Int) {
+        val changed = session.rollbackMaterializedSegmentsFrom(index)
+        val focusedIndexAfterRollback = lastMaterializedIndexOrNull()
+
+        if (changed) {
+            super.refreshCandidates()
+        }
+
+        syncState(focusedIndex = focusedIndexAfterRollback)
     }
 
     override fun refreshCandidates() {
         super.refreshCandidates()
-        stateCoordinator.syncFromSession(session)
+        syncState()
     }
 
     override fun clearComposing() {
@@ -71,9 +78,8 @@ class CnT9InputEngine(
     override fun handleT9Input(digit: String) {
         super.handleT9Input(digit)
         val normalized = digit.filter { it in '0'..'9' }
-        stateCoordinator.syncFromSession(
-            session = session,
-            event = if (normalized.isNotEmpty()) {
+        syncState(
+            fallbackEvent = if (normalized.isNotEmpty()) {
                 CnT9StateEvent.DigitsAppended(normalized)
             } else {
                 null
@@ -82,28 +88,13 @@ class CnT9InputEngine(
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
-        val beforeCount = session.pinyinStack.size
         super.onPinyinSidebarClick(pinyin)
-        val afterCount = session.pinyinStack.size
-
-        val focusedIndex = when {
-            afterCount > beforeCount -> afterCount - 1
-            afterCount > 0 -> afterCount - 1
-            else -> null
-        }
-
-        stateCoordinator.syncFromSession(
-            session = session,
-            event = focusedIndex?.let { CnT9StateEvent.SidebarSegmentFocused(it) }
-        )
+        syncState(focusedIndex = lastMaterializedIndexOrNull())
     }
 
     override fun handleBackspace() {
         super.handleBackspace()
-        stateCoordinator.syncFromSession(
-            session = session,
-            event = CnT9StateEvent.BackspacePressed
-        )
+        syncState(fallbackEvent = CnT9StateEvent.BackspacePressed)
     }
 
     override fun handleSpaceKey() {
@@ -117,10 +108,7 @@ class CnT9InputEngine(
             CnT9StateEvent.CandidateSelectionStarted
         }
 
-        stateCoordinator.syncFromSession(
-            session = session,
-            event = event
-        )
+        syncState(fallbackEvent = event)
     }
 
     override fun handleEnter(ic: InputConnection?): Boolean {
@@ -134,10 +122,7 @@ class CnT9InputEngine(
                 CnT9StateEvent.CandidateSelectionStarted
             }
 
-            stateCoordinator.syncFromSession(
-                session = session,
-                event = event
-            )
+            syncState(fallbackEvent = event)
         }
 
         return consumed
@@ -145,11 +130,11 @@ class CnT9InputEngine(
 
     override fun beforeModeSwitch() {
         super.beforeModeSwitch()
-        stateCoordinator.syncFromSession(session)
+        syncState()
     }
 
     override fun afterModeSwitch() {
         super.afterModeSwitch()
-        stateCoordinator.syncFromSession(session)
+        syncState()
     }
 }
