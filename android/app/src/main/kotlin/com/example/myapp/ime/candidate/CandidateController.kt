@@ -1,6 +1,7 @@
 package com.example.myapp.ime.candidate
 
 import com.example.myapp.dict.api.Dictionary
+import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.cn.t9.CnT9PreeditBuilder
 import com.example.myapp.ime.compose.cn.t9.CnT9PreeditModel
@@ -9,10 +10,12 @@ import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.mode.cn.CnQwertyCandidateEngine
 import com.example.myapp.ime.mode.cn.CnT9CandidateEngine
+import com.example.myapp.ime.mode.cn.CnT9Handler
 import com.example.myapp.ime.mode.en.EnQwertyCandidateEngine
 import com.example.myapp.ime.mode.en.EnT9CandidateEngine
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.ime.ui.api.UiStateActions
+import java.util.Locale
 
 class CandidateController(
     private val ui: ImeUi,
@@ -122,7 +125,6 @@ class CandidateController(
     fun getComposingPreviewOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getComposingPreviewOverride()
-            // CN-T9 不再走 preedit model，直接取 engine override（可为 null）
             ModeKey.CN_T9 -> cnT9Engine.getComposingPreviewOverride()
             ModeKey.EN_QWERTY -> enQwertyEngine.getComposingPreviewOverride()
             ModeKey.EN_T9 -> enT9Engine.getComposingPreviewOverride()
@@ -141,16 +143,47 @@ class CandidateController(
     fun resolveComposingPreviewText(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_T9 -> {
-                // 直接走 engine override → session displayText，完全不走 preedit model
+                val session = sessions.cnT9
+
+                // 1. 优先用 engine 的 override（如有）
                 val override = cnT9Engine.getComposingPreviewOverride()
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
                 if (override != null) return override
 
-                currentSession()
-                    .displayText(useT9Layout = true)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
+                // 2. 已锁定的段（pinyinStack）
+                val lockedSegs = session.pinyinStack
+                    .map { it.trim().lowercase(Locale.ROOT) }
+                    .filter { it.isNotEmpty() }
+
+                // 3. rawDigits 剩余部分：用 SentencePlanner 解码出最优拼音段
+                val rawDigits = session.rawT9Digits
+                val plannedSegs = if (rawDigits.isNotEmpty() && dictEngine.isLoaded) {
+                    CnT9Handler.SentencePlanner.planAll(
+                        digits = rawDigits,
+                        manualCuts = session.t9ManualCuts,
+                        dict = dictEngine
+                    ).firstOrNull()?.segments
+                        ?.map { it.trim().lowercase(Locale.ROOT) }
+                        ?.filter { it.isNotEmpty() }
+                        ?: emptyList()
+                } else if (rawDigits.isNotEmpty()) {
+                    // 字典未加载时降级：每个 digit 取首字母
+                    rawDigits.map { d ->
+                        T9Lookup.charsFromDigit(d)
+                            .firstOrNull()?.lowercase(Locale.ROOT) ?: d.toString()
+                    }
+                } else {
+                    emptyList()
+                }
+
+                val allSegs = lockedSegs + plannedSegs
+                val committedPrefix = session.committedPrefix.trim()
+
+                buildString {
+                    if (committedPrefix.isNotEmpty()) append(committedPrefix)
+                    if (allSegs.isNotEmpty()) append(allSegs.joinToString("'"))
+                }.takeIf { it.isNotEmpty() }
             }
 
             else -> {
@@ -171,7 +204,6 @@ class CandidateController(
     fun resolveEnterCommitText(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_T9 -> {
-                // Enter 判断仍走 preedit model，只取 enterCommitText，不影响 UI
                 buildCnT9PreeditModel().enterCommitText
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
