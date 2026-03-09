@@ -32,6 +32,10 @@ class ImeUiBinder(
         ui.rootView.findViewById<View>(R.id.expandpaneldel)
             .setOnClickListener { imeActions.handleBackspace() }
 
+        ui.setCnT9SegmentClickListener { index, syllable ->
+            imeActions.onPinyinSidebarSegmentClick(index, syllable)
+        }
+
         // First time bind + keep refreshed on mode changes.
         refreshExpandedPanelRightButtons(keyboardController.getMainMode())
         hookModeChangeRefresh()

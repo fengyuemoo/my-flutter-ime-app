@@ -24,85 +24,115 @@
             android:clipChildren="false"
             android:clipToPadding="false">
 
-            <FrameLayout
+            <LinearLayout
                 android:id="@+id/topbarframe"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/ime_topbar_height"
+                android:orientation="vertical"
                 android:background="@color/ime_toolbar_bg">
 
-                <LinearLayout
-                    android:id="@+id/toolbarcontainer"
+                <HorizontalScrollView
+                    android:id="@+id/cnt9preeditscroll"
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:paddingStart="5dp"
-                    android:paddingEnd="5dp">
-
-                    <Button
-                        android:id="@+id/btntoollayout"
-                        android:layout_width="0dp"
-                        android:layout_height="40dp"
-                        android:layout_weight="1"
-                        android:text="⌨"
-                        android:textSize="@dimen/ime_toolbar_button_text_size"
-                        style="@style/KeyButton.Func"
-                        android:layout_marginEnd="5dp" />
-
-                    <ImageButton
-                        android:id="@+id/btntoolfont"
-                        android:layout_width="0dp"
-                        android:layout_height="40dp"
-                        android:layout_weight="1"
-                        android:layout_marginStart="5dp"
-                        android:layout_marginEnd="5dp"
-                        android:background="@drawable/ripple_ime_key_func"
-                        android:contentDescription="字体/字号"
-                        android:padding="8dp"
-                        android:scaleType="centerInside"
-                        android:src="@drawable/ic_tool_font" />
-
-                    <Button
-                        android:id="@+id/btntooltheme"
-                        android:layout_width="0dp"
-                        android:layout_height="40dp"
-                        android:layout_weight="1"
-                        android:text="🎨"
-                        android:textSize="@dimen/ime_toolbar_button_text_size"
-                        style="@style/KeyButton.Func"
-                        android:layout_marginStart="5dp" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:id="@+id/candidatestrip"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:orientation="horizontal"
+                    android:layout_height="22dp"
                     android:visibility="gone"
-                    android:background="@color/ime_surface"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="4dp"
-                    android:elevation="2dp">
+                    android:fillViewport="false"
+                    android:scrollbars="none"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:background="@color/ime_surface">
 
-                    <androidx.recyclerview.widget.RecyclerView
-                        android:id="@+id/recyclercandidateshorizontal"
-                        android:layout_width="0dp"
+                    <LinearLayout
+                        android:id="@+id/cnt9preeditcontainer"
+                        android:layout_width="wrap_content"
                         android:layout_height="match_parent"
-                        android:layout_weight="1"
-                        android:scrollbars="none" />
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical" />
+                </HorizontalScrollView>
 
-                    <ImageButton
-                        android:id="@+id/btnexpandcandidates"
-                        android:layout_width="50dp"
+                <FrameLayout
+                    android:id="@+id/topbarcontentframe"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1">
+
+                    <LinearLayout
+                        android:id="@+id/toolbarcontainer"
+                        android:layout_width="match_parent"
                         android:layout_height="match_parent"
-                        android:src="@drawable/ic_chevron_down"
-                        android:background="?android:attr/selectableItemBackground"
-                        android:scaleType="centerInside"
-                        android:padding="12dp"
-                        android:contentDescription="展开" />
-                </LinearLayout>
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="5dp"
+                        android:paddingEnd="5dp">
 
-            </FrameLayout>
+                        <Button
+                            android:id="@+id/btntoollayout"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:text="⌨"
+                            android:textSize="@dimen/ime_toolbar_button_text_size"
+                            style="@style/KeyButton.Func"
+                            android:layout_marginEnd="5dp" />
+
+                        <ImageButton
+                            android:id="@+id/btntoolfont"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="5dp"
+                            android:layout_marginEnd="5dp"
+                            android:background="@drawable/ripple_ime_key_func"
+                            android:contentDescription="字体/字号"
+                            android:padding="8dp"
+                            android:scaleType="centerInside"
+                            android:src="@drawable/ic_tool_font" />
+
+                        <Button
+                            android:id="@+id/btntooltheme"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:text="🎨"
+                            android:textSize="@dimen/ime_toolbar_button_text_size"
+                            style="@style/KeyButton.Func"
+                            android:layout_marginStart="5dp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/candidatestrip"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:orientation="horizontal"
+                        android:visibility="gone"
+                        android:background="@color/ime_surface"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:elevation="2dp">
+
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/recyclercandidateshorizontal"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:scrollbars="none" />
+
+                        <ImageButton
+                            android:id="@+id/btnexpandcandidates"
+                            android:layout_width="50dp"
+                            android:layout_height="match_parent"
+                            android:src="@drawable/ic_chevron_down"
+                            android:background="?android:attr/selectableItemBackground"
+                            android:scaleType="centerInside"
+                            android:padding="12dp"
+                            android:contentDescription="展开" />
+                    </LinearLayout>
+
+                </FrameLayout>
+
+            </LinearLayout>
 
             <FrameLayout
                 android:id="@+id/keyboardoverlaycontainer"
