@@ -12,6 +12,12 @@ interface ImeActions {
     fun handleT9Input(digit: String)
     fun onPinyinSidebarClick(pinyin: String)
 
+    fun onPinyinSidebarSegmentClick(index: Int, pinyin: String? = null) {
+        if (!pinyin.isNullOrEmpty()) {
+            onPinyinSidebarClick(pinyin)
+        }
+    }
+
     fun commitText(text: String)
     fun handleSpaceKey()
     fun handleBackspace()

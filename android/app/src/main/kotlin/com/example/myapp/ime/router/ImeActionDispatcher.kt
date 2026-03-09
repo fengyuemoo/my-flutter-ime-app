@@ -102,6 +102,12 @@ class ImeActionDispatcher(
 
     private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
 
+    private fun currentCnT9EngineOrNull(): CnT9InputEngine? {
+        val mode = mainMode()
+        if (!mode.isChinese || !mode.useT9Layout) return null
+        return if (::cnT9Engine.isInitialized) cnT9Engine as? CnT9InputEngine else null
+    }
+
     private fun resolveUnifiedPreviewText(): String? {
         val transientPreview = currentEngineOrNull()
             ?.getTransientComposingPreviewText()
@@ -306,6 +312,20 @@ class ImeActionDispatcher(
         engine.beforeModeSwitch()
         engine.onPinyinSidebarClick(pinyin)
         refreshComposingView()
+    }
+
+    override fun onPinyinSidebarSegmentClick(index: Int, pinyin: String?) {
+        val cnT9 = currentCnT9EngineOrNull()
+        if (cnT9 != null && index in sessions.cnT9.pinyinStack.indices) {
+            cnT9.beforeModeSwitch()
+            cnT9.focusMaterializedSegment(index)
+            refreshComposingView()
+            return
+        }
+
+        if (!pinyin.isNullOrEmpty()) {
+            onPinyinSidebarClick(pinyin)
+        }
     }
 
     override fun commitText(text: String) {
