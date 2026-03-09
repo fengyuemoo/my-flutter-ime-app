@@ -22,47 +22,56 @@ class CnT9PreeditBuilder {
             committedPrefix = committedPrefix
         )
 
-        val fallbackSegments = session.pinyinStack
+        val lockedPrefixSegments = session.pinyinStack
             .map { normalizeSyllable(it) }
             .filter { it.isNotEmpty() }
 
-        val segments = when {
+        val overrideSegments = when {
             !overrideCore.isNullOrEmpty() -> splitCoreSegments(overrideCore)
-            fallbackSegments.isNotEmpty() -> fallbackSegments
             else -> emptyList()
         }
 
-        val safeFocusedIndex = focusedSegmentIndex?.takeIf { it in segments.indices }
+        val mergedSegments = mergeLockedPrefixWithPlannedSuffix(
+            lockedPrefixSegments = lockedPrefixSegments,
+            plannedSegments = overrideSegments
+        )
 
-        val modelSegments = segments.mapIndexed { index, seg ->
+        val safeFocusedIndex = focusedSegmentIndex?.takeIf { it in mergedSegments.indices }
+        val lockedPrefixCount = lockedPrefixSegments.size.coerceAtMost(mergedSegments.size)
+
+        val modelSegments = mergedSegments.mapIndexed { index, seg ->
             CnT9PreeditSegment(
                 text = seg,
                 isFocused = index == safeFocusedIndex,
-                isLocked = false
+                isLocked = index < lockedPrefixCount
             )
         }
+
+        val mergedCoreText = mergedSegments
+            .joinToString("'")
+            .takeIf { it.isNotEmpty() }
 
         val fallbackText = buildFallbackText(
             session = session,
             committedPrefix = committedPrefix,
-            sessionSegments = fallbackSegments
+            sessionSegments = lockedPrefixSegments
         )
 
-        val displayText = normalizedOverride ?: fallbackText
-
-        val coreText = when {
-            !overrideCore.isNullOrEmpty() -> overrideCore
-            fallbackSegments.isNotEmpty() -> fallbackSegments.joinToString("'")
-            else -> null
+        val displayText = when {
+            !mergedCoreText.isNullOrEmpty() -> buildDisplayText(
+                committedPrefix = committedPrefix,
+                coreText = mergedCoreText
+            )
+            else -> normalizedOverride ?: fallbackText
         }
 
         val enterCommitText = sanitizeEnterCommitText(
-            enterCommitOverride ?: coreText
+            enterCommitOverride ?: mergedCoreText
         )
 
         return CnT9PreeditModel(
             text = displayText,
-            coreText = coreText,
+            coreText = mergedCoreText,
             segments = modelSegments,
             focusedSegmentIndex = safeFocusedIndex,
             enterCommitText = enterCommitText
@@ -109,15 +118,43 @@ class CnT9PreeditBuilder {
 
         if (normalized.isEmpty()) return emptyList()
 
-        val parts = normalized
+        return normalized
             .split("'")
             .map { part ->
                 part.filter { it in 'a'..'z' || it == 'ü' || it == 'v' }
                     .replace('v', 'ü')
             }
             .filter { it.isNotEmpty() }
+    }
 
-        return parts
+    private fun mergeLockedPrefixWithPlannedSuffix(
+        lockedPrefixSegments: List<String>,
+        plannedSegments: List<String>
+    ): List<String> {
+        if (lockedPrefixSegments.isEmpty()) return plannedSegments
+        if (plannedSegments.isEmpty()) return lockedPrefixSegments
+
+        if (plannedSegments.size <= lockedPrefixSegments.size) {
+            return lockedPrefixSegments
+        }
+
+        return lockedPrefixSegments + plannedSegments.drop(lockedPrefixSegments.size)
+    }
+
+    private fun buildDisplayText(
+        committedPrefix: String?,
+        coreText: String?
+    ): String? {
+        if (committedPrefix.isNullOrEmpty() && coreText.isNullOrEmpty()) return null
+
+        return buildString {
+            if (!committedPrefix.isNullOrEmpty()) {
+                append(committedPrefix)
+            }
+            if (!coreText.isNullOrEmpty()) {
+                append(coreText)
+            }
+        }.takeIf { it.isNotEmpty() }
     }
 
     private fun buildFallbackText(
@@ -161,7 +198,7 @@ class CnT9PreeditBuilder {
             .trim()
             .lowercase(Locale.ROOT)
             .replace("’", "'")
-            .filter { it in 'a'..'z' || it == 'ü' || it == 'v' }
+            .filter { it in 'a'..'z' || it == 'ü' || it == 'v' || it == '\'' }
             .replace('ü', 'v')
             .takeIf { it.isNotEmpty() }
     }
