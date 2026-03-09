@@ -44,23 +44,25 @@ class CnT9StateCoordinator(
             else -> null
         }
 
+        val materializedSegments = session.t9MaterializedSegments.map { seg ->
+            CnT9MaterializedSegment(
+                syllable = seg.syllable,
+                digitChunk = seg.digitChunk,
+                locked = seg.locked,
+                localCuts = seg.localCuts.toSet()
+            )
+        }
+
         val resolvedFocusedIndex = eventFocusedIndex
-            ?.takeIf { it in session.pinyinStack.indices }
+            ?.takeIf { it in materializedSegments.indices }
             ?: old.safeFocusedSegmentIndex()
-                ?.takeIf { it in session.pinyinStack.indices }
+                ?.takeIf { it in materializedSegments.indices }
 
         val rebuilt = CnT9SessionState(
             rawDigits = session.rawT9Digits,
             committedPrefix = session.committedPrefix,
-            materializedSegments = session.pinyinStack.map {
-                CnT9MaterializedSegment(
-                    syllable = it,
-                    digitChunk = "",
-                    locked = false,
-                    localCuts = emptySet()
-                )
-            },
-            manualCuts = emptySet(),
+            materializedSegments = materializedSegments,
+            manualCuts = session.t9ManualCuts.toSet(),
             focusedSegmentIndex = resolvedFocusedIndex,
             selectedCandidateIndex = old.selectedCandidateIndex,
             isCandidatesExpanded = old.isCandidatesExpanded,

@@ -6,6 +6,13 @@ import java.util.Locale
 
 class ComposingSession {
 
+    data class T9MaterializedSegmentSnapshot(
+        val syllable: String,
+        val digitChunk: String,
+        val localCuts: List<Int>,
+        val locked: Boolean
+    )
+
     private val _pinyinStack = ArrayList<String>()
 
     // 与 _pinyinStack 对齐：记录每个已物化拼音段实际消费掉的 digits 前缀
@@ -28,6 +35,16 @@ class ComposingSession {
 
     val t9ManualCuts: List<Int>
         get() = _t9ManualCuts.toList().sorted()
+
+    val t9MaterializedSegments: List<T9MaterializedSegmentSnapshot>
+        get() = _pinyinStack.indices.map { index ->
+            T9MaterializedSegmentSnapshot(
+                syllable = _pinyinStack.getOrNull(index).orEmpty(),
+                digitChunk = _t9DigitsStack.getOrNull(index).orEmpty(),
+                localCuts = _t9CutsStack.getOrNull(index)?.sorted() ?: emptyList(),
+                locked = true
+            )
+        }
 
     private sealed class PickRecord {
         data class Qwerty(
