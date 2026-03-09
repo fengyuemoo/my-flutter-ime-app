@@ -34,6 +34,10 @@ android {
         jvmTarget = "1.8"
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     // 让 Android/Kotlin 编译能看到生成的源码目录
     sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/source/dictdbinfo/main"))
 }
@@ -50,6 +54,8 @@ dependencies {
     implementation("com.google.android.flexbox:flexbox:3.0.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.11.1")
+    testImplementation("androidx.test:core:1.5.0")
 }
 
 // === 自动生成词库指纹常量（构建时） ===
