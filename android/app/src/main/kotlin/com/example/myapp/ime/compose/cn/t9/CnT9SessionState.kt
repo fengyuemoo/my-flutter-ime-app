@@ -65,12 +65,22 @@ data class CnT9SessionState(
             )
         }
 
-        return copy(
+        val base = copy(
             rawDigits = cleanRawDigits,
             materializedSegments = cleanSegments,
             manualCuts = manualCuts.filter { it in 1..cleanRawDigits.length }.toSet(),
             focusedSegmentIndex = focusedSegmentIndex?.takeIf { it in cleanSegments.indices },
             selectedCandidateIndex = selectedCandidateIndex.coerceAtLeast(0)
         )
+
+        if (!base.isComposing()) {
+            return base.copy(
+                focusedSegmentIndex = null,
+                selectedCandidateIndex = 0,
+                isCandidatesExpanded = false
+            )
+        }
+
+        return base
     }
 }
