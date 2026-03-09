@@ -39,6 +39,25 @@ class CnT9InputEngine(
         return stateCoordinator.snapshot()
     }
 
+    fun focusMaterializedSegment(index: Int) {
+        val changed = session.rollbackMaterializedSegmentsFrom(index)
+        if (!changed) {
+            stateCoordinator.syncFromSession(
+                session = session,
+                event = null
+            )
+            return
+        }
+
+        refreshCandidates()
+
+        val nextFocusedIndex = index.takeIf { it < session.pinyinStack.size }
+        stateCoordinator.syncFromSession(
+            session = session,
+            event = nextFocusedIndex?.let { CnT9StateEvent.SidebarSegmentFocused(it) }
+        )
+    }
+
     override fun refreshCandidates() {
         super.refreshCandidates()
         stateCoordinator.syncFromSession(session)

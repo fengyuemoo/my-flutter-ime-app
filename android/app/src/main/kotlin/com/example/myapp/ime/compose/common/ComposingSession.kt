@@ -298,6 +298,15 @@ class ComposingSession {
         }
     }
 
+    fun rollbackMaterializedSegmentsFrom(index: Int): Boolean {
+        if (index !in _pinyinStack.indices) return false
+
+        while (_pinyinStack.size > index) {
+            undoLastSidebarSelection()
+        }
+        return true
+    }
+
     fun pickCandidate(
         cand: Candidate,
         useT9Layout: Boolean,
