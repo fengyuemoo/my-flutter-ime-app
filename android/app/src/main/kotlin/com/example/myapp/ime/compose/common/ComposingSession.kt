@@ -315,6 +315,60 @@ class ComposingSession {
         }
     }
 
+    fun backspaceMaterializedSegmentTailDigit(index: Int): Boolean {
+        if (index !in _pinyinStack.indices) return false
+
+        val targetDigits = _t9DigitsStack.getOrNull(index).orEmpty()
+        if (targetDigits.isEmpty()) return false
+
+        val targetCuts = _t9CutsStack.getOrNull(index)?.sorted() ?: emptyList()
+
+        val shortenedTargetDigits = targetDigits.dropLast(1)
+        val shortenedTargetCuts = targetCuts.filter { it in 1..shortenedTargetDigits.length }
+
+        val suffixDigitChunks = if (index + 1 < _t9DigitsStack.size) {
+            _t9DigitsStack.subList(index + 1, _t9DigitsStack.size).toList()
+        } else {
+            emptyList()
+        }
+
+        val suffixCutChunks = if (index + 1 < _t9CutsStack.size) {
+            _t9CutsStack.subList(index + 1, _t9CutsStack.size).map { it.sorted() }
+        } else {
+            emptyList()
+        }
+
+        val restoredDigitChunks = ArrayList<String>()
+        val restoredCutChunks = ArrayList<List<Int>>()
+
+        if (shortenedTargetDigits.isNotEmpty()) {
+            restoredDigitChunks.add(shortenedTargetDigits)
+            restoredCutChunks.add(shortenedTargetCuts)
+        }
+
+        restoredDigitChunks.addAll(suffixDigitChunks)
+        restoredCutChunks.addAll(suffixCutChunks)
+
+        while (_pinyinStack.size > index) {
+            _pinyinStack.removeAt(_pinyinStack.lastIndex)
+            _t9DigitsStack.removeAt(_t9DigitsStack.lastIndex)
+            _t9CutsStack.removeAt(_t9CutsStack.lastIndex)
+        }
+
+        val restoredDigits = restoredDigitChunks.joinToString("")
+        if (restoredDigits.isNotEmpty()) {
+            _rawT9Digits = restoredDigits + _rawT9Digits
+            val restoredCuts = flattenCutChunks(
+                digitChunks = restoredDigitChunks,
+                cutChunks = restoredCutChunks
+            )
+            restoreCutsOnPrepend(restoredDigits.length, restoredCuts)
+        }
+
+        trimCutsToLength(_rawT9Digits.length)
+        return true
+    }
+
     fun rollbackMaterializedSegmentsFrom(index: Int): Boolean {
         if (index !in _pinyinStack.indices) return false
 

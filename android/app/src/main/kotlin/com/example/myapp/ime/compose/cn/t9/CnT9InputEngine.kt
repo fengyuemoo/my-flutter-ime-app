@@ -93,6 +93,22 @@ class CnT9InputEngine(
     }
 
     override fun handleBackspace() {
+        val focusedIndex = stateCoordinator.currentState()
+            .safeFocusedSegmentIndex()
+            ?.takeIf { it in session.pinyinStack.indices }
+
+        if (focusedIndex != null) {
+            val consumed = session.backspaceMaterializedSegmentTailDigit(focusedIndex)
+            if (consumed) {
+                super.refreshCandidates()
+                syncState(
+                    focusedIndex = lastMaterializedIndexOrNull(),
+                    fallbackEvent = CnT9StateEvent.BackspacePressed
+                )
+                return
+            }
+        }
+
         super.handleBackspace()
         syncState(fallbackEvent = CnT9StateEvent.BackspacePressed)
     }
