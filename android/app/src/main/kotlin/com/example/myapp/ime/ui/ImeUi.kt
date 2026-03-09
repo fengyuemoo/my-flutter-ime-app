@@ -140,7 +140,19 @@ class ImeUi {
     }
 
     fun resetSelectedCandidateIndex() {
-        setSelectedCandidateIndex(0)
+        selectedCandidateIndex = 0
+        if (this::adapterHorizontal.isInitialized) {
+            adapterHorizontal.setSelectedIndex(0)
+        }
+        if (this::adapterVertical.isInitialized) {
+            adapterVertical.setSelectedIndex(0)
+        }
+        if (this::recyclerHorizontal.isInitialized) {
+            recyclerHorizontal.scrollToPosition(0)
+        }
+        if (this::recyclerVertical.isInitialized) {
+            recyclerVertical.post { recyclerVertical.scrollToPosition(0) }
+        }
     }
 
     fun moveSelectedCandidate(delta: Int): Int {
@@ -342,23 +354,30 @@ class ImeUi {
         return rootView
     }
 
+    private fun clearComposingUiState() {
+        expandedPanel.visibility = View.GONE
+        candidateStrip.visibility = View.GONE
+        setCandidates(emptyList())
+        resetSelectedCandidateIndex()
+        setCnT9Preedit(null)
+        setComposingPreview(null)
+    }
+
     fun showIdleState() {
         topBarFrame.visibility = View.VISIBLE
         toolbarContainer.visibility = View.VISIBLE
-        candidateStrip.visibility = View.GONE
-        expandedPanel.visibility = View.GONE
-        setCandidates(emptyList())
-        setCnT9Preedit(null)
-        setComposingPreview(null)
+        clearComposingUiState()
     }
 
     fun showComposingState(isExpanded: Boolean) {
         if (isExpanded) {
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.GONE
+            expandedPanel.visibility = View.VISIBLE
         } else {
             toolbarContainer.visibility = View.GONE
             candidateStrip.visibility = View.VISIBLE
+            expandedPanel.visibility = View.GONE
         }
     }
 
@@ -532,7 +551,7 @@ class ImeUi {
                 }
             } else {
                 toolbarContainer.visibility = View.VISIBLE
-                candidateStrip.visibility = View.GONE
+                clearComposingUiState()
             }
         }
     }
