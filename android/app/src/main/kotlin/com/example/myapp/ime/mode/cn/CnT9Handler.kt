@@ -40,6 +40,9 @@ object CnT9Handler : ImeModeHandler {
     }
 
     private data class CandidateScore(
+        val lockedExactSegments: Int,
+        val lockedExactChars: Int,
+        val lockedPrefixSegments: Int,
         val exactSegments: Int,
         val exactChars: Int,
         val prefixSegments: Int,
@@ -101,10 +104,13 @@ object CnT9Handler : ImeModeHandler {
         val finalList = ArrayList<Candidate>()
         finalList.addAll(filtered)
 
+        val lockedSegmentCount = stackSegs.size
+
         val scoreCache = buildScoreCache(
             candidates = finalList,
             plans = plans,
-            rawDigits = rawDigits
+            rawDigits = rawDigits,
+            lockedSegmentCount = lockedSegmentCount
         )
 
         sortCandidates(
@@ -214,6 +220,9 @@ object CnT9Handler : ImeModeHandler {
             var taken = 0
             for (cand in exactByStack) {
                 val normalized = normalizeCandidateAgainstPlan(cand, plan)
+                if (!passesHardPronunciationFilter(normalized, plans)) {
+                    continue
+                }
                 if (!out.containsKey(normalized.word)) {
                     out[normalized.word] = normalized
                     taken++
@@ -230,6 +239,9 @@ object CnT9Handler : ImeModeHandler {
 
                 for (cand in exactByJoined) {
                     val normalized = normalizeCandidateAgainstPlan(cand, plan)
+                    if (!passesHardPronunciationFilter(normalized, plans)) {
+                        continue
+                    }
                     if (!out.containsKey(normalized.word)) {
                         out[normalized.word] = normalized
                         taken++
@@ -258,16 +270,89 @@ object CnT9Handler : ImeModeHandler {
         )
     }
 
+    private fun passesHardPronunciationFilter(
+        cand: Candidate,
+        plans: List<PathPlan>
+    ): Boolean {
+        if (plans.isEmpty()) return false
+
+        val candidateSyllables = resolveCandidateSyllables(cand)
+        if (candidateSyllables.isNotEmpty()) {
+            return plans.any { plan ->
+                matchesPlanHard(
+                    candidateSyllables = candidateSyllables,
+                    plan = plan
+                )
+            }
+        }
+
+        val candConcat = normalizedCandidateConcatPinyin(cand)
+        if (candConcat.isEmpty()) return false
+
+        return plans.any { plan ->
+            val planConcat = normalizePinyinConcat(plan.segments.joinToString(""))
+            planConcat.isNotEmpty() && candConcat == planConcat
+        }
+    }
+
+    private fun matchesPlanHard(
+        candidateSyllables: List<String>,
+        plan: PathPlan
+    ): Boolean {
+        val planSegments = plan.segments
+        if (planSegments.isEmpty() || candidateSyllables.isEmpty()) return false
+
+        val matchedPrefixSegments = countMatchingPrefixSegments(
+            candidateSyllables = candidateSyllables,
+            planSegments = planSegments
+        )
+        if (matchedPrefixSegments >= 1) {
+            return true
+        }
+
+        val candConcat = normalizePinyinConcat(candidateSyllables.joinToString(""))
+        val planConcat = normalizePinyinConcat(planSegments.joinToString(""))
+        return candConcat.isNotEmpty() && candConcat == planConcat
+    }
+
+    private fun countMatchingPrefixSegments(
+        candidateSyllables: List<String>,
+        planSegments: List<String>
+    ): Int {
+        val n = min(candidateSyllables.size, planSegments.size)
+        var matched = 0
+
+        for (i in 0 until n) {
+            val expected = planSegments[i].lowercase(Locale.ROOT)
+            val actual = candidateSyllables[i].lowercase(Locale.ROOT)
+
+            if (expected == actual || actual.startsWith(expected)) {
+                matched++
+                continue
+            }
+
+            break
+        }
+
+        return matched
+    }
+
     private fun buildScoreCache(
         candidates: List<Candidate>,
         plans: List<PathPlan>,
-        rawDigits: String
+        rawDigits: String,
+        lockedSegmentCount: Int
     ): Map<Candidate, CandidateScore?> {
         if (candidates.isEmpty() || plans.isEmpty()) return emptyMap()
 
         val out = HashMap<Candidate, CandidateScore?>(candidates.size)
         for (cand in candidates) {
-            out[cand] = bestScoreForCandidate(cand, plans, rawDigits)
+            out[cand] = bestScoreForCandidate(
+                cand = cand,
+                plans = plans,
+                rawDigits = rawDigits,
+                lockedSegmentCount = lockedSegmentCount
+            )
         }
         return out
     }
@@ -279,7 +364,10 @@ object CnT9Handler : ImeModeHandler {
         if (candidates.isEmpty()) return
 
         candidates.sortWith(
-            compareByDescending<Candidate> { scoreCache[it]?.exactSegments ?: 0 }
+            compareByDescending<Candidate> { scoreCache[it]?.lockedExactSegments ?: 0 }
+                .thenByDescending { scoreCache[it]?.lockedExactChars ?: 0 }
+                .thenByDescending { scoreCache[it]?.lockedPrefixSegments ?: 0 }
+                .thenByDescending { scoreCache[it]?.exactSegments ?: 0 }
                 .thenByDescending { scoreCache[it]?.exactChars ?: 0 }
                 .thenByDescending { scoreCache[it]?.prefixSegments ?: 0 }
                 .thenByDescending { scoreCache[it]?.prefixChars ?: 0 }
@@ -299,7 +387,8 @@ object CnT9Handler : ImeModeHandler {
     private fun bestScoreForCandidate(
         cand: Candidate,
         plans: List<PathPlan>,
-        rawDigits: String
+        rawDigits: String,
+        lockedSegmentCount: Int
     ): CandidateScore? {
         val syllables = resolveCandidateSyllables(cand)
         if (syllables.isEmpty()) return null
@@ -310,7 +399,8 @@ object CnT9Handler : ImeModeHandler {
                 cand = cand,
                 plan = plan,
                 candidateSyllables = syllables,
-                rawDigits = rawDigits
+                rawDigits = rawDigits,
+                lockedSegmentCount = lockedSegmentCount
             )
             if (best == null || isBetter(score, best)) {
                 best = score
@@ -323,10 +413,16 @@ object CnT9Handler : ImeModeHandler {
         cand: Candidate,
         plan: PathPlan,
         candidateSyllables: List<String>,
-        rawDigits: String
+        rawDigits: String,
+        lockedSegmentCount: Int
     ): CandidateScore {
         val planSegs = plan.segments
         val n = min(planSegs.size, candidateSyllables.size)
+        val effectiveLockedCount = lockedSegmentCount.coerceAtMost(planSegs.size)
+
+        var lockedExactSegments = 0
+        var lockedExactChars = 0
+        var lockedPrefixSegments = 0
 
         var exactSegments = 0
         var exactChars = 0
@@ -347,6 +443,12 @@ object CnT9Handler : ImeModeHandler {
                 prefixSegments++
                 prefixChars += expected.length
                 consumedDigits += segDigits
+
+                if (i < effectiveLockedCount) {
+                    lockedExactSegments++
+                    lockedExactChars += expected.length
+                    lockedPrefixSegments++
+                }
                 continue
             }
 
@@ -354,6 +456,10 @@ object CnT9Handler : ImeModeHandler {
                 prefixSegments++
                 prefixChars += expected.length
                 consumedDigits += segDigits
+
+                if (i < effectiveLockedCount) {
+                    lockedPrefixSegments++
+                }
                 continue
             }
 
@@ -364,6 +470,9 @@ object CnT9Handler : ImeModeHandler {
         val candConcat = normalizedCandidateConcatPinyin(cand)
 
         return CandidateScore(
+            lockedExactSegments = lockedExactSegments,
+            lockedExactChars = lockedExactChars,
+            lockedPrefixSegments = lockedPrefixSegments,
             exactSegments = exactSegments,
             exactChars = exactChars,
             prefixSegments = prefixSegments,
@@ -382,19 +491,38 @@ object CnT9Handler : ImeModeHandler {
 
     private fun isBetter(a: CandidateScore, b: CandidateScore): Boolean {
         return when {
-            a.exactSegments != b.exactSegments -> a.exactSegments > b.exactSegments
-            a.exactChars != b.exactChars -> a.exactChars > b.exactChars
-            a.prefixSegments != b.prefixSegments -> a.prefixSegments > b.prefixSegments
-            a.prefixChars != b.prefixChars -> a.prefixChars > b.prefixChars
-            a.consumedDigits != b.consumedDigits -> a.consumedDigits > b.consumedDigits
-            a.uncoveredDigits != b.uncoveredDigits -> a.uncoveredDigits < b.uncoveredDigits
-            a.syllableDistance != b.syllableDistance -> a.syllableDistance < b.syllableDistance
-            a.exactInput != b.exactInput -> a.exactInput
-            a.planRank != b.planRank -> a.planRank < b.planRank
-            a.priority != b.priority -> a.priority > b.priority
-            a.wordLength != b.wordLength -> a.wordLength > b.wordLength
-            a.syllables != b.syllables -> a.syllables > b.syllables
-            else -> a.inputLength > b.inputLength
+            a.lockedExactSegments != b.lockedExactSegments ->
+                a.lockedExactSegments > b.lockedExactSegments
+            a.lockedExactChars != b.lockedExactChars ->
+                a.lockedExactChars > b.lockedExactChars
+            a.lockedPrefixSegments != b.lockedPrefixSegments ->
+                a.lockedPrefixSegments > b.lockedPrefixSegments
+            a.exactSegments != b.exactSegments ->
+                a.exactSegments > b.exactSegments
+            a.exactChars != b.exactChars ->
+                a.exactChars > b.exactChars
+            a.prefixSegments != b.prefixSegments ->
+                a.prefixSegments > b.prefixSegments
+            a.prefixChars != b.prefixChars ->
+                a.prefixChars > b.prefixChars
+            a.consumedDigits != b.consumedDigits ->
+                a.consumedDigits > b.consumedDigits
+            a.uncoveredDigits != b.uncoveredDigits ->
+                a.uncoveredDigits < b.uncoveredDigits
+            a.syllableDistance != b.syllableDistance ->
+                a.syllableDistance < b.syllableDistance
+            a.exactInput != b.exactInput ->
+                a.exactInput
+            a.planRank != b.planRank ->
+                a.planRank < b.planRank
+            a.priority != b.priority ->
+                a.priority > b.priority
+            a.wordLength != b.wordLength ->
+                a.wordLength > b.wordLength
+            a.syllables != b.syllables ->
+                a.syllables > b.syllables
+            else ->
+                a.inputLength > b.inputLength
         }
     }
 
