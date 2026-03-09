@@ -14,6 +14,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -21,9 +22,9 @@ import com.example.myapp.CandidatePanelAdapter
 import com.example.myapp.CandidateStripAdapter
 import com.example.myapp.R
 import com.example.myapp.dict.model.Candidate
+import com.example.myapp.ime.compose.cn.t9.CnT9PreeditModel
 import com.example.myapp.ime.prefs.KeyboardPrefs
 import java.util.WeakHashMap
-import android.widget.TextView
 
 object FontApplier {
     private val baseTextSizePx = WeakHashMap<TextView, Float>()
@@ -97,6 +98,9 @@ class ImeUi {
     private var expandedPanelFilterOverrideText: CharSequence? = null
     private var currentComposingPreviewText: String? = null
     private var onComposingPreviewChanged: ((String?) -> Unit)? = null
+
+    private var currentCnT9PreeditModel: CnT9PreeditModel? = null
+    private var onCnT9PreeditChanged: ((CnT9PreeditModel?) -> Unit)? = null
 
     private var currentCandidates: List<Candidate> = emptyList()
     private var selectedCandidateIndex: Int = 0
@@ -217,6 +221,11 @@ class ImeUi {
         listener(currentComposingPreviewText)
     }
 
+    fun setCnT9PreeditListener(listener: (CnT9PreeditModel?) -> Unit) {
+        onCnT9PreeditChanged = listener
+        listener(currentCnT9PreeditModel)
+    }
+
     fun inflate(
         inflater: LayoutInflater,
         onCandidateClick: (Candidate) -> Unit
@@ -308,7 +317,9 @@ class ImeUi {
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
         currentComposingPreviewText = null
+        currentCnT9PreeditModel = null
 
+        setCnT9Preedit(null)
         setComposingPreview(null)
         showIdleState()
 
@@ -322,6 +333,7 @@ class ImeUi {
         candidateStrip.visibility = View.GONE
         expandedPanel.visibility = View.GONE
         setCandidates(emptyList())
+        setCnT9Preedit(null)
         setComposingPreview(null)
     }
 
@@ -344,6 +356,11 @@ class ImeUi {
         onComposingPreviewChanged?.invoke(normalized)
     }
 
+    private fun renderCnT9Preedit(model: CnT9PreeditModel?) {
+        currentCnT9PreeditModel = model
+        onCnT9PreeditChanged?.invoke(model)
+    }
+
     fun setComposingPreview(text: String?) {
         val normalized = text
             ?.trim()
@@ -352,6 +369,11 @@ class ImeUi {
         if (normalized == currentComposingPreviewText) return
 
         renderComposingPreview(normalized)
+    }
+
+    fun setCnT9Preedit(model: CnT9PreeditModel?) {
+        if (model == currentCnT9PreeditModel) return
+        renderCnT9Preedit(model)
     }
 
     fun setCandidates(list: List<Candidate>) {
@@ -468,6 +490,7 @@ class ImeUi {
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
 
         applyFont(currentFontFamily, currentFontScale)
+        renderCnT9Preedit(currentCnT9PreeditModel)
         renderComposingPreview(currentComposingPreviewText)
     }
 }

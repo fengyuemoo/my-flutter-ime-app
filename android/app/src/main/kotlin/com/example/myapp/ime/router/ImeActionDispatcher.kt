@@ -7,6 +7,7 @@ import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.candidate.CandidateController
 import com.example.myapp.ime.compose.cn.qwerty.CnQwertyInputEngine
 import com.example.myapp.ime.compose.cn.t9.CnT9InputEngine
+import com.example.myapp.ime.compose.cn.t9.CnT9PreeditModel
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.compose.en.qwerty.EnQwertyInputEngine
@@ -108,6 +109,13 @@ class ImeActionDispatcher(
         return if (::cnT9Engine.isInitialized) cnT9Engine as? CnT9InputEngine else null
     }
 
+    private fun resolveCnT9PreeditModelOrNull(): CnT9PreeditModel? {
+        val mode = mainMode()
+        if (!mode.isChinese || !mode.useT9Layout) return null
+        if (!::candidateController.isInitialized) return null
+        return candidateController.getCnT9PreeditModelOrNull()
+    }
+
     private fun resolveUnifiedPreviewText(): String? {
         val transientPreview = currentEngineOrNull()
             ?.getTransientComposingPreviewText()
@@ -124,7 +132,10 @@ class ImeActionDispatcher(
     private fun syncResolvedComposingToUiAndEditor() {
         if (!::ui.isInitialized || !::candidateController.isInitialized || !::keyboardController.isInitialized) return
 
-        val preview = resolveUnifiedPreviewText()
+        val cnT9Preedit = resolveCnT9PreeditModelOrNull()
+        ui.setCnT9Preedit(cnT9Preedit)
+
+        val preview = cnT9Preedit?.text ?: resolveUnifiedPreviewText()
 
         ui.setComposingPreview(preview)
 

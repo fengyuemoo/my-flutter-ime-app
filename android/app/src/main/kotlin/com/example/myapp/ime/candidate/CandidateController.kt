@@ -3,6 +3,7 @@ package com.example.myapp.ime.candidate
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.cn.t9.CnT9PreeditBuilder
+import com.example.myapp.ime.compose.cn.t9.CnT9PreeditModel
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
@@ -104,12 +105,19 @@ class CandidateController(
         }
     }
 
-    private fun buildCnT9PreeditModel() = cnT9PreeditBuilder.build(
+    private fun buildCnT9PreeditModel(): CnT9PreeditModel = cnT9PreeditBuilder.build(
         session = sessions.cnT9,
         composingPreviewOverride = cnT9Engine.getComposingPreviewOverride(),
         enterCommitOverride = cnT9Engine.getEnterCommitTextOverride(),
         focusedSegmentIndex = cnT9FocusedSegmentIndexProvider?.invoke()
     )
+
+    fun getCnT9PreeditModelOrNull(): CnT9PreeditModel? {
+        return when (currentModeKey()) {
+            ModeKey.CN_T9 -> buildCnT9PreeditModel()
+            else -> null
+        }
+    }
 
     fun getComposingPreviewOverride(): String? {
         return when (currentModeKey()) {
