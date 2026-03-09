@@ -104,7 +104,6 @@ object CnT9Handler : ImeModeHandler {
         val finalList = ArrayList<Candidate>()
         finalList.addAll(filtered)
 
-        // 当前版本：所有已 materialized 的前缀段都视为 locked prefix
         val lockedSegmentCount = stackSegs.size
 
         val scoreCache = buildScoreCache(
@@ -138,29 +137,11 @@ object CnT9Handler : ImeModeHandler {
             )
         }
 
-        val bestPlan = plans.firstOrNull()
-
-        val previewCore = buildStablePreviewCore(
-            bestPlan = bestPlan
-        )
-
-        val composingPreviewText = buildString {
-            append(session.committedPrefix)
-            if (!previewCore.isNullOrEmpty()) {
-                append(previewCore)
-            }
-        }.takeIf { it.isNotBlank() }
-
-        val enterCommitText = previewCore
-            ?.lowercase(Locale.ROOT)
-            ?.filter { it in 'a'..'z' || it == '\'' }
-            ?.takeIf { it.isNotEmpty() }
-
         return ImeModeHandler.Output(
             candidates = finalList,
             pinyinSidebar = sidebar,
-            composingPreviewText = composingPreviewText,
-            enterCommitText = enterCommitText
+            composingPreviewText = null,
+            enterCommitText = null
         )
     }
 
@@ -519,26 +500,6 @@ object CnT9Handler : ImeModeHandler {
             else ->
                 a.inputLength > b.inputLength
         }
-    }
-
-    private fun buildStablePreviewCore(
-        bestPlan: PathPlan?
-    ): String? {
-        val planSegments = bestPlan?.segments.orEmpty()
-        if (planSegments.isEmpty()) return null
-
-        return planSegments
-            .map { seg ->
-                seg.trim()
-                    .lowercase(Locale.ROOT)
-                    .replace("’", "'")
-                    .replace("'", "")
-                    .replace('v', 'ü')
-                    .filter { it in 'a'..'z' || it == 'ü' }
-            }
-            .filter { it.isNotEmpty() }
-            .joinToString("'")
-            .takeIf { it.isNotEmpty() }
     }
 
     private fun shouldTrustTopCandidate(
@@ -1154,16 +1115,39 @@ class CnT9CandidateEngine(
     }
 
     private fun normalizedEnterPreview(): String? {
-        val raw = enterCommitTextOverride
-            ?: composingPreviewOverride
-            ?: return null
+        fun normalizeSegment(seg: String): String {
+            return seg.trim()
+                .lowercase(Locale.ROOT)
+                .replace("'", "")
+                .replace("ü", "v")
+                .filter { it in 'a'..'z' || it == 'v' }
+        }
 
-        val normalized = raw
-            .trim()
-            .lowercase(Locale.ROOT)
-            .filter { it in 'a'..'z' || it == '\'' }
-            .replace("'", "")
+        val stackSegs = session.pinyinStack
+            .map { normalizeSegment(it) }
+            .filter { it.isNotEmpty() }
 
+        val rawDigits = session.rawT9Digits
+
+        val autoPlans = if (dictEngine.isLoaded && rawDigits.isNotEmpty()) {
+            CnT9Handler.SentencePlanner.planAll(
+                digits = rawDigits,
+                manualCuts = session.t9ManualCuts,
+                dict = dictEngine
+            )
+        } else {
+            emptyList()
+        }
+
+        val bestSegments = when {
+            stackSegs.isEmpty() && autoPlans.isEmpty() -> emptyList()
+            autoPlans.isEmpty() -> stackSegs
+            else -> stackSegs + autoPlans.first().segments
+                .map { normalizeSegment(it) }
+                .filter { it.isNotEmpty() }
+        }
+
+        val normalized = bestSegments.joinToString("")
         return normalized.takeIf { it.isNotEmpty() }
     }
 
