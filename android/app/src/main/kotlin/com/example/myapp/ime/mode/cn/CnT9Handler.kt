@@ -104,6 +104,7 @@ object CnT9Handler : ImeModeHandler {
         val finalList = ArrayList<Candidate>()
         finalList.addAll(filtered)
 
+        // 当前版本：所有已 materialized 的前缀段都视为 locked prefix
         val lockedSegmentCount = stackSegs.size
 
         val scoreCache = buildScoreCache(
@@ -220,7 +221,7 @@ object CnT9Handler : ImeModeHandler {
             var taken = 0
             for (cand in exactByStack) {
                 val normalized = normalizeCandidateAgainstPlan(cand, plan)
-                if (!passesHardPronunciationFilter(normalized, plans)) {
+                if (!passesHardPronunciationFilter(normalized, plan)) {
                     continue
                 }
                 if (!out.containsKey(normalized.word)) {
@@ -239,7 +240,7 @@ object CnT9Handler : ImeModeHandler {
 
                 for (cand in exactByJoined) {
                     val normalized = normalizeCandidateAgainstPlan(cand, plan)
-                    if (!passesHardPronunciationFilter(normalized, plans)) {
+                    if (!passesHardPronunciationFilter(normalized, plan)) {
                         continue
                     }
                     if (!out.containsKey(normalized.word)) {
@@ -272,27 +273,21 @@ object CnT9Handler : ImeModeHandler {
 
     private fun passesHardPronunciationFilter(
         cand: Candidate,
-        plans: List<PathPlan>
+        plan: PathPlan
     ): Boolean {
-        if (plans.isEmpty()) return false
-
         val candidateSyllables = resolveCandidateSyllables(cand)
         if (candidateSyllables.isNotEmpty()) {
-            return plans.any { plan ->
-                matchesPlanHard(
-                    candidateSyllables = candidateSyllables,
-                    plan = plan
-                )
-            }
+            return matchesPlanHard(
+                candidateSyllables = candidateSyllables,
+                plan = plan
+            )
         }
 
         val candConcat = normalizedCandidateConcatPinyin(cand)
         if (candConcat.isEmpty()) return false
 
-        return plans.any { plan ->
-            val planConcat = normalizePinyinConcat(plan.segments.joinToString(""))
-            planConcat.isNotEmpty() && candConcat == planConcat
-        }
+        val planConcat = normalizePinyinConcat(plan.segments.joinToString(""))
+        return planConcat.isNotEmpty() && candConcat == planConcat
     }
 
     private fun matchesPlanHard(
