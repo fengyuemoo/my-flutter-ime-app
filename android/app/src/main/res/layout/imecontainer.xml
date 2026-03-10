@@ -31,32 +31,10 @@
                 android:orientation="vertical"
                 android:background="@color/ime_toolbar_bg">
 
-                <HorizontalScrollView
-                    android:id="@+id/cnt9preeditscroll"
-                    android:layout_width="match_parent"
-                    android:layout_height="22dp"
-                    android:visibility="gone"
-                    android:fillViewport="false"
-                    android:scrollbars="none"
-                    android:paddingStart="6dp"
-                    android:paddingEnd="6dp"
-                    android:paddingTop="2dp"
-                    android:paddingBottom="2dp"
-                    android:background="@color/ime_surface">
-
-                    <LinearLayout
-                        android:id="@+id/cnt9preeditcontainer"
-                        android:layout_width="wrap_content"
-                        android:layout_height="match_parent"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical" />
-                </HorizontalScrollView>
-
                 <FrameLayout
                     android:id="@+id/topbarcontentframe"
                     android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1">
+                    android:layout_height="match_parent">
 
                     <LinearLayout
                         android:id="@+id/toolbarcontainer"

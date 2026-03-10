@@ -1,19 +1,17 @@
 package com.example.myapp.ime.candidate
 
 import com.example.myapp.dict.api.Dictionary
-import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
+import com.example.myapp.ime.compose.cn.t9.CnT9PreeditFormatter
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.mode.cn.CnQwertyCandidateEngine
 import com.example.myapp.ime.mode.cn.CnT9CandidateEngine
-import com.example.myapp.ime.mode.cn.CnT9Handler
 import com.example.myapp.ime.mode.en.EnQwertyCandidateEngine
 import com.example.myapp.ime.mode.en.EnT9CandidateEngine
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.ime.ui.api.UiStateActions
-import java.util.Locale
 
 class CandidateController(
     private val ui: ImeUi,
@@ -119,53 +117,16 @@ class CandidateController(
 
     fun resolveComposingPreviewText(): String? {
         return when (currentModeKey()) {
-            ModeKey.CN_T9 -> {
-                val session = sessions.cnT9
-
-                val override = cnT9Engine.getComposingPreviewOverride()
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                if (override != null) return override
-
-                val lockedSegs = session.pinyinStack
-                    .map { it.trim().lowercase(Locale.ROOT) }
-                    .filter { it.isNotEmpty() }
-
-                val rawDigits = session.rawT9Digits
-                val plannedSegs = if (rawDigits.isNotEmpty() && dictEngine.isLoaded) {
-                    CnT9Handler.SentencePlanner.planAll(
-                        digits = rawDigits,
-                        manualCuts = session.t9ManualCuts,
-                        dict = dictEngine
-                    ).firstOrNull()?.segments
-                        ?.map { it.trim().lowercase(Locale.ROOT) }
-                        ?.filter { it.isNotEmpty() }
-                        ?: emptyList()
-                } else if (rawDigits.isNotEmpty()) {
-                    rawDigits.map { d ->
-                        T9Lookup.charsFromDigit(d)
-                            .firstOrNull()?.lowercase(Locale.ROOT) ?: d.toString()
-                    }
-                } else {
-                    emptyList()
-                }
-
-                val allSegs = lockedSegs + plannedSegs
-                val committedPrefix = session.committedPrefix.trim()
-
-                buildString {
-                    if (committedPrefix.isNotEmpty()) append(committedPrefix)
-                    if (allSegs.isNotEmpty()) append(allSegs.joinToString("'"))
-                }.takeIf { it.isNotEmpty() }
-            }
-
+            ModeKey.CN_T9 -> CnT9PreeditFormatter.format(
+                session = sessions.cnT9,
+                dict = dictEngine,
+                engineOverride = cnT9Engine.getComposingPreviewOverride()
+            )
             else -> {
                 val override = getComposingPreviewOverride()
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
-
                 if (override != null) return override
-
                 currentSession()
                     .displayText(useT9Layout = currentUseT9Layout())
                     ?.trim()

@@ -2,22 +2,18 @@ package com.example.myapp.ime.ui
 
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -25,13 +21,11 @@ import com.example.myapp.CandidatePanelAdapter
 import com.example.myapp.CandidateStripAdapter
 import com.example.myapp.R
 import com.example.myapp.dict.model.Candidate
-import com.example.myapp.ime.compose.cn.t9.CnT9PreeditModel
-import com.example.myapp.ime.compose.cn.t9.CnT9PreeditSegment
 import com.example.myapp.ime.prefs.KeyboardPrefs
 import java.util.WeakHashMap
 
 object FontApplier {
-    private val baseTextSizePx = WeakHashMap<TextView, Float>()
+    private val baseTextSizePx = WeakHashMap<android.widget.TextView, Float>()
     private val typefaceCache = HashMap<String, Typeface>()
 
     private fun resolveTypeface(view: View, spec: String): Typeface {
@@ -63,8 +57,8 @@ object FontApplier {
         }
     }
 
-    private fun walk(v: View, onText: (TextView) -> Unit) {
-        if (v is TextView) onText(v)
+    private fun walk(v: View, onText: (android.widget.TextView) -> Unit) {
+        if (v is android.widget.TextView) onText(v)
         if (v is ViewGroup) {
             for (i in 0 until v.childCount) {
                 walk(v.getChildAt(i), onText)
@@ -96,19 +90,12 @@ class ImeUi {
 
     private lateinit var btnToolFont: ImageButton
 
-    private lateinit var cnT9PreeditScroll: HorizontalScrollView
-    private lateinit var cnT9PreeditContainer: LinearLayout
-
     private var currentFontFamily: String = "sans-serif-light"
     private var currentFontScale: Float = 1.0f
 
     private var expandedPanelFilterOverrideText: CharSequence? = null
     private var currentComposingPreviewText: String? = null
     private var onComposingPreviewChanged: ((String?) -> Unit)? = null
-
-    private var currentCnT9PreeditModel: CnT9PreeditModel? = null
-    private var onCnT9PreeditChanged: ((CnT9PreeditModel?) -> Unit)? = null
-    private var onCnT9SegmentClick: ((Int, String) -> Unit)? = null
 
     private var currentCandidates: List<Candidate> = emptyList()
     private var selectedCandidateIndex: Int = 0
@@ -241,15 +228,6 @@ class ImeUi {
         listener(currentComposingPreviewText)
     }
 
-    fun setCnT9PreeditListener(listener: (CnT9PreeditModel?) -> Unit) {
-        onCnT9PreeditChanged = listener
-        listener(currentCnT9PreeditModel)
-    }
-
-    fun setCnT9SegmentClickListener(listener: ((Int, String) -> Unit)?) {
-        onCnT9SegmentClick = listener
-    }
-
     fun inflate(
         inflater: LayoutInflater,
         onCandidateClick: (Candidate) -> Unit
@@ -290,9 +268,6 @@ class ImeUi {
 
         btnToolFont = rootView.findViewById(R.id.btntoolfont)
         btnToolFont.setImageResource(R.drawable.ic_tool_font)
-
-        cnT9PreeditScroll = rootView.findViewById(R.id.cnt9preeditscroll)
-        cnT9PreeditContainer = rootView.findViewById(R.id.cnt9preeditcontainer)
 
         recyclerHorizontal = rootView.findViewById(R.id.recyclercandidateshorizontal)
         recyclerVertical = rootView.findViewById(R.id.recyclercandidatesvertical)
@@ -344,9 +319,6 @@ class ImeUi {
         btnExpandedClose.setOnClickListener { btnExpand.performClick() }
 
         currentComposingPreviewText = null
-        currentCnT9PreeditModel = null
-
-        setCnT9Preedit(null)
         setComposingPreview(null)
         showIdleState()
 
@@ -359,7 +331,6 @@ class ImeUi {
         candidateStrip.visibility = View.GONE
         setCandidates(emptyList())
         resetSelectedCandidateIndex()
-        setCnT9Preedit(null)
         setComposingPreview(null)
     }
 
@@ -381,21 +352,6 @@ class ImeUi {
         }
     }
 
-    private fun renderComposingPreview(text: String?) {
-        val normalized = text
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-
-        currentComposingPreviewText = normalized
-        onComposingPreviewChanged?.invoke(normalized)
-    }
-
-    private fun renderCnT9Preedit(model: CnT9PreeditModel?) {
-        currentCnT9PreeditModel = model
-        rebuildCnT9PreeditStrip(model)
-        onCnT9PreeditChanged?.invoke(model)
-    }
-
     fun setComposingPreview(text: String?) {
         val normalized = text
             ?.trim()
@@ -403,109 +359,8 @@ class ImeUi {
 
         if (normalized == currentComposingPreviewText) return
 
-        renderComposingPreview(normalized)
-    }
-
-    fun setCnT9Preedit(model: CnT9PreeditModel?) {
-        if (model == currentCnT9PreeditModel) return
-        renderCnT9Preedit(model)
-    }
-
-    private fun rebuildCnT9PreeditStrip(model: CnT9PreeditModel?) {
-        if (!this::cnT9PreeditScroll.isInitialized || !this::cnT9PreeditContainer.isInitialized) return
-
-        cnT9PreeditContainer.removeAllViews()
-
-        val segments = model?.segments.orEmpty()
-        if (segments.isEmpty()) {
-            cnT9PreeditScroll.visibility = View.GONE
-            return
-        }
-
-        cnT9PreeditScroll.visibility = View.VISIBLE
-
-        segments.forEachIndexed { index, segment ->
-            cnT9PreeditContainer.addView(buildSegmentView(index, segment))
-            if (index != segments.lastIndex) {
-                cnT9PreeditContainer.addView(buildSeparatorView())
-            }
-        }
-
-        FontApplier.apply(cnT9PreeditContainer, currentFontFamily, currentFontScale)
-        cnT9PreeditScroll.post { cnT9PreeditScroll.fullScroll(View.FOCUS_RIGHT) }
-    }
-
-    private fun buildSegmentView(index: Int, segment: CnT9PreeditSegment): TextView {
-        val context = rootView.context
-        val view = TextView(context)
-
-        view.text = segment.text
-        view.gravity = Gravity.CENTER
-        view.minHeight = dp(18)
-        view.setPadding(dp(8), dp(1), dp(8), dp(1))
-
-        val lp = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-        lp.marginEnd = dp(2)
-        view.layoutParams = lp
-
-        val background = GradientDrawable().apply {
-            cornerRadius = dp(9).toFloat()
-            setStroke(
-                dp(1),
-                when {
-                    segment.isFocused -> Color.parseColor("#1565C0")
-                    segment.isLocked -> Color.parseColor("#9E9E9E")
-                    else -> Color.parseColor("#BDBDBD")
-                }
-            )
-            setColor(
-                when {
-                    segment.isFocused -> Color.parseColor("#D6E9FF")
-                    segment.isLocked -> Color.parseColor("#F2F2F2")
-                    else -> Color.parseColor("#FFFFFF")
-                }
-            )
-        }
-        view.background = background
-        view.setTextColor(
-            when {
-                segment.isFocused -> Color.parseColor("#0D47A1")
-                segment.isLocked -> Color.parseColor("#212121")
-                else -> Color.parseColor("#424242")
-            }
-        )
-
-        view.isClickable = true
-        view.isFocusable = true
-        view.setOnClickListener {
-            onCnT9SegmentClick?.invoke(index, segment.text)
-        }
-
-        return view
-    }
-
-    private fun buildSeparatorView(): TextView {
-        val context = rootView.context
-        return TextView(context).apply {
-            text = "'"
-            gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#757575"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        }
-    }
-
-    private fun dp(value: Int): Int {
-        return TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            value.toFloat(),
-            rootView.resources.displayMetrics
-        ).toInt()
+        currentComposingPreviewText = normalized
+        onComposingPreviewChanged?.invoke(normalized)
     }
 
     fun setCandidates(list: List<Candidate>) {
@@ -569,34 +424,14 @@ class ImeUi {
 
         if (!singleCharMode) {
             spannable.setSpan(RelativeSizeSpan(1.2f), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(
-                ForegroundColorSpan(Color.BLACK),
-                0,
-                2,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
+            spannable.setSpan(ForegroundColorSpan(Color.BLACK), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             spannable.setSpan(RelativeSizeSpan(0.8f), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(
-                ForegroundColorSpan(Color.GRAY),
-                3,
-                5,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
+            spannable.setSpan(ForegroundColorSpan(Color.GRAY), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         } else {
             spannable.setSpan(RelativeSizeSpan(0.8f), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(
-                ForegroundColorSpan(Color.GRAY),
-                0,
-                2,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
+            spannable.setSpan(ForegroundColorSpan(Color.GRAY), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             spannable.setSpan(RelativeSizeSpan(1.2f), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(
-                ForegroundColorSpan(Color.BLACK),
-                3,
-                5,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
+            spannable.setSpan(ForegroundColorSpan(Color.BLACK), 3, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
 
         btnFilter.text = spannable
@@ -622,7 +457,6 @@ class ImeUi {
         candidateStrip.setBackgroundColor(if (themeMode == 1) panelDark else panelLight)
 
         applyFont(currentFontFamily, currentFontScale)
-        renderCnT9Preedit(currentCnT9PreeditModel)
-        renderComposingPreview(currentComposingPreviewText)
+        onComposingPreviewChanged?.invoke(currentComposingPreviewText)
     }
 }
