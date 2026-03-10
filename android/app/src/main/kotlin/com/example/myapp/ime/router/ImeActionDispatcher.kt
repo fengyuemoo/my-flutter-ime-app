@@ -7,7 +7,6 @@ import com.example.myapp.ime.api.ImeActions
 import com.example.myapp.ime.candidate.CandidateController
 import com.example.myapp.ime.compose.cn.qwerty.CnQwertyInputEngine
 import com.example.myapp.ime.compose.cn.t9.CnT9InputEngine
-import com.example.myapp.ime.compose.cn.t9.CnT9PreeditModel
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.compose.en.qwerty.EnQwertyInputEngine
@@ -103,19 +102,6 @@ class ImeActionDispatcher(
 
     private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
 
-    private fun currentCnT9EngineOrNull(): CnT9InputEngine? {
-        val mode = mainMode()
-        if (!mode.isChinese || !mode.useT9Layout) return null
-        return if (::cnT9Engine.isInitialized) cnT9Engine as? CnT9InputEngine else null
-    }
-
-    private fun resolveCnT9PreeditModelOrNull(): CnT9PreeditModel? {
-        val mode = mainMode()
-        if (!mode.isChinese || !mode.useT9Layout) return null
-        if (!::candidateController.isInitialized) return null
-        return candidateController.getCnT9PreeditModelOrNull()
-    }
-
     private fun resolveUnifiedPreviewText(): String? {
         val transientPreview = currentEngineOrNull()
             ?.getTransientComposingPreviewText()
@@ -131,9 +117,6 @@ class ImeActionDispatcher(
 
     private fun syncResolvedComposingToUiAndEditor() {
         if (!::ui.isInitialized || !::candidateController.isInitialized || !::keyboardController.isInitialized) return
-
-        // 永远不渲染额外的 T9 preedit 横条
-        ui.setCnT9Preedit(null)
 
         val preview = resolveUnifiedPreviewText()
         ui.setComposingPreview(preview)
@@ -196,12 +179,6 @@ class ImeActionDispatcher(
             inputConnectionProvider = { inputConnectionProvider() },
             onTransientPreviewChanged = { refreshComposingView() }
         )
-
-        candidateController.setCnT9FocusedSegmentIndexProvider {
-            (cnT9Engine as? CnT9InputEngine)
-                ?.getStateSnapshot()
-                ?.focusedSegmentIndex
-        }
 
         lastKnownMainMode = keyboardController.getMainMode()
 
@@ -324,7 +301,10 @@ class ImeActionDispatcher(
     }
 
     override fun onPinyinSidebarSegmentClick(index: Int, pinyin: String?) {
-        val cnT9 = currentCnT9EngineOrNull()
+        val cnT9 = if (mainMode().isChinese && mainMode().useT9Layout) {
+            cnT9Engine as? CnT9InputEngine
+        } else null
+
         if (cnT9 != null && index in sessions.cnT9.pinyinStack.indices) {
             cnT9.beforeModeSwitch()
             cnT9.focusMaterializedSegment(index)
@@ -481,9 +461,7 @@ class ImeActionDispatcher(
 
     override fun commitSymbolFromPanel(symbol: String) {
         SymbolPrefs.recordMruCommon(context, symbol)
-
         commitText(symbol)
-
         if (!symbolLocked) {
             closeSymbolPanel()
         } else {
@@ -494,7 +472,6 @@ class ImeActionDispatcher(
     override fun getEnglishPredictEnabled(): Boolean {
         val mode = mainMode()
         val engineValue = currentEngineOrNull()?.getEnglishPredictEnabled()
-
         return if (!mode.isChinese && !mode.useT9Layout) {
             engineValue ?: loadEnQwertyPredictPref()
         } else {
@@ -504,11 +481,9 @@ class ImeActionDispatcher(
 
     override fun setEnglishPredict(enabled: Boolean) {
         val mode = mainMode()
-
         if (!mode.isChinese && !mode.useT9Layout) {
             saveEnQwertyPredictPref(enabled)
         }
-
         currentEngineOrNull()?.setEnglishPredict(enabled)
         refreshComposingView()
     }

@@ -3,8 +3,6 @@ package com.example.myapp.ime.candidate
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
-import com.example.myapp.ime.compose.cn.t9.CnT9PreeditBuilder
-import com.example.myapp.ime.compose.cn.t9.CnT9PreeditModel
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
@@ -25,13 +23,6 @@ class CandidateController(
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
 ) : UiStateActions {
-
-    private val cnT9PreeditBuilder = CnT9PreeditBuilder()
-    private var cnT9FocusedSegmentIndexProvider: (() -> Int?)? = null
-
-    fun setCnT9FocusedSegmentIndexProvider(provider: (() -> Int?)?) {
-        cnT9FocusedSegmentIndexProvider = provider
-    }
 
     private val cnQwertyEngine = CnQwertyCandidateEngine(
         ui = ui,
@@ -108,20 +99,6 @@ class CandidateController(
         }
     }
 
-    private fun buildCnT9PreeditModel(): CnT9PreeditModel = cnT9PreeditBuilder.build(
-        session = sessions.cnT9,
-        composingPreviewOverride = cnT9Engine.getComposingPreviewOverride(),
-        enterCommitOverride = cnT9Engine.getEnterCommitTextOverride(),
-        focusedSegmentIndex = cnT9FocusedSegmentIndexProvider?.invoke()
-    )
-
-    fun getCnT9PreeditModelOrNull(): CnT9PreeditModel? {
-        return when (currentModeKey()) {
-            ModeKey.CN_T9 -> buildCnT9PreeditModel()
-            else -> null
-        }
-    }
-
     fun getComposingPreviewOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getComposingPreviewOverride()
@@ -134,7 +111,7 @@ class CandidateController(
     fun getEnterCommitTextOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getEnterCommitTextOverride()
-            ModeKey.CN_T9 -> buildCnT9PreeditModel().enterCommitText
+            ModeKey.CN_T9 -> cnT9Engine.getEnterCommitTextOverride()
             ModeKey.EN_QWERTY -> enQwertyEngine.getEnterCommitTextOverride()
             ModeKey.EN_T9 -> enT9Engine.getEnterCommitTextOverride()
         }
@@ -145,18 +122,15 @@ class CandidateController(
             ModeKey.CN_T9 -> {
                 val session = sessions.cnT9
 
-                // 1. 优先用 engine 的 override（如有）
                 val override = cnT9Engine.getComposingPreviewOverride()
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
                 if (override != null) return override
 
-                // 2. 已锁定的段（pinyinStack）
                 val lockedSegs = session.pinyinStack
                     .map { it.trim().lowercase(Locale.ROOT) }
                     .filter { it.isNotEmpty() }
 
-                // 3. rawDigits 剩余部分：用 SentencePlanner 解码出最优拼音段
                 val rawDigits = session.rawT9Digits
                 val plannedSegs = if (rawDigits.isNotEmpty() && dictEngine.isLoaded) {
                     CnT9Handler.SentencePlanner.planAll(
@@ -168,7 +142,6 @@ class CandidateController(
                         ?.filter { it.isNotEmpty() }
                         ?: emptyList()
                 } else if (rawDigits.isNotEmpty()) {
-                    // 字典未加载时降级：每个 digit 取首字母
                     rawDigits.map { d ->
                         T9Lookup.charsFromDigit(d)
                             .firstOrNull()?.lowercase(Locale.ROOT) ?: d.toString()
@@ -202,19 +175,9 @@ class CandidateController(
     }
 
     fun resolveEnterCommitText(): String? {
-        return when (currentModeKey()) {
-            ModeKey.CN_T9 -> {
-                buildCnT9PreeditModel().enterCommitText
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-            }
-
-            else -> {
-                getEnterCommitTextOverride()
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-            }
-        }
+        return getEnterCommitTextOverride()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
     }
 
     override fun toggleCandidatesExpanded() {
