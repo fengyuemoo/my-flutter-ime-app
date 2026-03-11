@@ -13,6 +13,7 @@ import com.example.myapp.ime.dict.DictionaryManager
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.keyboard.KeyboardHost
 import com.example.myapp.ime.keyboard.model.KeyboardMode
+import com.example.myapp.ime.mode.cn.CnT9ContextWindow
 import com.example.myapp.ime.mode.cn.CnT9UserChoiceStore
 import com.example.myapp.ime.prefs.LayoutController
 import com.example.myapp.ime.router.ImeActionDispatcher
@@ -83,8 +84,11 @@ class ImeGraph(
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
-            // 用户选词学习存储：在此处统一初始化，生命周期与 ImeGraph 一致
+            // 用户选词学习存储：生命周期与 ImeGraph 一致，持久化
             val userChoiceStore = CnT9UserChoiceStore(context)
+
+            // 上下文窗口：会话级内存，不持久化，换行/焦点切换时由引擎主动 clear
+            val contextWindow = CnT9ContextWindow()             // ← 新增
 
             val candidateController = CandidateController(
                 ui = ui,
@@ -93,7 +97,8 @@ class ImeGraph(
                 sessions = sessions,
                 commitRaw = { text -> inputConnectionProvider()?.commitText(text, 1) },
                 clearComposing = { dispatcher.clearComposing() },
-                userChoiceStore = userChoiceStore                // ← 新增
+                userChoiceStore = userChoiceStore,
+                contextWindow = contextWindow                    // ← 新增
             )
 
             val toolbarController = ToolbarController(
