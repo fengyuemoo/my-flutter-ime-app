@@ -31,11 +31,10 @@ class CnT9InputEngine(
 ) {
     private val stateMachine = CnT9StateMachine()
 
-    // 当前状态，始终通过 applyEvent() 更新
     private var currentState: CnT9SessionState = CnT9SessionState()
     private var lastEvent: CnT9StateEvent? = null
 
-    // 焦点索引独立保存：syncStateFromSession 不能覆盖它，只有明确的焦点事件才改变
+    // 焦点索引独立保存：只有明确的焦点事件才改变，syncStateFromSession 不覆盖它
     private var pinnedFocusedIndex: Int? = null
 
     init {
@@ -53,14 +52,14 @@ class CnT9InputEngine(
 
     /**
      * 从 session 重建 CnT9SessionState。
-     * focusOverride: 明确指定的新焦点；null 表示沿用 pinnedFocusedIndex。
-     * clearFocus: true 表示强制清除焦点（用于 clearComposing / 新增输入）。
+     * - focusOverride: 明确指定新焦点；null 表示沿用 pinnedFocusedIndex
+     * - clearFocus:    true 强制清除焦点（clearComposing / 新增数字输入时）
      */
     private fun buildStateFromSession(
         focusOverride: Int? = null,
         clearFocus: Boolean = false
     ): CnT9SessionState {
-        val segments = session.t9MaterializedSegments.mapIndexed { i, snap ->
+        val segments = session.t9MaterializedSegments.mapIndexed { _, snap ->
             CnT9MaterializedSegment(
                 syllable = snap.syllable,
                 digitChunk = snap.digitChunk,
@@ -107,24 +106,20 @@ class CnT9InputEngine(
     // ── 音节栏：焦点 + 锁定 ─────────────────────────────────────────
 
     /**
-     * 点击音节栏某个音节：
-     * - 如果 index < pinyinStack.size，不 rollback，只移动焦点（规则：锁定不被重新解析）
-     * - 如果 index >= pinyinStack.size，无效
+     * 点击音节栏某个音节：只移动焦点，不 rollback（保持锁定段不被重新解析）。
      */
     fun focusMaterializedSegment(index: Int) {
         if (index !in session.pinyinStack.indices) return
-        // 不 rollback，保持锁定；只把焦点移到该音节
         applyEvent(
             event = CnT9StateEvent.SidebarSegmentFocused(index),
             focusOverride = index
         )
-        // 焦点变更后刷新候选（规则：精确匹配优先，锁定段加权）
         super.refreshCandidates()
     }
 
     /**
-     * 替换焦点音节为指定拼音（消歧）。
-     * 音节替换后不改变 rawDigits / cuts，只更新 pinyinStack 对应项，刷新候选。
+     * 替换焦点音节为指定拼音（音节消歧）。
+     * 只更新 pinyinStack 对应项，不改变 rawDigits / cuts。
      */
     fun replaceFocusedSegmentWith(pinyin: String) {
         val focusedIdx = pinnedFocusedIndex ?: return
@@ -139,26 +134,24 @@ class CnT9InputEngine(
     }
 
     /**
-     * 分词切换手势：
-     * - 如果 rawDigits 非空，在 rawDigits 的第 1 位（全局位置）插入/移除手动切分点
-     * - 这会让 SentencePlanner 产生不同的切分路径，候选立即刷新
+     * 分词切换手势：在 rawDigits 首位插入/移除手动切分点。
+     * 注意：实际的"数字1键分词"触发入口在 ImeActionDispatcher.handleSpecialKey("分词")，
+     * 本方法供需要精细控制切分点位置的内部调用。
      */
     fun cycleManualCut() {
         if (session.rawT9Digits.isEmpty()) return
 
         val cuts = session.t9ManualCuts
-        val cutPos = 1  // 始终在 rawDigits 首位切分（最常见的消歧场景）
+        val cutPos = 1
 
         if (cuts.contains(cutPos)) {
-            // 已有切分点 → 移除（恢复合并）
             session.removeT9ManualCut(cutPos)
         } else {
-            // 没有切分点 → 在首位插入（强制断开）
             session.insertT9ManualCut(cutPos)
         }
 
         applyEvent(
-            event = CnT9StateEvent.DigitsAppended(""),  // 触发重算但不追加数字
+            event = CnT9StateEvent.DigitsAppended(""),
             clearFocus = false
         )
         super.refreshCandidates()
@@ -182,7 +175,7 @@ class CnT9InputEngine(
     override fun handleT9Input(digit: String) {
         super.handleT9Input(digit)
         val normalized = digit.filter { it in '0'..'9' }
-        // 新输入数字时清除焦点（规则：继续输入时焦点状态退回到"末尾"）
+        // 新输入数字时焦点退回末尾（规则：继续输入时不保持音节栏焦点）
         applyEvent(
             event = if (normalized.isNotEmpty()) CnT9StateEvent.DigitsAppended(normalized) else null,
             clearFocus = true
@@ -191,7 +184,7 @@ class CnT9InputEngine(
 
     override fun onPinyinSidebarClick(pinyin: String) {
         super.onPinyinSidebarClick(pinyin)
-        // 点击音节栏确认一个音节：焦点移到刚锁定的那个音节
+        // 点击音节栏确认一个音节后，焦点跟随到刚锁定的那个音节
         applyEvent(
             event = CnT9StateEvent.SidebarSegmentFocused(lastMaterializedIndexOrNull() ?: 0),
             focusOverride = lastMaterializedIndexOrNull()
@@ -203,11 +196,11 @@ class CnT9InputEngine(
             ?.takeIf { it in session.pinyinStack.indices }
 
         if (focusedIndex != null) {
-            // 规则：退格时焦点在某音节 → 优先删该音节尾部最后一个 digit
+            // 规则：焦点在某音节时，优先删该音节尾部最后一个 digit
             val consumed = session.backspaceMaterializedSegmentTailDigit(focusedIndex)
             if (consumed) {
                 super.refreshCandidates()
-                // 删完后焦点留在同一位（若该段被完全删空，则移到前一段）
+                // 删完后焦点留在同一位；若该段被完全删空则退到前一段
                 val newFocus = when {
                     focusedIndex in session.pinyinStack.indices -> focusedIndex
                     session.pinyinStack.isNotEmpty() -> session.pinyinStack.lastIndex

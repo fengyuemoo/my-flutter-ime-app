@@ -8,6 +8,7 @@ import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.mode.cn.CnQwertyCandidateEngine
 import com.example.myapp.ime.mode.cn.CnT9CandidateEngine
+import com.example.myapp.ime.mode.cn.CnT9UserChoiceStore
 import com.example.myapp.ime.mode.en.EnQwertyCandidateEngine
 import com.example.myapp.ime.mode.en.EnT9CandidateEngine
 import com.example.myapp.ime.ui.ImeUi
@@ -20,6 +21,7 @@ class CandidateController(
     private val sessions: ComposingSessionHub,
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
+    private val userChoiceStore: CnT9UserChoiceStore? = null   // ← 新增
 ) : UiStateActions {
 
     private val cnQwertyEngine = CnQwertyCandidateEngine(
@@ -39,7 +41,8 @@ class CandidateController(
         session = sessions.cnT9,
         commitRaw = commitRaw,
         clearComposing = clearComposing,
-        isRawCommitMode = { keyboardController.isRawCommitMode() }
+        isRawCommitMode = { keyboardController.isRawCommitMode() },
+        userChoiceStore = userChoiceStore                        // ← 新增
     )
 
     private val enQwertyEngine = EnQwertyCandidateEngine(
