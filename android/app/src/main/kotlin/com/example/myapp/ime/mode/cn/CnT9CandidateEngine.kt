@@ -21,7 +21,8 @@ class CnT9CandidateEngine(
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
     private val isRawCommitMode: () -> Boolean,
-    private val userChoiceStore: CnT9UserChoiceStore? = null   // ← 新增
+    private val userChoiceStore: CnT9UserChoiceStore? = null,
+    private val contextWindow: CnT9ContextWindow? = null    // ← 新增
 ) {
     private var isExpanded: Boolean = false
     private var isSingleCharMode: Boolean = false
@@ -110,7 +111,8 @@ class CnT9CandidateEngine(
             session = session,
             dictEngine = dictEngine,
             singleCharMode = isSingleCharMode,
-            userChoiceStore = userChoiceStore       // ← 传入
+            userChoiceStore = userChoiceStore,
+            contextWindow = contextWindow           // ← 传入
         )
 
         applyBuildOutput(out)
@@ -156,6 +158,8 @@ class CnT9CandidateEngine(
         if (isRawCommitMode()) {
             resetUiSelectionToTop()
             commitRaw(cand.word)
+            // ── 上下文记录 ────────────────────────────────────────
+            contextWindow?.record(cand.word)
             clearComposing()
             return
         }
@@ -179,6 +183,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     commitRaw(result.text)
+                    contextWindow?.record(cand.word)    // ← 上屏后记录上下文
                     clearComposing()
                 }
                 is ComposingSession.PickResult.Updated -> {
@@ -205,6 +210,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     commitRaw(result.text)
+                    contextWindow?.record(cand.word)    // ← 上屏后记录上下文
                     clearComposing()
                 }
                 is ComposingSession.PickResult.Updated -> {
@@ -217,6 +223,7 @@ class CnT9CandidateEngine(
 
         resetUiSelectionToTop()
         commitRaw(cand.word)
+        contextWindow?.record(cand.word)                // ← 上屏后记录上下文
         clearComposing()
     }
 
@@ -237,23 +244,15 @@ class CnT9CandidateEngine(
 
     private fun recordUserChoice(cand: Candidate) {
         val store = userChoiceStore ?: return
-        // 用候选词的 input（拼音路径）作 key
         val pinyinKey = (cand.pinyin ?: cand.input)
             .trim()
             .lowercase(Locale.ROOT)
-            .replace("'", "'")   // 统一分隔符
+            .replace("'", "'")
         store.recordChoice(pinyinKey, cand.word)
     }
 
     // ── 首选上屏置信度模型 ─────────────────────────────────────────
 
-    /**
-     * 计算当前首选候选的"上屏置信度"（0-100 整数分）。
-     *
-     * 置信度决定空格/回车是否自动上屏首选：
-     *  score >= THRESHOLD_AUTO_COMMIT → 自动上屏
-     *  score <  THRESHOLD_AUTO_COMMIT → 不上屏，保持候选栏展开
-     */
     private object ConfidenceThreshold {
         const val AUTO_COMMIT = 60
     }
@@ -266,25 +265,17 @@ class CnT9CandidateEngine(
 
         var score = 0
 
-        // 1. 用户明确选择了 index > 0 的候选：完全置信
         if (preferredIndex > 0) return 100
-
-        // 2. 候选列表只有一个：完全置信
         if (currentCandidates.size == 1) return 100
-
-        // 3. rawCommit 模式下直接上屏
         if (isRawCommitMode()) return 100
 
-        // 4. pinyinStack 非空，rawDigits 为空（已完全物化）→ 高置信
         if (session.rawT9Digits.isEmpty() && session.pinyinStack.isNotEmpty()) {
             return 90
         }
 
-        // 5. rawDigits 只有 1 位：非常不确定，不自动上屏
         val rawLen = session.rawT9Digits.length
         if (rawLen == 1 && session.pinyinStack.isEmpty()) return 20
 
-        // 6. 基于拼音预览与候选的匹配度打分
         val preview = normalizedEnterPreview()
         val candPreview = normalizedCandidatePreview(cand)
         val expectedSyllables = estimateCurrentComposingSyllables()
@@ -292,13 +283,12 @@ class CnT9CandidateEngine(
 
         if (preview != null && candPreview.isNotEmpty()) {
             when {
-                candPreview == preview -> score += 40          // 完全匹配
-                preview.startsWith(candPreview) -> score += 25 // 前缀覆盖
+                candPreview == preview -> score += 40
+                preview.startsWith(candPreview) -> score += 25
                 else -> score += 5
             }
         }
 
-        // 7. 候选覆盖音节数门槛
         val minRequiredSyllables = min(2, expectedSyllables)
         if (consumeSyllables >= minRequiredSyllables && cand.word.length > 1) {
             score += 20
@@ -306,20 +296,21 @@ class CnT9CandidateEngine(
             score += 15
         }
 
-        // 8. pinyinStack 非空时额外加分（锁定段增加确定性）
         if (session.pinyinStack.isNotEmpty()) {
             score += 10
         }
 
-        // 9. rawDigits 较长（≥4 位）时输入意图明确，适当加分
         if (rawLen >= 4) score += 10
 
-        // 10. 用户学习权重加分（有历史选用记录）
         val userBoost = userChoiceStore?.getBoost(
             pinyinKey = normalizedCandidatePreview(cand),
             word = cand.word
         ) ?: 0
         if (userBoost > 0) score += minOf(userBoost / 10, 10)
+
+        // 上下文加分也影响置信度
+        val ctxBoost = contextWindow?.getContextBoost(cand.word) ?: 0
+        if (ctxBoost > 0) score += 5
 
         return score.coerceIn(0, 100)
     }
@@ -332,7 +323,7 @@ class CnT9CandidateEngine(
         return confidence >= ConfidenceThreshold.AUTO_COMMIT
     }
 
-    // ── 内部辅助方法（原有逻辑不变）─────────────────────────────────
+    // ── 内部辅助方法 ───────────────────────────────────────────────
 
     private fun normalizedEnterPreview(): String? {
         fun normalizeSegment(seg: String): String {

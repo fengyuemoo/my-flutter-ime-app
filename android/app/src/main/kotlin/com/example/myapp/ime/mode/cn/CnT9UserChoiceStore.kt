@@ -5,76 +5,143 @@ import android.content.SharedPreferences
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 用户选词学习权重存储。
+ * 用户选词学习权重存储（含时间衰减 + streak）。
  *
- * Key   = "拼音路径文本|候选词"，例如 "ni'hao|你好"
- * Value = 选用次数（整型，上限 cap 防溢出）
+ * 存储 Key  = "拼音路径|候选词"，如 "ni'hao|你好"
+ * 存储 Value = "$count:$lastTimestamp:$streak"（':'分隔的紧凑格式）
  *
- * 设计原则：
- *  - 内存中用 ConcurrentHashMap 维持运行时热路径
- *  - 通过 SharedPreferences 持久化（容量上限 MAX_ENTRIES 条，超出后按权重从低到高淘汰）
- *  - 不在主线程 I/O（写操作异步 apply）
+ * 衰减公式：
+ *   decay = when (daysSince) {
+ *     < 30  → 1.0
+ *     < 90  → 0.5
+ *     < 180 → 0.25
+ *     else  → 0.0  （写回 0，下次自动从存储删除）
+ *   }
+ *   boost = min(count × BOOST_PER_COUNT × decay × streakMultiplier, MAX_BOOST)
+ *
+ * streak 规则：
+ *   - 连续 2 次在同一 pinyinKey 下选同一 word → streak = 2
+ *   - 中途选了别的词 → streak 重置为 1
+ *   - streakMultiplier = 1.0 + min(streak - 1, 4) × 0.1  （最多 1.4×）
  */
 class CnT9UserChoiceStore(context: Context) {
 
     companion object {
-        private const val PREFS_NAME = "cnt9_user_choice"
+        private const val PREFS_NAME = "cnt9_user_choice_v2"
         private const val MAX_ENTRIES = 2000
         private const val MAX_COUNT = 999
-        private const val BOOST_PER_COUNT = 8   // 每次选用增加的权重分
-        private const val MAX_BOOST = 200       // 单词最大加分上限
+        private const val BOOST_PER_COUNT = 8
+        private const val MAX_BOOST = 200
+
+        // 衰减阈值（毫秒）
+        private val HALF_DECAY_MS = 30L * 24 * 3600 * 1000
+        private val QUARTER_DECAY_MS = 90L * 24 * 3600 * 1000
+        private val ZERO_DECAY_MS = 180L * 24 * 3600 * 1000
+    }
+
+    private data class Entry(
+        val count: Int,
+        val lastTimestamp: Long,
+        val streak: Int
+    ) {
+        fun serialize(): String = "$count:$lastTimestamp:$streak"
+
+        companion object {
+            fun deserialize(s: String): Entry? {
+                val parts = s.split(":")
+                if (parts.size < 3) return null
+                return try {
+                    Entry(
+                        count = parts[0].toInt(),
+                        lastTimestamp = parts[1].toLong(),
+                        streak = parts[2].toInt()
+                    )
+                } catch (_: NumberFormatException) { null }
+            }
+        }
     }
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    // 运行时缓存：key → count
-    private val cache = ConcurrentHashMap<String, Int>()
+    private val cache = ConcurrentHashMap<String, Entry>()
 
-    init {
-        loadFromPrefs()
-    }
+    // 记录"上一次在同一 pinyinKey 下选的 word"，用于 streak 判断
+    @Volatile private var lastPinyinKey: String = ""
+    @Volatile private var lastWord: String = ""
+
+    init { loadFromPrefs() }
 
     private fun loadFromPrefs() {
-        val all = prefs.all
-        for ((k, v) in all) {
-            if (v is Int && v > 0) {
-                cache[k] = v
+        val now = System.currentTimeMillis()
+        for ((k, v) in prefs.all) {
+            if (v !is String) continue
+            val entry = Entry.deserialize(v) ?: continue
+            // 过期条目直接丢弃，不加载进内存
+            if (decayFactor(now - entry.lastTimestamp) > 0f) {
+                cache[k] = entry
             }
         }
     }
 
+    private fun decayFactor(ageMs: Long): Float = when {
+        ageMs < HALF_DECAY_MS    -> 1.0f
+        ageMs < QUARTER_DECAY_MS -> 0.5f
+        ageMs < ZERO_DECAY_MS    -> 0.25f
+        else                      -> 0f
+    }
+
+    private fun streakMultiplier(streak: Int): Float =
+        1.0f + minOf(streak - 1, 4) * 0.1f
+
     /**
-     * 查询某个候选词在当前拼音路径下的加分。
-     * @param pinyinKey  拼音路径串，如 "ni'hao"（由 plan.text 得来）
-     * @param word       候选词汉字
+     * 查询某候选词在当前拼音路径下的加分（含衰减 + streak 加乘）。
      */
     fun getBoost(pinyinKey: String, word: String): Int {
         val key = buildKey(pinyinKey, word)
-        val count = cache[key] ?: return 0
-        return (count * BOOST_PER_COUNT).coerceAtMost(MAX_BOOST)
+        val entry = cache[key] ?: return 0
+        val now = System.currentTimeMillis()
+        val decay = decayFactor(now - entry.lastTimestamp)
+        if (decay == 0f) return 0
+        val streak = streakMultiplier(entry.streak)
+        return (entry.count * BOOST_PER_COUNT * decay * streak)
+            .toInt()
+            .coerceAtMost(MAX_BOOST)
     }
 
     /**
-     * 记录一次用户选词（选中后调用）。
+     * 记录一次用户选词。
      */
     fun recordChoice(pinyinKey: String, word: String) {
         val key = buildKey(pinyinKey, word)
-        val newCount = ((cache[key] ?: 0) + 1).coerceAtMost(MAX_COUNT)
-        cache[key] = newCount
+        val now = System.currentTimeMillis()
 
-        // 异步持久化
+        // Streak 判断
+        val newStreak = if (lastPinyinKey == pinyinKey && lastWord == word) {
+            (cache[key]?.streak ?: 1) + 1
+        } else {
+            1
+        }
+        lastPinyinKey = pinyinKey
+        lastWord = word
+
+        val oldCount = cache[key]?.count ?: 0
+        val newCount = (oldCount + 1).coerceAtMost(MAX_COUNT)
+
+        val newEntry = Entry(count = newCount, lastTimestamp = now, streak = newStreak)
+        cache[key] = newEntry
+
         val editor = prefs.edit()
-        editor.putInt(key, newCount)
+        editor.putString(key, newEntry.serialize())
 
-        // 容量管控：超过 MAX_ENTRIES 时，删除最低频条目
+        // 容量管控：淘汰最老 + 最低频
         if (cache.size > MAX_ENTRIES) {
             val toRemove = cache.entries
-                .sortedBy { it.value }
+                .sortedWith(compareBy({ it.value.lastTimestamp }, { it.value.count }))
                 .take(cache.size - MAX_ENTRIES)
-            for (entry in toRemove) {
-                cache.remove(entry.key)
-                editor.remove(entry.key)
+            for (e in toRemove) {
+                cache.remove(e.key)
+                editor.remove(e.key)
             }
         }
 
@@ -86,10 +153,10 @@ class CnT9UserChoiceStore(context: Context) {
      */
     fun clearAll() {
         cache.clear()
+        lastPinyinKey = ""
+        lastWord = ""
         prefs.edit().clear().apply()
     }
 
-    private fun buildKey(pinyinKey: String, word: String): String {
-        return "$pinyinKey|$word"
-    }
+    private fun buildKey(pinyinKey: String, word: String): String = "$pinyinKey|$word"
 }

@@ -14,13 +14,14 @@ object CnT9Handler : ImeModeHandler {
         session: ComposingSession,
         dictEngine: Dictionary,
         singleCharMode: Boolean
-    ): ImeModeHandler.Output = build(session, dictEngine, singleCharMode, null)
+    ): ImeModeHandler.Output = build(session, dictEngine, singleCharMode, null, null)
 
     fun build(
         session: ComposingSession,
         dictEngine: Dictionary,
         singleCharMode: Boolean,
-        userChoiceStore: CnT9UserChoiceStore?
+        userChoiceStore: CnT9UserChoiceStore?,
+        contextWindow: CnT9ContextWindow?           // ← 新增
     ): ImeModeHandler.Output {
         val rawDigits = session.rawT9Digits
         val stackSegs = session.pinyinStack.map { it.lowercase(java.util.Locale.ROOT) }
@@ -44,7 +45,6 @@ object CnT9Handler : ImeModeHandler {
         val filtered = if (singleCharMode) queried.filter { it.word.length == 1 } else queried
 
         val finalList = ArrayList<Candidate>(filtered)
-
         val lockedSegmentCount = stackSegs.size
 
         val scoreCache = CnT9CandidateScorer.buildScoreCache(
@@ -52,7 +52,8 @@ object CnT9Handler : ImeModeHandler {
             plans = plans,
             rawDigits = rawDigits,
             lockedSegmentCount = lockedSegmentCount,
-            userChoiceStore = userChoiceStore     // ← 传入
+            userChoiceStore = userChoiceStore,
+            contextWindow = contextWindow               // ← 新增
         )
 
         CnT9CandidateScorer.sortCandidates(finalList, scoreCache)
