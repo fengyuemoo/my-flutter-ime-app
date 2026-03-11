@@ -13,6 +13,7 @@ import com.example.myapp.ime.dict.DictionaryManager
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.keyboard.KeyboardHost
 import com.example.myapp.ime.keyboard.model.KeyboardMode
+import com.example.myapp.ime.mode.cn.CnT9UserChoiceStore
 import com.example.myapp.ime.prefs.LayoutController
 import com.example.myapp.ime.router.ImeActionDispatcher
 import com.example.myapp.ime.theme.FontController
@@ -20,7 +21,6 @@ import com.example.myapp.ime.theme.ThemeController
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.ime.ui.ImeUiBinder
 import com.example.myapp.ime.ui.ToolbarController
-
 import com.example.myapp.keyboard.DefaultKeyboardRegistry
 
 class ImeGraph(
@@ -83,13 +83,17 @@ class ImeGraph(
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
+            // 用户选词学习存储：在此处统一初始化，生命周期与 ImeGraph 一致
+            val userChoiceStore = CnT9UserChoiceStore(context)
+
             val candidateController = CandidateController(
                 ui = ui,
                 keyboardController = keyboardController,
                 dictEngine = dictManager.dictionary,
                 sessions = sessions,
                 commitRaw = { text -> inputConnectionProvider()?.commitText(text, 1) },
-                clearComposing = { dispatcher.clearComposing() }
+                clearComposing = { dispatcher.clearComposing() },
+                userChoiceStore = userChoiceStore                // ← 新增
             )
 
             val toolbarController = ToolbarController(
