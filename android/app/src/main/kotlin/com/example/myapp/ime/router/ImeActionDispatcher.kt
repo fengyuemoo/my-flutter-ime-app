@@ -14,6 +14,7 @@ import com.example.myapp.ime.compose.en.t9.EnT9InputEngine
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.keyboard.model.PanelState
+import com.example.myapp.ime.mode.cn.CnPunctuationHelper
 import com.example.myapp.ime.prefs.SymbolPrefs
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.keyboard.core.PanelType
@@ -163,7 +164,7 @@ class ImeActionDispatcher(
             candidateController = candidateController,
             session = sessions.cnT9,
             inputConnectionProvider = { inputConnectionProvider() }
-            // userChoiceStore 由 ImeGraph → CandidateController → CnT9CandidateEngine 注入
+            // userChoiceStore / contextWindow 由 ImeGraph → CandidateController → CnT9CandidateEngine 注入
         )
         enQwertyEngine = EnQwertyInputEngine(
             ui = ui,
@@ -349,16 +350,18 @@ class ImeActionDispatcher(
 
         engine.beforeModeSwitch()
 
+        // ── 分词键（数字1键）────────────────────────────────────────
         if (keyLabel == "分词") {
             val mode = mainMode()
             if (mode.isChinese && mode.useT9Layout) {
                 val cnT9Session = sessions.cnT9
-                // 有拼音输入 → 插入切分点；无输入 → 上屏数字"1"
                 if (cnT9Session.isComposing()) {
+                    // 有拼音输入 → 插入切分点
                     cnT9Session.insertT9ManualCutAtEnd()
                     engine.refreshCandidates()
                     refreshComposingView()
                 } else {
+                    // 无输入 → 退化为数字 1
                     inputConnectionProvider()?.commitText("1", 1)
                     refreshComposingView()
                 }
@@ -369,6 +372,7 @@ class ImeActionDispatcher(
             return
         }
 
+        // ── 回车键 ─────────────────────────────────────────────────
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
             val enterOverride = candidateController.resolveEnterCommitText()
@@ -390,8 +394,34 @@ class ImeActionDispatcher(
             return
         }
 
+        // ── 空格键 ─────────────────────────────────────────────────
         if (keyLabel == "SPACE") {
             handleSpaceKey()
+            return
+        }
+
+        // ── 全角标点转换（中文模式）────────────────────────────────
+        val mode = mainMode()
+        if (mode.isChinese && CnPunctuationHelper.isPunctuation(keyLabel)) {
+            val fullWidth = CnPunctuationHelper.toFullWidth(keyLabel)
+            val ic = inputConnectionProvider() ?: return
+
+            // 若正在 composing，标点触发首选上屏后再插入标点
+            if (sessionByMode(mode).isComposing()) {
+                val committed = candidateController.commitFirstCandidateOnEnter()
+                if (!committed) {
+                    // 首选置信度不足，先强制上屏 composing 内容（rawDigits / preedit）
+                    val preview = candidateController.resolveComposingPreviewText()
+                    if (!preview.isNullOrEmpty()) {
+                        ic.commitText(preview, 1)
+                        currentEngineOrNull()?.clearComposing()
+                    }
+                }
+            }
+
+            ic.commitText(fullWidth, 1)
+            refreshComposingView()
+            return
         }
     }
 

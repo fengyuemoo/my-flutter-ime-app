@@ -22,7 +22,7 @@ class CnT9CandidateEngine(
     private val clearComposing: () -> Unit,
     private val isRawCommitMode: () -> Boolean,
     private val userChoiceStore: CnT9UserChoiceStore? = null,
-    private val contextWindow: CnT9ContextWindow? = null    // ← 新增
+    private val contextWindow: CnT9ContextWindow? = null
 ) {
     private var isExpanded: Boolean = false
     private var isSingleCharMode: Boolean = false
@@ -112,10 +112,34 @@ class CnT9CandidateEngine(
             dictEngine = dictEngine,
             singleCharMode = isSingleCharMode,
             userChoiceStore = userChoiceStore,
-            contextWindow = contextWindow           // ← 传入
+            contextWindow = contextWindow
         )
 
         applyBuildOutput(out)
+
+        // 中英混输：仅在纯数字输入（未锁定任何音节）时，在候选末尾追加英文直出候选
+        val rawDigits = session.rawT9Digits
+        if (rawDigits.length >= 3 && session.pinyinStack.isEmpty()) {
+            val enCandidates = CnT9MixedInputDetector.detectEnglishCandidates(rawDigits)
+            if (enCandidates.isNotEmpty()) {
+                enCandidates.forEach { word ->
+                    currentCandidates.add(
+                        Candidate(
+                            word = word,
+                            input = rawDigits,
+                            priority = 0,
+                            matchedLength = rawDigits.length,
+                            pinyinCount = 0,
+                            pinyin = null,
+                            syllables = 0,
+                            acronym = null
+                        )
+                    )
+                }
+                // 刷新 UI 以展示追加的英文候选
+                ui.setCandidates(currentCandidates)
+            }
+        }
     }
 
     fun handleSpaceKey() {
@@ -152,13 +176,11 @@ class CnT9CandidateEngine(
         ui.setSelectedCandidateIndex(index)
         val cand = currentCandidates[index]
 
-        // ── 记录用户学习 ──────────────────────────────────────────
         recordUserChoice(cand)
 
         if (isRawCommitMode()) {
             resetUiSelectionToTop()
             commitRaw(cand.word)
-            // ── 上下文记录 ────────────────────────────────────────
             contextWindow?.record(cand.word)
             clearComposing()
             return
@@ -183,7 +205,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     commitRaw(result.text)
-                    contextWindow?.record(cand.word)    // ← 上屏后记录上下文
+                    contextWindow?.record(cand.word)
                     clearComposing()
                 }
                 is ComposingSession.PickResult.Updated -> {
@@ -210,7 +232,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     commitRaw(result.text)
-                    contextWindow?.record(cand.word)    // ← 上屏后记录上下文
+                    contextWindow?.record(cand.word)
                     clearComposing()
                 }
                 is ComposingSession.PickResult.Updated -> {
@@ -223,7 +245,7 @@ class CnT9CandidateEngine(
 
         resetUiSelectionToTop()
         commitRaw(cand.word)
-        contextWindow?.record(cand.word)                // ← 上屏后记录上下文
+        contextWindow?.record(cand.word)
         clearComposing()
     }
 
@@ -296,10 +318,7 @@ class CnT9CandidateEngine(
             score += 15
         }
 
-        if (session.pinyinStack.isNotEmpty()) {
-            score += 10
-        }
-
+        if (session.pinyinStack.isNotEmpty()) score += 10
         if (rawLen >= 4) score += 10
 
         val userBoost = userChoiceStore?.getBoost(
@@ -308,7 +327,6 @@ class CnT9CandidateEngine(
         ) ?: 0
         if (userBoost > 0) score += minOf(userBoost / 10, 10)
 
-        // 上下文加分也影响置信度
         val ctxBoost = contextWindow?.getContextBoost(cand.word) ?: 0
         if (ctxBoost > 0) score += 5
 

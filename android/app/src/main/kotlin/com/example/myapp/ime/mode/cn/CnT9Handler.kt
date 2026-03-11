@@ -4,6 +4,7 @@ import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.mode.ImeModeHandler
+import java.util.Locale
 
 object CnT9Handler : ImeModeHandler {
 
@@ -21,10 +22,10 @@ object CnT9Handler : ImeModeHandler {
         dictEngine: Dictionary,
         singleCharMode: Boolean,
         userChoiceStore: CnT9UserChoiceStore?,
-        contextWindow: CnT9ContextWindow?           // ← 新增
+        contextWindow: CnT9ContextWindow?
     ): ImeModeHandler.Output {
         val rawDigits = session.rawT9Digits
-        val stackSegs = session.pinyinStack.map { it.lowercase(java.util.Locale.ROOT) }
+        val stackSegs = session.pinyinStack.map { it.lowercase(Locale.ROOT) }
 
         val sidebar = buildSidebar(dictEngine, rawDigits)
 
@@ -53,7 +54,7 @@ object CnT9Handler : ImeModeHandler {
             rawDigits = rawDigits,
             lockedSegmentCount = lockedSegmentCount,
             userChoiceStore = userChoiceStore,
-            contextWindow = contextWindow               // ← 新增
+            contextWindow = contextWindow
         )
 
         CnT9CandidateScorer.sortCandidates(finalList, scoreCache)
@@ -62,19 +63,26 @@ object CnT9Handler : ImeModeHandler {
             finalList.subList(MAX_DISPLAY_CANDIDATES, finalList.size).clear()
         }
 
+        // Fallback：词库查无结果时，提供 Unicode CJK 兜底
         if (finalList.isEmpty() && rawDigits.isNotEmpty()) {
-            finalList.add(
-                Candidate(
-                    word = rawDigits,
-                    input = rawDigits,
-                    priority = 0,
-                    matchedLength = 0,
-                    pinyinCount = 0,
-                    pinyin = null,
-                    syllables = 0,
-                    acronym = null
+            val unicodeFallbacks = CnT9UnicodeFallback.buildFallbackCandidates(rawDigits, dictEngine)
+            if (unicodeFallbacks.isNotEmpty()) {
+                finalList.addAll(unicodeFallbacks)
+            } else {
+                // 最终兜底：直出原始数字串（保证用户不会卡死）
+                finalList.add(
+                    Candidate(
+                        word = rawDigits,
+                        input = rawDigits,
+                        priority = 0,
+                        matchedLength = 0,
+                        pinyinCount = 0,
+                        pinyin = null,
+                        syllables = 0,
+                        acronym = null
+                    )
                 )
-            )
+            }
         }
 
         return ImeModeHandler.Output(
@@ -89,12 +97,12 @@ object CnT9Handler : ImeModeHandler {
         if (!dictEngine.isLoaded || rawDigits.isEmpty()) return emptyList()
 
         val fromDict = dictEngine.getPinyinPossibilities(rawDigits)
-            .map { it.lowercase(java.util.Locale.ROOT).trim() }
+            .map { it.lowercase(Locale.ROOT).trim() }
             .filter { it.isNotEmpty() }
 
         return (fromDict + com.example.myapp.dict.impl.T9Lookup
             .charsFromDigit(rawDigits.first())
-            .map { it.lowercase(java.util.Locale.ROOT) })
+            .map { it.lowercase(Locale.ROOT) })
             .distinct()
             .take(MAX_SIDEBAR_ITEMS)
     }

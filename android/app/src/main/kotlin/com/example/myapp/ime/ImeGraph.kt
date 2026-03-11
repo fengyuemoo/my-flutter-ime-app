@@ -34,8 +34,13 @@ class ImeGraph(
     val themeController: ThemeController,
     val layoutController: LayoutController,
     val toolbarController: ToolbarController,
-    val uiBinder: ImeUiBinder
+    val uiBinder: ImeUiBinder,
+    // ↓ 提升为成员，供 ImeBootstrapper 在 onStartInputView 时 clear
+    val contextWindow: CnT9ContextWindow
 ) {
+
+    /** 切换输入框时清空上下文窗口，避免跨 field 上下文污染。*/
+    fun clearContextWindow() = contextWindow.clear()
 
     companion object {
 
@@ -84,11 +89,11 @@ class ImeGraph(
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
-            // 用户选词学习存储：生命周期与 ImeGraph 一致，持久化
+            // 用户选词学习存储：持久化，生命周期与 ImeGraph 一致
             val userChoiceStore = CnT9UserChoiceStore(context)
 
-            // 上下文窗口：会话级内存，不持久化，换行/焦点切换时由引擎主动 clear
-            val contextWindow = CnT9ContextWindow()             // ← 新增
+            // 上下文窗口：会话级内存，切换输入框时由 ImeBootstrapper 主动 clear
+            val contextWindow = CnT9ContextWindow()
 
             val candidateController = CandidateController(
                 ui = ui,
@@ -98,7 +103,7 @@ class ImeGraph(
                 commitRaw = { text -> inputConnectionProvider()?.commitText(text, 1) },
                 clearComposing = { dispatcher.clearComposing() },
                 userChoiceStore = userChoiceStore,
-                contextWindow = contextWindow                    // ← 新增
+                contextWindow = contextWindow
             )
 
             val toolbarController = ToolbarController(
@@ -120,7 +125,6 @@ class ImeGraph(
             )
 
             keyboardController.themeModeProvider = { themeController.themeMode }
-
             keyboardController.englishPredictEnabledProvider = { dispatcher.getEnglishPredictEnabled() }
 
             val layoutController = LayoutController(
@@ -166,7 +170,8 @@ class ImeGraph(
                 themeController = themeController,
                 layoutController = layoutController,
                 toolbarController = toolbarController,
-                uiBinder = uiBinder
+                uiBinder = uiBinder,
+                contextWindow = contextWindow        // ← 传入
             )
         }
     }
