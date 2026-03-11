@@ -28,6 +28,10 @@ data class CnT9SessionState(
     val normalizedRawDigits: String
         get() = rawDigits.filter { it in '0'..'9' }
 
+    /** 已锁定（物化）的音节数量，即 materializedSegments.size */
+    val lockedSegmentCount: Int
+        get() = materializedSegments.size
+
     fun hasRawDigits(): Boolean = normalizedRawDigits.isNotEmpty()
 
     fun hasMaterializedSegments(): Boolean = materializedSegments.isNotEmpty()

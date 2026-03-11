@@ -25,7 +25,7 @@ class ComposingSession {
     private var _qwertyInput = ""
     private var _committedPrefix = ""
 
-    // CN-T9: 手动切分点（位置是“rawT9Digits 的 index”，1..len-1 为内部切分点；len 表示“尾部待生效切分点”）
+    // CN-T9: 手动切分点（位置是"rawT9Digits 的 index"，1..len-1 为内部切分点；len 表示"尾部待生效切分点"）
     private val _t9ManualCuts = HashSet<Int>()
 
     val pinyinStack: List<String> get() = _pinyinStack
@@ -111,6 +111,36 @@ class ComposingSession {
         val len = _rawT9Digits.length
         if (len <= 0) return
         _t9ManualCuts.add(len)
+    }
+
+    /**
+     * 在指定位置插入手动切分点。
+     * position 必须在 1..rawT9Digits.length-1 范围内（内部切分点）。
+     */
+    fun insertT9ManualCut(position: Int) {
+        if (position in 1 until _rawT9Digits.length) {
+            _t9ManualCuts.add(position)
+        }
+    }
+
+    /**
+     * 移除指定位置的手动切分点。
+     */
+    fun removeT9ManualCut(position: Int) {
+        _t9ManualCuts.remove(position)
+    }
+
+    /**
+     * 替换指定位置的已物化音节（消歧用）。
+     * 只修改 pinyinStack 中的音节文本，不改变 digitChunk / cuts。
+     * @return true 表示成功替换
+     */
+    fun replaceMaterializedSegmentAt(index: Int, newSyllable: String): Boolean {
+        if (index !in _pinyinStack.indices) return false
+        val normalized = newSyllable.trim().lowercase(Locale.ROOT)
+        if (normalized.isEmpty()) return false
+        _pinyinStack[index] = normalized
+        return true
     }
 
     private fun trimCutsToLength(newLen: Int) {
