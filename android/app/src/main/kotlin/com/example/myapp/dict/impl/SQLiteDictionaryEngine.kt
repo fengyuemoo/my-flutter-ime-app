@@ -321,6 +321,22 @@ class SQLiteDictionaryEngine(
         }
     }
 
+    // ── 新增：生僻字兜底接口实现 ───────────────────────────────────
+
+    /**
+     * 按拼音前缀查单字候选，供 [CnT9UnicodeFallback] 生僻字兜底使用。
+     * 内部直接复用已有的 [SQLiteWordQueries.querySingleCharByInputPrefix]。
+     */
+    override fun querySingleCharsWithPinyinPrefix(prefix: String): List<Candidate> {
+        if (!isLoaded) return emptyList()
+        val norm = prefix.trim().lowercase(Locale.ROOT)
+        if (norm.isEmpty()) return emptyList()
+        val db = dbHelper.readableDatabase
+        return queries.querySingleCharByInputPrefix(db = db, prefix = norm).take(20)
+    }
+
+    // ── 私有辅助方法 ──────────────────────────────────────────────
+
     private fun buildPinyinPossibilityScore(
         text: String,
         code: String,
