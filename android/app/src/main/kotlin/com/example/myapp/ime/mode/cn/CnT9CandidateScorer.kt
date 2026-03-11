@@ -10,8 +10,25 @@ import kotlin.math.min
 /**
  * CN-T9 候选打分与排序。
  *
- * 规则：分层打分（locked精确 > locked前缀 > 精确 > 前缀 > 覆盖数字 > 音节距离 > ...），
- * 相同输入下顺序稳定（stable sort + 多维 thenBy 保证决定性排序）。
+ * 排序维度（优先级从高到低）：
+ *  1. lockedExactSegments   锁定段精确匹配数
+ *  2. lockedExactChars      锁定段精确字符数
+ *  3. lockedPrefixSegments  锁定段前缀匹配数
+ *  4. exactSegments         全局精确匹配段数
+ *  5. exactChars            全局精确字符数
+ *  6. prefixSegments        前缀匹配段数
+ *  7. prefixChars           前缀字符数
+ *  8. consumedDigits        覆盖的数字位数
+ *  9. uncoveredDigits (↑小) 未覆盖数字数
+ * 10. syllableDistance (↑小) 音节数差距
+ * 11. exactInput           完整拼音精确匹配
+ * 12. planRank (↑小)       路径规划排名
+ * 13. userBoost            用户学习权重加分
+ * 14. priority             字典频率权重
+ * 15. wordLength           词语长度（长词优先）
+ * 16. syllables            音节数
+ * 17. inputLength          input 长度
+ * 18. word (字典序)         最终保证决定性排序
  */
 object CnT9CandidateScorer {
 
@@ -28,6 +45,7 @@ object CnT9CandidateScorer {
         val syllableDistance: Int,
         val exactInput: Boolean,
         val planRank: Int,
+        val userBoost: Int,      // ← 新增：用户学习权重
         val priority: Int,
         val syllables: Int,
         val wordLength: Int,
@@ -38,13 +56,14 @@ object CnT9CandidateScorer {
         candidates: List<Candidate>,
         plans: List<PathPlan>,
         rawDigits: String,
-        lockedSegmentCount: Int
+        lockedSegmentCount: Int,
+        userChoiceStore: CnT9UserChoiceStore? = null
     ): Map<Candidate, CandidateScore?> {
         if (candidates.isEmpty() || plans.isEmpty()) return emptyMap()
 
         val out = HashMap<Candidate, CandidateScore?>(candidates.size)
         for (cand in candidates) {
-            out[cand] = bestScore(cand, plans, rawDigits, lockedSegmentCount)
+            out[cand] = bestScore(cand, plans, rawDigits, lockedSegmentCount, userChoiceStore)
         }
         return out
     }
@@ -68,6 +87,7 @@ object CnT9CandidateScorer {
                 .thenBy { scoreCache[it]?.syllableDistance ?: Int.MAX_VALUE }
                 .thenByDescending { if (scoreCache[it]?.exactInput == true) 1 else 0 }
                 .thenBy { scoreCache[it]?.planRank ?: Int.MAX_VALUE }
+                .thenByDescending { scoreCache[it]?.userBoost ?: 0 }   // ← 新增维度
                 .thenByDescending { scoreCache[it]?.priority ?: it.priority }
                 .thenByDescending { scoreCache[it]?.wordLength ?: it.word.length }
                 .thenByDescending { scoreCache[it]?.syllables ?: it.syllables }
@@ -80,14 +100,18 @@ object CnT9CandidateScorer {
         cand: Candidate,
         plans: List<PathPlan>,
         rawDigits: String,
-        lockedSegmentCount: Int
+        lockedSegmentCount: Int,
+        userChoiceStore: CnT9UserChoiceStore?
     ): CandidateScore? {
         val syllables = CnT9CandidateFilter.resolveCandidateSyllables(cand)
         if (syllables.isEmpty()) return null
 
         var best: CandidateScore? = null
         for (plan in plans) {
-            val score = scoreAgainstPlan(cand, plan, syllables, rawDigits, lockedSegmentCount)
+            val userBoost = userChoiceStore?.getBoost(plan.text, cand.word) ?: 0
+            val score = scoreAgainstPlan(
+                cand, plan, syllables, rawDigits, lockedSegmentCount, userBoost
+            )
             if (best == null || isBetter(score, best)) best = score
         }
         return best
@@ -98,7 +122,8 @@ object CnT9CandidateScorer {
         plan: PathPlan,
         candidateSyllables: List<String>,
         rawDigits: String,
-        lockedSegmentCount: Int
+        lockedSegmentCount: Int,
+        userBoost: Int
     ): CandidateScore {
         val planSegs = plan.segments
         val n = min(planSegs.size, candidateSyllables.size)
@@ -124,7 +149,8 @@ object CnT9CandidateScorer {
                     prefixSegments++; prefixChars += expected.length
                     consumedDigits += segDigits
                     if (i < effectiveLocked) {
-                        lockedExactSegments++; lockedExactChars += expected.length; lockedPrefixSegments++
+                        lockedExactSegments++; lockedExactChars += expected.length
+                        lockedPrefixSegments++
                     }
                 }
                 actual.startsWith(expected) -> {
@@ -152,6 +178,7 @@ object CnT9CandidateScorer {
             syllableDistance = abs(candidateSyllables.size - planSegs.size),
             exactInput = candConcat.isNotEmpty() && candConcat == planConcat,
             planRank = plan.rank,
+            userBoost = userBoost,
             priority = cand.priority,
             syllables = if (cand.syllables > 0) cand.syllables else candidateSyllables.size,
             wordLength = cand.word.length,
@@ -173,6 +200,7 @@ object CnT9CandidateScorer {
             a.syllableDistance != b.syllableDistance -> a.syllableDistance < b.syllableDistance
             a.exactInput != b.exactInput -> a.exactInput
             a.planRank != b.planRank -> a.planRank < b.planRank
+            a.userBoost != b.userBoost -> a.userBoost > b.userBoost   // ← 新增
             a.priority != b.priority -> a.priority > b.priority
             a.wordLength != b.wordLength -> a.wordLength > b.wordLength
             a.syllables != b.syllables -> a.syllables > b.syllables

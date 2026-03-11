@@ -1,22 +1,10 @@
 package com.example.myapp.ime.mode.cn
 
 import com.example.myapp.dict.api.Dictionary
-import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.mode.ImeModeHandler
-import java.util.Locale
 
-/**
- * CN-T9 候选构建入口（组装层）。
- *
- * 本文件只负责组装：
- *   SentencePlanner → CandidateFilter → CandidateScorer → 输出
- * 拆分细节见：
- *   CnT9SentencePlanner  - 路径规划
- *   CnT9CandidateFilter  - 硬过滤 + 查询
- *   CnT9CandidateScorer  - 打分排序
- */
 object CnT9Handler : ImeModeHandler {
 
     private const val MAX_DISPLAY_CANDIDATES = 120
@@ -26,9 +14,16 @@ object CnT9Handler : ImeModeHandler {
         session: ComposingSession,
         dictEngine: Dictionary,
         singleCharMode: Boolean
+    ): ImeModeHandler.Output = build(session, dictEngine, singleCharMode, null)
+
+    fun build(
+        session: ComposingSession,
+        dictEngine: Dictionary,
+        singleCharMode: Boolean,
+        userChoiceStore: CnT9UserChoiceStore?
     ): ImeModeHandler.Output {
         val rawDigits = session.rawT9Digits
-        val stackSegs = session.pinyinStack.map { it.lowercase(Locale.ROOT) }
+        val stackSegs = session.pinyinStack.map { it.lowercase(java.util.Locale.ROOT) }
 
         val sidebar = buildSidebar(dictEngine, rawDigits)
 
@@ -49,13 +44,15 @@ object CnT9Handler : ImeModeHandler {
         val filtered = if (singleCharMode) queried.filter { it.word.length == 1 } else queried
 
         val finalList = ArrayList<Candidate>(filtered)
-        val lockedCount = stackSegs.size
+
+        val lockedSegmentCount = stackSegs.size
 
         val scoreCache = CnT9CandidateScorer.buildScoreCache(
             candidates = finalList,
             plans = plans,
             rawDigits = rawDigits,
-            lockedSegmentCount = lockedCount
+            lockedSegmentCount = lockedSegmentCount,
+            userChoiceStore = userChoiceStore     // ← 传入
         )
 
         CnT9CandidateScorer.sortCandidates(finalList, scoreCache)
@@ -67,10 +64,14 @@ object CnT9Handler : ImeModeHandler {
         if (finalList.isEmpty() && rawDigits.isNotEmpty()) {
             finalList.add(
                 Candidate(
-                    word = rawDigits, input = rawDigits,
-                    priority = 0, matchedLength = 0,
-                    pinyinCount = 0, pinyin = null,
-                    syllables = 0, acronym = null
+                    word = rawDigits,
+                    input = rawDigits,
+                    priority = 0,
+                    matchedLength = 0,
+                    pinyinCount = 0,
+                    pinyin = null,
+                    syllables = 0,
+                    acronym = null
                 )
             )
         }
@@ -87,11 +88,12 @@ object CnT9Handler : ImeModeHandler {
         if (!dictEngine.isLoaded || rawDigits.isEmpty()) return emptyList()
 
         val fromDict = dictEngine.getPinyinPossibilities(rawDigits)
-            .map { it.lowercase(Locale.ROOT).trim() }
+            .map { it.lowercase(java.util.Locale.ROOT).trim() }
             .filter { it.isNotEmpty() }
 
-        return (fromDict + T9Lookup.charsFromDigit(rawDigits.first())
-            .map { it.lowercase(Locale.ROOT) })
+        return (fromDict + com.example.myapp.dict.impl.T9Lookup
+            .charsFromDigit(rawDigits.first())
+            .map { it.lowercase(java.util.Locale.ROOT) })
             .distinct()
             .take(MAX_SIDEBAR_ITEMS)
     }
@@ -105,7 +107,9 @@ object CnT9Handler : ImeModeHandler {
         if (autoPlans.isEmpty()) {
             return listOf(
                 CnT9SentencePlanner.PathPlan(
-                    rank = 0, segments = stackSegs, consumedDigits = 0
+                    rank = 0,
+                    segments = stackSegs,
+                    consumedDigits = 0
                 )
             )
         }

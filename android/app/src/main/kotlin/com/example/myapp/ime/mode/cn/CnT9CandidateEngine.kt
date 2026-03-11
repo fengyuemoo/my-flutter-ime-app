@@ -20,7 +20,8 @@ class CnT9CandidateEngine(
     private val session: ComposingSession,
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
-    private val isRawCommitMode: () -> Boolean
+    private val isRawCommitMode: () -> Boolean,
+    private val userChoiceStore: CnT9UserChoiceStore? = null   // ← 新增
 ) {
     private var isExpanded: Boolean = false
     private var isSingleCharMode: Boolean = false
@@ -108,7 +109,8 @@ class CnT9CandidateEngine(
         val out = CnT9Handler.build(
             session = session,
             dictEngine = dictEngine,
-            singleCharMode = isSingleCharMode
+            singleCharMode = isSingleCharMode,
+            userChoiceStore = userChoiceStore       // ← 传入
         )
 
         applyBuildOutput(out)
@@ -147,6 +149,9 @@ class CnT9CandidateEngine(
 
         ui.setSelectedCandidateIndex(index)
         val cand = currentCandidates[index]
+
+        // ── 记录用户学习 ──────────────────────────────────────────
+        recordUserChoice(cand)
 
         if (isRawCommitMode()) {
             resetUiSelectionToTop()
@@ -228,40 +233,106 @@ class CnT9CandidateEngine(
         commitCandidateAt(idx)
     }
 
-    private fun shouldCommitPreferredCandidateOnEnter(
+    // ── 用户学习 ───────────────────────────────────────────────────
+
+    private fun recordUserChoice(cand: Candidate) {
+        val store = userChoiceStore ?: return
+        // 用候选词的 input（拼音路径）作 key
+        val pinyinKey = (cand.pinyin ?: cand.input)
+            .trim()
+            .lowercase(Locale.ROOT)
+            .replace("'", "'")   // 统一分隔符
+        store.recordChoice(pinyinKey, cand.word)
+    }
+
+    // ── 首选上屏置信度模型 ─────────────────────────────────────────
+
+    /**
+     * 计算当前首选候选的"上屏置信度"（0-100 整数分）。
+     *
+     * 置信度决定空格/回车是否自动上屏首选：
+     *  score >= THRESHOLD_AUTO_COMMIT → 自动上屏
+     *  score <  THRESHOLD_AUTO_COMMIT → 不上屏，保持候选栏展开
+     */
+    private object ConfidenceThreshold {
+        const val AUTO_COMMIT = 60
+    }
+
+    private fun computeFirstCandidateConfidence(
         preferredIndex: Int,
         cand: Candidate
-    ): Boolean {
-        if (!session.isComposing()) return false
-        if (preferredIndex > 0) return true
-        if (currentCandidates.size == 1) return true
-        if (isRawCommitMode()) return true
+    ): Int {
+        if (!session.isComposing()) return 0
 
-        if (session.rawT9Digits.isEmpty()) {
-            return session.pinyinStack.isNotEmpty()
+        var score = 0
+
+        // 1. 用户明确选择了 index > 0 的候选：完全置信
+        if (preferredIndex > 0) return 100
+
+        // 2. 候选列表只有一个：完全置信
+        if (currentCandidates.size == 1) return 100
+
+        // 3. rawCommit 模式下直接上屏
+        if (isRawCommitMode()) return 100
+
+        // 4. pinyinStack 非空，rawDigits 为空（已完全物化）→ 高置信
+        if (session.rawT9Digits.isEmpty() && session.pinyinStack.isNotEmpty()) {
+            return 90
         }
 
-        val preview = normalizedEnterPreview() ?: return false
+        // 5. rawDigits 只有 1 位：非常不确定，不自动上屏
+        val rawLen = session.rawT9Digits.length
+        if (rawLen == 1 && session.pinyinStack.isEmpty()) return 20
+
+        // 6. 基于拼音预览与候选的匹配度打分
+        val preview = normalizedEnterPreview()
         val candPreview = normalizedCandidatePreview(cand)
         val expectedSyllables = estimateCurrentComposingSyllables()
         val consumeSyllables = resolveConsumeSyllables(cand)
 
-        if (candPreview.isNotEmpty() && candPreview == preview) return true
+        if (preview != null && candPreview.isNotEmpty()) {
+            when {
+                candPreview == preview -> score += 40          // 完全匹配
+                preview.startsWith(candPreview) -> score += 25 // 前缀覆盖
+                else -> score += 5
+            }
+        }
 
-        if (candPreview.isNotEmpty() &&
-            preview.startsWith(candPreview) &&
-            cand.word.length > 1 &&
-            consumeSyllables >= min(2, expectedSyllables)
-        ) return true
+        // 7. 候选覆盖音节数门槛
+        val minRequiredSyllables = min(2, expectedSyllables)
+        if (consumeSyllables >= minRequiredSyllables && cand.word.length > 1) {
+            score += 20
+        } else if (cand.word.length == 1 && expectedSyllables == 1) {
+            score += 15
+        }
 
-        if (session.pinyinStack.isNotEmpty() &&
-            session.rawT9Digits.length <= 2 &&
-            cand.word.length > 1 &&
-            consumeSyllables >= min(2, expectedSyllables)
-        ) return true
+        // 8. pinyinStack 非空时额外加分（锁定段增加确定性）
+        if (session.pinyinStack.isNotEmpty()) {
+            score += 10
+        }
 
-        return false
+        // 9. rawDigits 较长（≥4 位）时输入意图明确，适当加分
+        if (rawLen >= 4) score += 10
+
+        // 10. 用户学习权重加分（有历史选用记录）
+        val userBoost = userChoiceStore?.getBoost(
+            pinyinKey = normalizedCandidatePreview(cand),
+            word = cand.word
+        ) ?: 0
+        if (userBoost > 0) score += minOf(userBoost / 10, 10)
+
+        return score.coerceIn(0, 100)
     }
+
+    private fun shouldCommitPreferredCandidateOnEnter(
+        preferredIndex: Int,
+        cand: Candidate
+    ): Boolean {
+        val confidence = computeFirstCandidateConfidence(preferredIndex, cand)
+        return confidence >= ConfidenceThreshold.AUTO_COMMIT
+    }
+
+    // ── 内部辅助方法（原有逻辑不变）─────────────────────────────────
 
     private fun normalizedEnterPreview(): String? {
         fun normalizeSegment(seg: String): String {
@@ -279,14 +350,12 @@ class CnT9CandidateEngine(
         val rawDigits = session.rawT9Digits
 
         val autoPlans = if (dictEngine.isLoaded && rawDigits.isNotEmpty()) {
-            CnT9SentencePlanner.planAll(          // ← 改为 CnT9SentencePlanner
+            CnT9SentencePlanner.planAll(
                 digits = rawDigits,
                 manualCuts = session.t9ManualCuts,
                 dict = dictEngine
             )
-        } else {
-            emptyList()
-        }
+        } else emptyList()
 
         val bestSegments = when {
             stackSegs.isEmpty() && autoPlans.isEmpty() -> emptyList()
@@ -328,7 +397,7 @@ class CnT9CandidateEngine(
         if (!dictEngine.isLoaded) return
 
         while (session.pinyinStack.size < targetSyllables && session.rawT9Digits.isNotEmpty()) {
-            val next = CnT9SentencePlanner.decodeNextSegment(  // ← 改为 CnT9SentencePlanner
+            val next = CnT9SentencePlanner.decodeNextSegment(
                 digits = session.rawT9Digits,
                 manualCuts = session.t9ManualCuts,
                 dict = dictEngine
