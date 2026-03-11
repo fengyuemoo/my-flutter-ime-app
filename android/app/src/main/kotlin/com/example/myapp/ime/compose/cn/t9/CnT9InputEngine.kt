@@ -29,128 +29,123 @@ class CnT9InputEngine(
         enterCommitProvider = { candidateController.getEnterCommitTextOverride() }
     )
 ) {
-    private val stateCoordinator = CnT9StateCoordinator()
+    // 状态机 + 当前状态（替代已删除的 CnT9StateCoordinator）
+    private val stateMachine = CnT9StateMachine()
+    private var currentState: CnT9SessionState = CnT9SessionState()
+    private var lastEvent: CnT9StateEvent? = null
 
     init {
-        stateCoordinator.syncFromSession(session)
+        currentState = syncStateFromSession()
     }
 
-    fun getStateSnapshot(): CnT9StateSnapshot {
-        return stateCoordinator.snapshot()
-    }
+    // ── 对外读取快照 ────────────────────────────────────────────────
+    fun getStateSnapshot(): CnT9StateSnapshot = stateMachine.snapshot(currentState, lastEvent)
 
-    private fun lastMaterializedIndexOrNull(): Int? {
-        return session.pinyinStack.lastIndex.takeIf { it >= 0 }
-    }
+    // ── 内部状态同步 ────────────────────────────────────────────────
 
-    private fun syncState(
-        focusedIndex: Int? = null,
-        fallbackEvent: CnT9StateEvent? = null
-    ) {
-        val event = focusedIndex?.let { CnT9StateEvent.SidebarSegmentFocused(it) } ?: fallbackEvent
-        stateCoordinator.syncFromSession(
-            session = session,
-            event = event
+    private fun syncStateFromSession(): CnT9SessionState {
+        return CnT9SessionState(
+            rawDigits = session.rawT9Digits,
+            committedPrefix = session.committedPrefix,
+            materializedSegments = session.pinyinStack.mapIndexed { i, syllable ->
+                CnT9MaterializedSegment(
+                    syllable = syllable,
+                    digitChunk = "",   // ComposingSession 不保存每段 digits，留空
+                    locked = true
+                )
+            },
+            focusedSegmentIndex = session.pinyinStack.lastIndex.takeIf { it >= 0 }
         )
     }
 
+    private fun applyEvent(event: CnT9StateEvent? = null) {
+        lastEvent = event
+        currentState = syncStateFromSession()
+    }
+
+    private fun lastMaterializedIndexOrNull(): Int? =
+        session.pinyinStack.lastIndex.takeIf { it >= 0 }
+
+    // ── 对外操作 ────────────────────────────────────────────────────
+
     fun focusMaterializedSegment(index: Int) {
         val changed = session.rollbackMaterializedSegmentsFrom(index)
-        val focusedIndexAfterRollback = lastMaterializedIndexOrNull()
-
-        if (changed) {
-            super.refreshCandidates()
-        }
-
-        syncState(focusedIndex = focusedIndexAfterRollback)
+        if (changed) super.refreshCandidates()
+        applyEvent(CnT9StateEvent.SidebarSegmentFocused(lastMaterializedIndexOrNull() ?: index))
     }
 
     override fun refreshCandidates() {
         super.refreshCandidates()
-        syncState()
+        applyEvent()
     }
 
     override fun clearComposing() {
         super.clearComposing()
-        stateCoordinator.markCleared()
+        applyEvent(CnT9StateEvent.Cleared)
     }
 
     override fun handleT9Input(digit: String) {
         super.handleT9Input(digit)
         val normalized = digit.filter { it in '0'..'9' }
-        syncState(
-            fallbackEvent = if (normalized.isNotEmpty()) {
-                CnT9StateEvent.DigitsAppended(normalized)
-            } else {
-                null
-            }
+        applyEvent(
+            if (normalized.isNotEmpty()) CnT9StateEvent.DigitsAppended(normalized) else null
         )
     }
 
     override fun onPinyinSidebarClick(pinyin: String) {
         super.onPinyinSidebarClick(pinyin)
-        syncState(focusedIndex = lastMaterializedIndexOrNull())
+        applyEvent(CnT9StateEvent.SidebarSegmentFocused(lastMaterializedIndexOrNull() ?: 0))
     }
 
     override fun handleBackspace() {
-        val focusedIndex = stateCoordinator.currentState()
-            .safeFocusedSegmentIndex()
+        val focusedIndex = currentState.safeFocusedSegmentIndex()
             ?.takeIf { it in session.pinyinStack.indices }
 
         if (focusedIndex != null) {
             val consumed = session.backspaceMaterializedSegmentTailDigit(focusedIndex)
             if (consumed) {
                 super.refreshCandidates()
-                syncState(
-                    focusedIndex = lastMaterializedIndexOrNull(),
-                    fallbackEvent = CnT9StateEvent.BackspacePressed
-                )
+                applyEvent(CnT9StateEvent.BackspacePressed)
                 return
             }
         }
 
         super.handleBackspace()
-        syncState(fallbackEvent = CnT9StateEvent.BackspacePressed)
+        applyEvent(CnT9StateEvent.BackspacePressed)
     }
 
     override fun handleSpaceKey() {
         val wasComposing = session.isComposing()
-        stateCoordinator.markCandidateSelectionStarted()
         super.handleSpaceKey()
-
-        val event = if (wasComposing && !session.isComposing()) {
-            CnT9StateEvent.CandidateCommitted("")
-        } else {
-            CnT9StateEvent.CandidateSelectionStarted
-        }
-
-        syncState(fallbackEvent = event)
+        applyEvent(
+            if (wasComposing && !session.isComposing())
+                CnT9StateEvent.CandidateCommitted("")
+            else
+                CnT9StateEvent.CandidateSelectionStarted
+        )
     }
 
     override fun handleEnter(ic: InputConnection?): Boolean {
         val wasComposing = session.isComposing()
         val consumed = super.handleEnter(ic)
-
         if (consumed) {
-            val event = if (wasComposing && !session.isComposing()) {
-                CnT9StateEvent.CandidateCommitted("")
-            } else {
-                CnT9StateEvent.CandidateSelectionStarted
-            }
-
-            syncState(fallbackEvent = event)
+            applyEvent(
+                if (wasComposing && !session.isComposing())
+                    CnT9StateEvent.CandidateCommitted("")
+                else
+                    CnT9StateEvent.CandidateSelectionStarted
+            )
         }
-
         return consumed
     }
 
     override fun beforeModeSwitch() {
         super.beforeModeSwitch()
-        syncState()
+        applyEvent()
     }
 
     override fun afterModeSwitch() {
         super.afterModeSwitch()
-        syncState()
+        applyEvent()
     }
 }
