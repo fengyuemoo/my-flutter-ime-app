@@ -14,7 +14,6 @@ import com.example.myapp.ime.compose.en.t9.EnT9InputEngine
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.keyboard.model.KeyboardMode
 import com.example.myapp.ime.keyboard.model.PanelState
-import com.example.myapp.ime.mode.cn.CnT9UserChoiceStore
 import com.example.myapp.ime.prefs.SymbolPrefs
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.keyboard.core.PanelType
@@ -30,11 +29,6 @@ class ImeActionDispatcher(
     private lateinit var ui: ImeUi
     private lateinit var keyboardController: KeyboardController
     private lateinit var candidateController: CandidateController
-
-    // 用户选词学习存储（惰性初始化，Context 在构造时已可用）
-    private val userChoiceStore: CnT9UserChoiceStore by lazy {
-        CnT9UserChoiceStore(context)
-    }
 
     private var symbolCategory: ImeActions.SymbolCategory = ImeActions.SymbolCategory.COMMON
     private var symbolPage: Int = 0
@@ -168,8 +162,8 @@ class ImeActionDispatcher(
             keyboardController = keyboardController,
             candidateController = candidateController,
             session = sessions.cnT9,
-            inputConnectionProvider = { inputConnectionProvider() },
-            userChoiceStore = userChoiceStore          // ← 补 2.5 步遗漏
+            inputConnectionProvider = { inputConnectionProvider() }
+            // userChoiceStore 由 ImeGraph → CandidateController → CnT9CandidateEngine 注入
         )
         enQwertyEngine = EnQwertyInputEngine(
             ui = ui,
@@ -359,20 +353,16 @@ class ImeActionDispatcher(
             val mode = mainMode()
             if (mode.isChinese && mode.useT9Layout) {
                 val cnT9Session = sessions.cnT9
-
-                // 规则：有拼音输入时 → 插入切分点（分词功能）
-                //        无任何输入时 → 直接上屏数字 "1"
+                // 有拼音输入 → 插入切分点；无输入 → 上屏数字"1"
                 if (cnT9Session.isComposing()) {
                     cnT9Session.insertT9ManualCutAtEnd()
                     engine.refreshCandidates()
                     refreshComposingView()
                 } else {
-                    // 未输入任何内容，退化为数字 1
                     inputConnectionProvider()?.commitText("1", 1)
                     refreshComposingView()
                 }
             } else {
-                // 非中文T9模式下（理论上不会触发，保险起见输出"1"）
                 inputConnectionProvider()?.commitText("1", 1)
                 refreshComposingView()
             }
