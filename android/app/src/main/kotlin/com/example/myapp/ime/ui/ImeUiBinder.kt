@@ -32,10 +32,6 @@ class ImeUiBinder(
         ui.rootView.findViewById<View>(R.id.expandpaneldel)
             .setOnClickListener { imeActions.handleBackspace() }
 
-        ui.setCnT9SegmentClickListener { index, syllable ->
-            imeActions.onPinyinSidebarSegmentClick(index, syllable)
-        }
-
         // First time bind + keep refreshed on mode changes.
         refreshExpandedPanelRightButtons(keyboardController.getMainMode())
         hookModeChangeRefresh()
@@ -60,7 +56,6 @@ class ImeUiBinder(
         val btnFilter = ui.getFilterButton()
 
         if (mode.isChinese) {
-            // CN: keep original behaviors.
             ui.setExpandedPanelFilterOverride(null)
 
             btnReenter.text = "重输"
@@ -69,7 +64,6 @@ class ImeUiBinder(
             uiStateActions.syncFilterButtonState()
             btnFilter.setOnClickListener { uiStateActions.toggleSingleCharMode() }
         } else {
-            // EN (Qwerty/T9): Clear + Enter.
             btnReenter.text = "Clear"
             btnReenter.setOnClickListener { imeActions.clearComposing() }
 
