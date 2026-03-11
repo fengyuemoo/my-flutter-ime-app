@@ -22,7 +22,9 @@ class CnT9CandidateEngine(
     private val clearComposing: () -> Unit,
     private val isRawCommitMode: () -> Boolean,
     private val userChoiceStore: CnT9UserChoiceStore? = null,
-    private val contextWindow: CnT9ContextWindow? = null
+    private val contextWindow: CnT9ContextWindow? = null,
+    // 供 sidebar 消歧：返回当前焦点音节下标，-1 表示无焦点
+    private val focusedSegmentIndexProvider: () -> Int = { -1 }
 ) {
     private var isExpanded: Boolean = false
     private var isSingleCharMode: Boolean = false
@@ -112,7 +114,8 @@ class CnT9CandidateEngine(
             dictEngine = dictEngine,
             singleCharMode = isSingleCharMode,
             userChoiceStore = userChoiceStore,
-            contextWindow = contextWindow
+            contextWindow = contextWindow,
+            focusedSegmentIndex = focusedSegmentIndexProvider()
         )
 
         applyBuildOutput(out)
@@ -136,7 +139,6 @@ class CnT9CandidateEngine(
                         )
                     )
                 }
-                // 刷新 UI 以展示追加的英文候选
                 ui.setCandidates(currentCandidates)
             }
         }

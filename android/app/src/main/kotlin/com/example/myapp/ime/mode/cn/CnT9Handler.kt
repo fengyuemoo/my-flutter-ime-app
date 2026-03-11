@@ -15,19 +15,23 @@ object CnT9Handler : ImeModeHandler {
         session: ComposingSession,
         dictEngine: Dictionary,
         singleCharMode: Boolean
-    ): ImeModeHandler.Output = build(session, dictEngine, singleCharMode, null, null)
+    ): ImeModeHandler.Output = build(session, dictEngine, singleCharMode, null, null, -1)
 
     fun build(
         session: ComposingSession,
         dictEngine: Dictionary,
         singleCharMode: Boolean,
         userChoiceStore: CnT9UserChoiceStore?,
-        contextWindow: CnT9ContextWindow?
+        contextWindow: CnT9ContextWindow?,
+        // 焦点音节下标；-1 表示无焦点，sidebar 退化为用 rawDigits 查询
+        focusedSegmentIndex: Int = -1
     ): ImeModeHandler.Output {
         val rawDigits = session.rawT9Digits
         val stackSegs = session.pinyinStack.map { it.lowercase(Locale.ROOT) }
 
-        val sidebar = buildSidebar(dictEngine, rawDigits)
+        // ── sidebar：有焦点时用焦点段 digitChunk，否则用 rawDigits ──
+        val sidebarDigits = resolveSidebarDigits(session, focusedSegmentIndex, rawDigits)
+        val sidebar = buildSidebar(dictEngine, sidebarDigits)
 
         val autoPlans = if (dictEngine.isLoaded && rawDigits.isNotEmpty()) {
             CnT9SentencePlanner.planAll(
@@ -69,7 +73,6 @@ object CnT9Handler : ImeModeHandler {
             if (unicodeFallbacks.isNotEmpty()) {
                 finalList.addAll(unicodeFallbacks)
             } else {
-                // 最终兜底：直出原始数字串（保证用户不会卡死）
                 finalList.add(
                     Candidate(
                         word = rawDigits,
@@ -93,15 +96,33 @@ object CnT9Handler : ImeModeHandler {
         )
     }
 
-    private fun buildSidebar(dictEngine: Dictionary, rawDigits: String): List<String> {
-        if (!dictEngine.isLoaded || rawDigits.isEmpty()) return emptyList()
+    /**
+     * 决定 sidebar 应该基于哪段 digits 来查询拼音可能性。
+     * - 有焦点音节 → 用该音节的 digitChunk（消歧模式）
+     * - 无焦点 → 用 rawDigits 前缀（正常输入模式）
+     */
+    private fun resolveSidebarDigits(
+        session: ComposingSession,
+        focusedSegmentIndex: Int,
+        rawDigits: String
+    ): String {
+        if (focusedSegmentIndex < 0) return rawDigits
 
-        val fromDict = dictEngine.getPinyinPossibilities(rawDigits)
+        val segs = session.t9MaterializedSegments
+        val seg = segs.getOrNull(focusedSegmentIndex) ?: return rawDigits
+        val digitChunk = seg.digitChunk.filter { it in '0'..'9' }
+        return digitChunk.ifEmpty { rawDigits }
+    }
+
+    private fun buildSidebar(dictEngine: Dictionary, sidebarDigits: String): List<String> {
+        if (!dictEngine.isLoaded || sidebarDigits.isEmpty()) return emptyList()
+
+        val fromDict = dictEngine.getPinyinPossibilities(sidebarDigits)
             .map { it.lowercase(Locale.ROOT).trim() }
             .filter { it.isNotEmpty() }
 
         return (fromDict + com.example.myapp.dict.impl.T9Lookup
-            .charsFromDigit(rawDigits.first())
+            .charsFromDigit(sidebarDigits.first())
             .map { it.lowercase(Locale.ROOT) })
             .distinct()
             .take(MAX_SIDEBAR_ITEMS)
