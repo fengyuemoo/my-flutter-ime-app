@@ -41,7 +41,6 @@ class KeyboardController(
     var themeModeProvider: (() -> Int)? = null
     var englishPredictEnabledProvider: (() -> Boolean)? = null
 
-    // NEW: Font config provider (family + scale)
     var fontConfigProvider: (() -> Pair<String, Float>)? = null
 
     val mode: KeyboardMode get() = _mode
@@ -97,12 +96,27 @@ class KeyboardController(
     fun isPanelOpen(): Boolean = getPanelState() is PanelState.Open
     fun isRawCommitMode(): Boolean = currentKeyboard is RawCommitMode
 
-    fun updateSidebar(items: List<String>, title: String? = null) {
-    val kb = currentKeyboard
-    if (kb is ISidebarHost) {
-        kb.updateSideBar(items, title)
+    /**
+     * 更新左侧音节 sidebar。
+     *
+     * @param syllables       sidebar 展示的拼音音节列表
+     * @param title           消歧模式下焦点段的数字标题（如 "94664"）；null = 正常输入模式
+     * @param resegmentPaths  焦点段所有合法切分路径，供「重切分」UI 使用；正常模式为空列表
+     */
+    fun updateSidebar(
+        syllables: List<String>,
+        title: String? = null,
+        resegmentPaths: List<List<String>> = emptyList()
+    ) {
+        val kb = currentKeyboard
+        if (kb is ISidebarHost) {
+            kb.updateSideBar(
+                items = syllables,
+                title = title,
+                resegmentPaths = resegmentPaths
+            )
+        }
     }
-}
 
     private fun resolveMainKeyboard(isChinese: Boolean, useT9Layout: Boolean): IKeyboardMode {
         return when {
@@ -176,7 +190,6 @@ class KeyboardController(
 
     fun applyTheme(themeMode: Int) {
         currentKeyboard?.applyTheme(themeMode)
-        // NEW: 主题应用后也要保持当前字体/字号选择
         applyFontIfAny()
     }
 
@@ -189,7 +202,6 @@ class KeyboardController(
         val themeMode = themeModeProvider?.invoke() ?: 0
         target.applyTheme(themeMode)
 
-        // NEW: 每次键盘切换后应用用户字体/字号
         applyFontIfAny()
 
         host.onToolbarUpdate()
