@@ -24,8 +24,9 @@ class CnT9Keyboard(
     private val puncSidebar: LinearLayout =
         rootView.findViewById(R.id.t9puncsidebar)
 
+    // 修复：onPinyinSidebarClick 第二个参数 t9Code 留空（adapter 无法感知 t9Code）
     private val adapterSidebar = SidePinyinAdapter { pinyin ->
-        this.ime.onPinyinSidebarClick(pinyin)
+        ime.onPinyinSidebarClick(pinyin, t9Code = "")
     }
 
     init {
@@ -39,25 +40,30 @@ class CnT9Keyboard(
         rootView.findViewById<Button>(R.id.t9btnlang)?.text = "中"
         rootView.findViewById<Button>(R.id.t9btnengpredict)?.visibility = View.GONE
 
-        rootView.findViewById<Button>(R.id.t9punccomma)?.text = "，"
-        rootView.findViewById<Button>(R.id.t9puncperiod)?.text = "。"
+        rootView.findViewById<Button>(R.id.t9punccomma)?.text    = "，"
+        rootView.findViewById<Button>(R.id.t9puncperiod)?.text   = "。"
         rootView.findViewById<Button>(R.id.t9puncquestion)?.text = "？"
-        rootView.findViewById<Button>(R.id.t9puncexclaim)?.text = "！"
+        rootView.findViewById<Button>(R.id.t9puncexclaim)?.text  = "！"
     }
 
-    override fun updateSideBar(items: List<String>) {
-        // CN-T9 sidebar items are pinyin segments / initials / letters
+    // 修复：签名对齐 ISidebarHost（增加 title、resegmentPaths 参数）
+    override fun updateSideBar(
+        items: List<String>,
+        title: String?,
+        resegmentPaths: List<List<String>>
+    ) {
         updatePinyinSidebarInternal(items)
+        // title / resegmentPaths 当前暂不渲染，预留给后续消歧 UI 扩展
     }
 
     private fun updatePinyinSidebarInternal(pinyins: List<String>) {
         if (pinyins.isEmpty()) {
             recyclerSidebar.visibility = View.GONE
-            puncSidebar.visibility = View.VISIBLE
+            puncSidebar.visibility     = View.VISIBLE
             adapterSidebar.submitList(emptyList())
         } else {
             recyclerSidebar.visibility = View.VISIBLE
-            puncSidebar.visibility = View.GONE
+            puncSidebar.visibility     = View.GONE
             adapterSidebar.submitList(pinyins)
         }
     }
@@ -66,29 +72,29 @@ class CnT9Keyboard(
         when (button.id) {
             R.id.t9btnlang -> ime.switchToEnglishMode()
 
-            R.id.t9btn123 -> ime.switchToNumericMode()
-            R.id.t9btnsym -> ime.openSymbolPanel()
+            R.id.t9btn123  -> ime.switchToNumericMode()
+            R.id.t9btnsym  -> ime.openSymbolPanel()
 
             // 1 = 分词（切分点）：不再把 "1" 混入 digits
-            R.id.t9key1 -> ime.handleSpecialKey("分词")
+            R.id.t9key1    -> ime.handleSpecialKey("分词")
 
-            R.id.t9key2 -> ime.handleT9Input("2")
-            R.id.t9key3 -> ime.handleT9Input("3")
-            R.id.t9key4 -> ime.handleT9Input("4")
-            R.id.t9key5 -> ime.handleT9Input("5")
-            R.id.t9key6 -> ime.handleT9Input("6")
-            R.id.t9key7 -> ime.handleT9Input("7")
-            R.id.t9key8 -> ime.handleT9Input("8")
-            R.id.t9key9 -> ime.handleT9Input("9")
+            R.id.t9key2    -> ime.handleT9Input("2")
+            R.id.t9key3    -> ime.handleT9Input("3")
+            R.id.t9key4    -> ime.handleT9Input("4")
+            R.id.t9key5    -> ime.handleT9Input("5")
+            R.id.t9key6    -> ime.handleT9Input("6")
+            R.id.t9key7    -> ime.handleT9Input("7")
+            R.id.t9key8    -> ime.handleT9Input("8")
+            R.id.t9key9    -> ime.handleT9Input("9")
 
-            R.id.t9key0 -> ime.commitText("0")
-            R.id.t9space -> ime.handleSpaceKey()
+            R.id.t9key0    -> ime.commitText("0")
+            R.id.t9space   -> ime.handleSpaceKey()
             R.id.t9btnreenter -> ime.clearComposing()
 
-            R.id.t9punccomma -> ime.commitText("，")
-            R.id.t9puncperiod -> ime.commitText("。")
+            R.id.t9punccomma    -> ime.commitText("，")
+            R.id.t9puncperiod   -> ime.commitText("。")
             R.id.t9puncquestion -> ime.commitText("？")
-            R.id.t9puncexclaim -> ime.commitText("！")
+            R.id.t9puncexclaim  -> ime.commitText("！")
 
             else -> {
                 if (button.text.toString().contains("⏎")) {
