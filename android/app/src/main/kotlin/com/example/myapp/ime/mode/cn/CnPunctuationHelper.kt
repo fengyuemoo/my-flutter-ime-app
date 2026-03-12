@@ -5,43 +5,43 @@ package com.example.myapp.ime.mode.cn
  *
  * 职责：
  *  1. 半角 → 全角标点转换（中文模式下自动上屏全角）
- *  2. 提供"快捷标点候选"列表（候选栏头部固定展示）
- *  3. 提供"是否为标点键"的判断
+ *  2. 提供「快捷标点候选」列表（候选栏头部固定展示）
+ *  3. 提供「是否为标点键」的判断
  */
 object CnPunctuationHelper {
 
     /**
-     * 半角 → 全角映射表。
+     * 半角 → 全角映射表（Char → String，因部分全角符号由多字符组成）。
      * 仅覆盖中文输入中最常见的标点，不做过度转换。
      */
-    private val HALF_TO_FULL = mapOf(
-        '.' to '。',
-        ',' to '，',
-        '!' to '！',
-        '?' to '？',
-        ';' to '；',
-        ':' to '：',
-        '"' to '\u201C',   // 左双引号 "
-        '\'' to '\u2018',  // 左单引号 '
-        '(' to '（',
-        ')' to '）',
-        '[' to '【',
-        ']' to '】',
-        '<' to '《',
-        '>' to '》',
-        '-' to '——',
-        '_' to '＿',
-        '~' to '～',
-        '/' to '、',
-        '\\' to '、',
-        '^' to '……',
-        '&' to '＆',
-        '@' to '＠',
-        '#' to '＃',
-        '%' to '％',
-        '*' to '×',
-        '+' to '＋',
-        '=' to '＝'
+    private val HALF_TO_FULL: Map<Char, String> = mapOf(
+        '.'  to "。",
+        ','  to "，",
+        '!'  to "！",
+        '?'  to "？",
+        ';'  to "；",
+        ':'  to "：",
+        '"'  to "\u201C",   // 左双引号 "
+        '\'' to "\u2018",   // 左单引号 '
+        '('  to "（",
+        ')'  to "）",
+        '['  to "【",
+        ']'  to "】",
+        '<'  to "《",
+        '>'  to "》",
+        '-'  to "——",
+        '_'  to "＿",
+        '~'  to "～",
+        '/'  to "、",
+        '\\' to "、",
+        '^'  to "……",
+        '&'  to "＆",
+        '@'  to "＠",
+        '#'  to "＃",
+        '%'  to "％",
+        '*'  to "×",
+        '+'  to "＋",
+        '='  to "＝"
     )
 
     /**
@@ -51,9 +51,9 @@ object CnPunctuationHelper {
     fun toFullWidth(input: String): String {
         if (input.isEmpty()) return input
         if (input.length == 1) {
-            return HALF_TO_FULL[input[0]]?.toString() ?: input
+            return HALF_TO_FULL[input[0]] ?: input
         }
-        return input.map { HALF_TO_FULL[it] ?: it }.joinToString("")
+        return input.map { HALF_TO_FULL[it] ?: it.toString() }.joinToString("")
     }
 
     /**
@@ -65,14 +65,11 @@ object CnPunctuationHelper {
 
     /**
      * 快捷标点候选列表（候选栏在 composing 状态下头部固定展示区域）。
-     * 仅在中文模式 composing 时提供，用于替代"候选栏为空"的情况。
-     *
-     * 注意：这里仅提供列表定义，展示时机由 CnT9CandidateEngine 控制。
      */
     val QUICK_PUNCTS: List<String> = listOf(
         "。", "，", "！", "？", "；", "：",
         "——", "……", "《", "》", "【", "】",
-        "（", "）", "\u201C", "\u201D"   // " "
+        "（", "）", "\u201C", "\u201D"
     )
 
     /**
