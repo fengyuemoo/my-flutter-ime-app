@@ -20,7 +20,7 @@ object CnT9Handler : ImeModeHandler {
         singleCharMode = singleCharMode,
         userChoiceStore = null,
         contextWindow = null,
-        focusedSegmentIndex = -1
+        sidebarState = null
     )
 
     fun build(
@@ -29,25 +29,25 @@ object CnT9Handler : ImeModeHandler {
         singleCharMode: Boolean,
         userChoiceStore: CnT9UserChoiceStore?,
         contextWindow: CnT9ContextWindow?,
-        focusedSegmentIndex: Int = -1
+        sidebarState: CnT9SidebarState?
     ): ImeModeHandler.Output {
         val rawDigits = session.rawT9Digits
         val stackSegs = session.pinyinStack.map { it.lowercase(Locale.ROOT) }
+        val focusedSegmentIndex = sidebarState?.focusedSegmentIndex ?: -1
 
-        // ── Sidebar ────────────────────────────────────────────────
-        val sidebarDigits = CnT9SidebarBuilder.resolveSidebarDigits(
-            session = session,
-            focusedSegmentIndex = focusedSegmentIndex,
-            rawDigits = rawDigits
-        )
-        val sidebar = CnT9SidebarBuilder.buildSidebar(dictEngine, sidebarDigits)
-        val sidebarTitle = CnT9SidebarBuilder.buildSidebarTitle(
+        // ── Sidebar（一次性构建）────────────────────────────────────────
+        val sidebarResult = CnT9SidebarBuilder.build(
+            dictEngine = dictEngine,
             session = session,
             focusedSegmentIndex = focusedSegmentIndex,
             rawDigits = rawDigits
         )
 
-        // ── 候选规划 ────────────────────────────────────────────────
+        // ── 锁定段信息 ──────────────────────────────────────────────────
+        // 已锁定段不参与 SentencePlanner 重算，只重算锁后的 rawDigits 部分
+        val lockedSegmentIndices = sidebarState?.lockMap?.lockedSnapshot ?: emptyList()
+
+        // ── 候选规划 ────────────────────────────────────────────────────
         val autoPlans = if (dictEngine.isLoaded && rawDigits.isNotEmpty()) {
             CnT9SentencePlanner.planAll(
                 digits = rawDigits,
@@ -56,7 +56,7 @@ object CnT9Handler : ImeModeHandler {
             )
         } else emptyList()
 
-        val plans = buildPlans(stackSegs, autoPlans)
+        val plans = buildPlans(stackSegs, autoPlans, lockedSegmentIndices)
 
         val queried = if (dictEngine.isLoaded && plans.isNotEmpty()) {
             CnT9CandidateFilter.queryCandidates(dictEngine, plans)
@@ -65,7 +65,7 @@ object CnT9Handler : ImeModeHandler {
         val filtered = if (singleCharMode) queried.filter { it.word.length == 1 } else queried
 
         val finalList = ArrayList<Candidate>(filtered)
-        val lockedSegmentCount = stackSegs.size
+        val lockedSegmentCount = lockedSegmentIndices.size.coerceAtLeast(stackSegs.size)
 
         val scoreCache = CnT9CandidateScorer.buildScoreCache(
             candidates = finalList,
@@ -82,7 +82,7 @@ object CnT9Handler : ImeModeHandler {
             finalList.subList(MAX_DISPLAY_CANDIDATES, finalList.size).clear()
         }
 
-        // Fallback：词库查无结果时，提供 Unicode CJK 兜底
+        // ── Fallback：词库查无结果时提供 Unicode CJK 兜底 ───────────────
         if (finalList.isEmpty() && rawDigits.isNotEmpty()) {
             val fallbacks = CnT9UnicodeFallback.buildFallbackCandidates(rawDigits, dictEngine)
             if (fallbacks.isNotEmpty()) {
@@ -100,23 +100,37 @@ object CnT9Handler : ImeModeHandler {
 
         return ImeModeHandler.Output(
             candidates = finalList,
-            pinyinSidebar = sidebar,
-            sidebarTitle = sidebarTitle,          // ← 新增
+            pinyinSidebar = sidebarResult.syllables,
+            sidebarTitle = sidebarResult.title,
+            resegmentPaths = sidebarResult.resegmentPaths,
             composingPreviewText = null,
             enterCommitText = null
         )
     }
 
+    // ── 私有辅助 ─────────────────────────────────────────────────────────
+
+    /**
+     * 构建候选规划列表。
+     *
+     * 锁定策略：
+     *  - 已锁定的 stackSegs 段不参与重算，直接作为前缀保留
+     *  - autoPlans 接在锁定段之后拼接
+     *  - 未锁定的 stackSegs 段同样作为前缀（与原逻辑一致）
+     */
     private fun buildPlans(
         stackSegs: List<String>,
-        autoPlans: List<CnT9SentencePlanner.PathPlan>
+        autoPlans: List<CnT9SentencePlanner.PathPlan>,
+        lockedSegmentIndices: List<Int>
     ): List<CnT9SentencePlanner.PathPlan> {
         if (stackSegs.isEmpty() && autoPlans.isEmpty()) return emptyList()
 
         if (autoPlans.isEmpty()) {
             return listOf(
                 CnT9SentencePlanner.PathPlan(
-                    rank = 0, segments = stackSegs, consumedDigits = 0
+                    rank = 0,
+                    segments = stackSegs,
+                    consumedDigits = 0
                 )
             )
         }
