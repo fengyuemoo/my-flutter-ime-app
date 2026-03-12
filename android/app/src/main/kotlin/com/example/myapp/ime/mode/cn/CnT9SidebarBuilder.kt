@@ -9,12 +9,13 @@ import java.util.Locale
  * CN-T9 左侧音节栏（sidebar）构建器。
  *
  * 职责：
- *  1. resolveSidebarDigits — 根据焦点段决定用哪段 digits 来查询 sidebar
- *  2. buildSidebar         — 用给定 digits 从字典查拼音可能性，合并 T9 字母候选
+ *  1. resolveSidebarDigits  — 根据焦点段决定用哪段 digits 查询 sidebar
+ *  2. buildSidebar          — 从字典查拼音可能性列表
+ *  3. buildSidebarTitle     — 生成焦点段的数字标题（如 "94664"），供 UI 展示
  *
- * 规则来源（交互规则清单）：
- *  - 焦点音节的职责：同一数字段可对应 shi/si/sh 等候选音节集合
- *  - 音节栏的元素：按"音节"展示，不是按单字母
+ * 修正（相比旧版）：
+ *  - 去掉了 fromT9 单字母兜底（它只反映第一位按键，实际是噪音）
+ *  - sidebar 内容只来自 dictEngine.getPinyinPossibilities，保证展示的是真实拼音
  */
 object CnT9SidebarBuilder {
 
@@ -22,8 +23,8 @@ object CnT9SidebarBuilder {
 
     /**
      * 决定 sidebar 应该基于哪段 digits 来查询拼音可能性。
-     *  - 有焦点音节 → 用该音节的 digitChunk（消歧模式）
-     *  - 无焦点     → 用 rawDigits 前缀（正常输入模式）
+     *  - 有焦点段（index >= 0）→ 用该物化段的 digitChunk
+     *  - 无焦点               → 用 rawDigits（正常输入模式，展示前段拼音）
      */
     fun resolveSidebarDigits(
         session: ComposingSession,
@@ -40,20 +41,38 @@ object CnT9SidebarBuilder {
 
     /**
      * 用给定 digits 构建 sidebar 候选拼音列表。
-     * 结合字典拼音可能性与 T9 键位字母，去重后取前 MAX_SIDEBAR_ITEMS 个。
+     * 完全依赖字典的拼音可能性（去掉了噪音单字母兜底）。
      */
     fun buildSidebar(dictEngine: Dictionary, sidebarDigits: String): List<String> {
         if (!dictEngine.isLoaded || sidebarDigits.isEmpty()) return emptyList()
 
-        val fromDict = dictEngine.getPinyinPossibilities(sidebarDigits)
+        return dictEngine.getPinyinPossibilities(sidebarDigits)
             .map { it.lowercase(Locale.ROOT).trim() }
             .filter { it.isNotEmpty() }
-
-        val fromT9 = T9Lookup.charsFromDigit(sidebarDigits.first())
-            .map { it.lowercase(Locale.ROOT) }
-
-        return (fromDict + fromT9)
             .distinct()
             .take(MAX_SIDEBAR_ITEMS)
     }
+
+    /**
+     * 生成焦点段的数字标题，供 UI 在 sidebar 顶部展示（让用户确认在消哪一段）。
+     * 若无焦点（正常输入模式）则返回 null。
+     */
+    fun buildSidebarTitle(
+        session: ComposingSession,
+        focusedSegmentIndex: Int,
+        rawDigits: String
+    ): String? {
+        if (focusedSegmentIndex < 0) return null
+
+        val segs = session.t9MaterializedSegments
+        val seg = segs.getOrNull(focusedSegmentIndex) ?: return null
+        val digitChunk = seg.digitChunk.filter { it in '0'..'9' }
+        return digitChunk.ifEmpty { null }
+    }
+
+    /**
+     * 判断 sidebar 当前是否处于消歧模式（有焦点段）。
+     */
+    fun isInDisambiguationMode(focusedSegmentIndex: Int): Boolean =
+        focusedSegmentIndex >= 0
 }
