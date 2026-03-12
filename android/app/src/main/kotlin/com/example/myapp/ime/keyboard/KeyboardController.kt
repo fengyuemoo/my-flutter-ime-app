@@ -97,12 +97,12 @@ class KeyboardController(
     fun isPanelOpen(): Boolean = getPanelState() is PanelState.Open
     fun isRawCommitMode(): Boolean = currentKeyboard is RawCommitMode
 
-    fun updateSidebar(items: List<String>) {
-        val kb = currentKeyboard
-        if (kb is ISidebarHost) {
-            kb.updateSideBar(items)
-        }
+    fun updateSidebar(items: List<String>, title: String? = null) {
+    val kb = currentKeyboard
+    if (kb is ISidebarHost) {
+        kb.updateSideBar(items, title)
     }
+}
 
     private fun resolveMainKeyboard(isChinese: Boolean, useT9Layout: Boolean): IKeyboardMode {
         return when {
