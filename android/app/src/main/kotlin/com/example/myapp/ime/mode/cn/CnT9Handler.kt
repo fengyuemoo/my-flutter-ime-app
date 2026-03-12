@@ -1,6 +1,7 @@
 package com.example.myapp.ime.mode.cn
 
 import com.example.myapp.dict.api.Dictionary
+import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.mode.ImeModeHandler
 import java.util.Locale
@@ -18,7 +19,7 @@ import java.util.Locale
  *  - 路径规划          → CnT9SentencePlanner
  *  - 候选过滤          → CnT9CandidateFilter
  *  - 候选评分          → CnT9CandidateScorer
- *  - Unicode 兜底      → CnT9UnicodeFallback
+ *  - Unicode/生僻字兜底 → CnT9UnicodeFallback
  */
 object CnT9Handler : ImeModeHandler {
 
@@ -84,14 +85,18 @@ object CnT9Handler : ImeModeHandler {
             finalList.subList(MAX_DISPLAY_CANDIDATES, finalList.size).clear()
         }
 
-        // ── Fallback：词库查无结果 ────────────────────────────────
+        // ── Fallback：词库查无结果时的三级生僻字兜底 ─────────────
         if (finalList.isEmpty() && rawDigits.isNotEmpty()) {
-            val unicodeFallbacks = CnT9UnicodeFallback.buildFallbackCandidates(rawDigits, dictEngine)
-            if (unicodeFallbacks.isNotEmpty()) {
-                finalList.addAll(unicodeFallbacks)
+            val fallbacks = CnT9UnicodeFallback.buildFallbackCandidates(
+                rawDigits = rawDigits,
+                dictEngine = dictEngine,
+                plans = plans
+            )
+            if (fallbacks.isNotEmpty()) {
+                finalList.addAll(fallbacks)
             } else {
                 finalList.add(
-                    com.example.myapp.dict.model.Candidate(
+                    Candidate(
                         word = rawDigits, input = rawDigits, priority = 0,
                         matchedLength = 0, pinyinCount = 0,
                         pinyin = null, syllables = 0, acronym = null
