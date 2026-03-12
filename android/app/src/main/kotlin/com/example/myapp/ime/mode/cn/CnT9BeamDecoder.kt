@@ -41,10 +41,6 @@ internal object CnT9BeamDecoder {
 
     // ── 公开入口 ──────────────────────────────────────────────────
 
-    /**
-     * 按手动切分点把数字串拆分为若干子段。
-     * 切分点必须在 1..(digits.length-1) 之间，超界或重复的切分点会被忽略。
-     */
     fun splitDigitsByCuts(digits: String, manualCuts: List<Int>): List<String> {
         if (digits.isEmpty()) return emptyList()
 
@@ -67,10 +63,6 @@ internal object CnT9BeamDecoder {
         return out
     }
 
-    /**
-     * 对单段数字串做 Beam Search，返回所有到达终止位置的有效解码路径。
-     * 结果按分数降序，去重，最多 maxPlanCount 条。
-     */
     fun decodePart(
         part: String,
         dict: Dictionary,
@@ -96,9 +88,9 @@ internal object CnT9BeamDecoder {
                     val nextPos = (state.pos + choice.codeLen).coerceAtMost(part.length)
                     next.add(
                         DecodeState(
-                            pos = nextPos,
+                            pos      = nextPos,
                             segments = state.segments + choice.text,
-                            score = state.score + choice.score
+                            score    = state.score + choice.score
                         )
                     )
                 }
@@ -127,9 +119,6 @@ internal object CnT9BeamDecoder {
             .take(maxPlanCount)
     }
 
-    /**
-     * 对当前剩余数字串的前缀，查字典拼音可能性并打分，返回有序 Choice 列表。
-     */
     fun buildChoices(digits: String, dict: Dictionary): List<Choice> {
         if (digits.isEmpty()) return emptyList()
 
@@ -173,8 +162,9 @@ internal object CnT9BeamDecoder {
 
     // ── 工具函数 ──────────────────────────────────────────────────
 
+    // 修复：传 Char 而非 String
     private fun defaultLetterForDigit(d: Char): String =
-        T9Lookup.charsFromDigit(d.toString())
+        T9Lookup.charsFromDigit(d)
             .firstOrNull()
             ?.lowercase(Locale.ROOT)
             ?.trim()

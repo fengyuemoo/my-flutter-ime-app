@@ -91,17 +91,16 @@ class ImeGraph(
             val userChoiceStore = CnT9UserChoiceStore(context)
             val contextWindow = CnT9ContextWindow()
 
+            // 修复：删除不存在的 focusedT9SegmentIndexProvider 参数
             val candidateController = CandidateController(
-                ui = ui,
+                ui                 = ui,
                 keyboardController = keyboardController,
-                dictEngine = dictManager.dictionary,
-                sessions = sessions,
-                commitRaw = { text -> inputConnectionProvider()?.commitText(text, 1) },
-                clearComposing = { dispatcher.clearComposing() },
-                userChoiceStore = userChoiceStore,
-                contextWindow = contextWindow,
-                // 延迟读取：dispatcher.attach() 后 cnT9Engine 才初始化，lambda 保证每次调用时才解析
-                focusedT9SegmentIndexProvider = { dispatcher.getCnT9FocusedSegmentIndex() }
+                dictEngine         = dictManager.dictionary,
+                sessions           = sessions,
+                commitRaw          = { text -> inputConnectionProvider()?.commitText(text, 1) },
+                clearComposing     = { dispatcher.clearComposing() },
+                userChoiceStore    = userChoiceStore,
+                contextWindow      = contextWindow
             )
 
             val toolbarController = ToolbarController(
