@@ -18,8 +18,8 @@ import com.example.myapp.ime.ui.ImeUi
  *  3. 处理空格键与 Enter 首选上屏
  *  4. 管理 UI 展开/收起、单字过滤模式
  *  5. 管理 sidebar 焦点与锁定（CnT9SidebarState）
- *     - onSidebarItemClick   → 用户点选一个拼音音节（锁定 + 前进焦点）
- *     - onSegmentFocused     → 用户点击已物化段（rollback + 清锁 + 设焦）
+ *  6. Idle 状态下注入标点快捷候选
+ *  7. 混输模式（英文/URL/邮箱）候选插入头部
  *
  * 不包含：
  *  - 拼音切分工具函数    → CnT9PinyinSplitter
@@ -27,7 +27,9 @@ import com.example.myapp.ime.ui.ImeUi
  *  - 首选置信度模型      → CnT9ConfidenceModel
  *  - sidebar 内容构建    → CnT9SidebarBuilder
  *  - sidebar 焦点状态    → CnT9SidebarState
- *  - 段锁定状态         → CnT9SegmentLockMap（通过 sidebarState.lockMap 访问）
+ *  - 段锁定状态         → CnT9SegmentLockMap
+ *  - 标点候选数据        → CnT9PunctuationCandidates
+ *  - 混输检测           → CnT9MixedInputDetector
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -39,7 +41,8 @@ class CnT9CandidateEngine(
     private val isRawCommitMode: () -> Boolean,
     private val userChoiceStore: CnT9UserChoiceStore? = null,
     private val contextWindow: CnT9ContextWindow? = null,
-    private val sidebarState: CnT9SidebarState = CnT9SidebarState()
+    private val sidebarState: CnT9SidebarState = CnT9SidebarState(),
+    private val isFullWidthPunct: () -> Boolean = { true }
 ) {
     private var isExpanded: Boolean = false
     private var isSingleCharMode: Boolean = false
@@ -84,14 +87,6 @@ class CnT9CandidateEngine(
 
     /**
      * 用户在 sidebar 点选了一个拼音音节（如 "zhong"）。
-     *
-     * 流程：
-     *  1. session.onPinyinSidebarClick() → 把 (pinyin, t9Code) 物化进 pinyinStack
-     *  2. sidebarState.advanceFocus()   → 锁定当前段，焦点自动前进（或回到正常模式）
-     *  3. updateCandidates()            → 刷新候选区
-     *
-     * @param pinyin  用户点选的拼音字符串（如 "zhong"）
-     * @param t9Code  该拼音对应的 T9 数字串（如 "94664"），用于确定消费多少 rawDigits
      */
     fun onSidebarItemClick(pinyin: String, t9Code: String) {
         if (pinyin.isEmpty()) return
@@ -102,17 +97,6 @@ class CnT9CandidateEngine(
 
     /**
      * 用户点击了已物化的拼音段（触发重切分 / 消歧）。
-     *
-     * 流程：
-     *  1. sidebarState.clearLocksFrom(index)              → 清除该段及之后所有失效锁定
-     *  2. session.rollbackMaterializedSegmentsFrom(index) → 把该段及后续段还原为 rawDigits
-     *  3. sidebarState.setFocus(index)                    → 焦点设到该段位置
-     *  4. updateCandidates()                              → 刷新 sidebar 和候选区
-     *
-     * 注意：clearLocksFrom 必须在 rollback 之前调用，
-     * 确保 lockMap 里该 index 之后的锁定在物化段消失前就被清除。
-     *
-     * @param segmentIndex 被点击的物化段下标（0-based）
      */
     fun onSegmentFocused(segmentIndex: Int) {
         if (segmentIndex < 0) return
@@ -124,15 +108,6 @@ class CnT9CandidateEngine(
 
     // ── 退格（含焦点同步）─────────────────────────────────────────
 
-    /**
-     * 处理退格键，同时同步 sidebarState 焦点与锁定。
-     *
-     * 规则（对应规则清单「音节栏的回退规则」）：
-     *  - 有 rawDigits → 删一个 digit，焦点维持当前状态
-     *  - rawDigits 为空、有物化段 → 弹出最后一个物化段
-     *    → 通知 sidebarState.onSegmentRemoved() 同步下移锁定索引
-     *  - 全空 → clearAll（清焦点 + 清全部锁定）
-     */
     fun handleBackspace(): Boolean {
         val hadRawDigits = session.rawT9Digits.isNotEmpty()
         val stackSizeBefore = session.pinyinStack.size
@@ -143,12 +118,10 @@ class CnT9CandidateEngine(
             !session.isComposing() -> {
                 sidebarState.clearAll()
             }
-            // 原来有物化段且退格弹出了一段
             !hadRawDigits && session.pinyinStack.size < stackSizeBefore -> {
                 val removedIndex = session.pinyinStack.size
                 sidebarState.onSegmentRemoved(removedIndex)
             }
-            // rawDigits 已空但仍在消歧模式 → 退一格焦点
             sidebarState.isDisambiguating && session.rawT9Digits.isEmpty() -> {
                 sidebarState.retreatFocus()
             }
@@ -164,19 +137,28 @@ class CnT9CandidateEngine(
         syncFilterButton()
         currentCandidates.clear()
 
+        // ── S0 Idle：不在 composing 状态 ──────────────────────────
         if (!session.isComposing()) {
             composingPreviewOverride = null
             enterCommitTextOverride = null
             resetUiSelectionToTop()
             sidebarState.clearAll()
             if (isExpanded) isExpanded = false
+
+            // Idle 状态下注入标点快捷候选（规则清单「标点候选快捷行」）
+            CnT9PunctuationCandidates.injectIdlePunctuations(
+                candidates = currentCandidates,
+                isFullWidth = isFullWidthPunct()
+            )
+
             ui.showIdleState()
             ui.setExpanded(false, isComposing = false)
             keyboardController.updateSidebar(emptyList())
+            ui.setCandidates(currentCandidates)
             return
         }
 
-        // ✅ 使用新签名：传 sidebarState 整体，而非裸 focusedSegmentIndex
+        // ── S1/S2 Composing：正常候选生成 ─────────────────────────
         val out: ImeModeHandler.Output = CnT9Handler.build(
             session = session,
             dictEngine = dictEngine,
@@ -195,158 +177,41 @@ class CnT9CandidateEngine(
         ui.showComposingState(isExpanded = isExpanded)
         ui.setExpanded(isExpanded, isComposing = true)
 
-        // ✅ 透传 resegmentPaths 给 keyboardController，供重切分 UI 使用
         keyboardController.updateSidebar(
             syllables = out.pinyinSidebar,
             title = out.sidebarTitle,
             resegmentPaths = out.resegmentPaths
         )
 
-        ui.setCandidates(currentCandidates)
-
-        // 中英混输：仅在纯数字输入（未锁定任何音节）时追加英文直出候选
+        // ── 混输模式候选注入（规则清单「中英文混输」）────────────────
         val rawDigits = session.rawT9Digits
         if (rawDigits.length >= 3 && session.pinyinStack.isEmpty()) {
-            val enCands = CnT9MixedInputDetector.detectEnglishCandidates(rawDigits)
-            if (enCands.isNotEmpty()) {
-                enCands.forEach { word ->
-                    currentCandidates.add(
-                        Candidate(
-                            word = word, input = rawDigits, priority = 0,
-                            matchedLength = rawDigits.length, pinyinCount = 0,
-                            pinyin = null, syllables = 0, acronym = null
-                        )
-                    )
-                }
-                ui.setCandidates(currentCandidates)
-            }
-        }
-    }
-
-    // ── 选词提交 ───────────────────────────────────────────────────
-
-    fun handleSpaceKey() {
-        val idx = preferredIndex()
-        if (idx != null) commitCandidateAt(idx) else commitRaw(" ")
-    }
-
-    fun commitFirstCandidateOnEnter(): Boolean {
-        val idx = preferredIndex() ?: return false
-        val cand = preferredCandidate() ?: return false
-
-        val shouldCommit = CnT9ConfidenceModel.shouldAutoCommit(
-            preferredIndex = idx,
-            cand = cand,
-            candidateCount = currentCandidates.size,
-            session = session,
-            dictEngine = dictEngine,
-            isRawCommitMode = isRawCommitMode(),
-            userChoiceStore = userChoiceStore,
-            contextWindow = contextWindow
-        )
-        if (!shouldCommit) return false
-
-        commitCandidateAt(idx)
-        return true
-    }
-
-    fun commitCandidateAt(index: Int) {
-        if (index !in currentCandidates.indices) {
-            val msg = "Candidate index out of range: CN_T9 index=$index size=${currentCandidates.size}"
-            if (isDebuggable()) { Log.wtf("CnT9CandidateEngine", msg); throw AssertionError(msg) }
-            return
+            injectMixedInputCandidates(rawDigits)
         }
 
-        ui.setSelectedCandidateIndex(index)
-        val cand = currentCandidates[index]
-        recordUserChoice(cand)
-
-        if (isRawCommitMode()) {
-            resetUiSelectionToTop()
-            sidebarState.clearAll()
-            commitRaw(cand.word)
-            contextWindow?.record(cand.word)
-            clearComposing()
-            return
-        }
-
-        val consumeSyllables = CnT9CommitHelper.resolveConsumeSyllables(cand).coerceAtLeast(1)
-        val stackSizeBefore = session.pinyinStack.size
-
-        CnT9CommitHelper.materializeSegmentsIfNeeded(session, consumeSyllables, dictEngine)
-
-        val availableStack = session.pinyinStack.size
-        if (availableStack > 0) {
-            val consume = consumeSyllables.coerceAtMost(availableStack)
-            val pickCand = cand.copy(pinyinCount = consume)
-
-            when (val r = session.pickCandidate(
-                cand = pickCand, useT9Layout = true, isChinese = true,
-                restorePinyinCountOnUndo = stackSizeBefore.coerceAtMost(consume)
-            )) {
-                is ComposingSession.PickResult.Commit -> {
-                    resetUiSelectionToTop()
-                    sidebarState.clearAll()
-                    commitRaw(r.text)
-                    contextWindow?.record(cand.word)
-                    clearComposing()
-                }
-                is ComposingSession.PickResult.Updated -> {
-                    resetUiSelectionToTop()
-                    sidebarState.clearAll()
-                    updateCandidates()
-                }
-            }
-            return
-        }
-
-        if (session.rawT9Digits.isNotEmpty()) {
-            val consumeDigits = CnT9CommitHelper.resolveDigitsToConsume(cand)
-                .coerceAtLeast(1).coerceAtMost(session.rawT9Digits.length)
-            val pickCand = cand.copy(pinyinCount = 0)
-
-            when (val r = session.pickCandidate(
-                cand = pickCand, useT9Layout = true, isChinese = true,
-                t9ConsumedDigitsCount = consumeDigits
-            )) {
-                is ComposingSession.PickResult.Commit -> {
-                    resetUiSelectionToTop()
-                    sidebarState.clearAll()
-                    commitRaw(r.text)
-                    contextWindow?.record(cand.word)
-                    clearComposing()
-                }
-                is ComposingSession.PickResult.Updated -> {
-                    resetUiSelectionToTop()
-                    sidebarState.clearAll()
-                    updateCandidates()
-                }
-            }
-            return
-        }
-
-        resetUiSelectionToTop()
-        sidebarState.clearAll()
-        commitRaw(cand.word)
-        contextWindow?.record(cand.word)
-        clearComposing()
+        ui.setCandidates(currentCandidates)
     }
 
-    fun commitCandidate(cand: Candidate) {
-        val idx = currentCandidates.indexOf(cand)
-        if (idx < 0) {
-            val msg = "Candidate not in current CN_T9 list: cand=$cand"
-            if (isDebuggable()) { Log.wtf("CnT9CandidateEngine", msg); throw AssertionError(msg) }
-            return
-        }
-        commitCandidateAt(idx)
-    }
+    /**
+     * 根据混输模式检测结果，将英文/URL/邮箱候选插入候选列表头部。
+     *
+     * 对应规则清单：
+     *  - 英文直出候选插入**头部**（之前是末尾），让用户无需翻页即可选取
+     *  - URL/邮箱模式同理
+     *
+     * @param rawDigits 当前未物化的纯数字串
+     */
+    private fun injectMixedInputCandidates(rawDigits: String) {
+        val mode = CnT9MixedInputDetector.detectMode(rawDigits)
 
-    // ── 用户学习记录 ───────────────────────────────────────────────
+        val injectWords: List<String> = when (mode) {
+            CnT9MixedInputDetector.InputMode.URL ->
+                CnT9MixedInputDetector.detectUrlCandidates(rawDigits)
 
-    private fun recordUserChoice(cand: Candidate) {
-        val store = userChoiceStore ?: return
-        val key = CnT9PinyinSplitter.normalizeCandidate(cand.pinyin, cand.input)
-        store.recordChoice(key, cand.word)
-    }
-}
+            CnT9MixedInputDetector.InputMode.EMAIL ->
+                CnT9MixedInputDetector.detectEmailSuffixCandidates(rawDigits)
+
+            CnT9MixedInputDetector.InputMode.ENGLISH ->
+                CnT9MixedInputDetector.detectEnglishCandidates(rawDigits)
+
+            CnT9MixedInputDetector.InputMode.CHINESE ->
