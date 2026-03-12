@@ -34,7 +34,6 @@ class CnT9InputEngine(
     private var currentState: CnT9SessionState = CnT9SessionState()
     private var lastEvent: CnT9StateEvent? = null
 
-    // 焦点索引独立保存：只有明确的焦点事件才改变，syncStateFromSession 不覆盖它
     private var pinnedFocusedIndex: Int? = null
 
     init {
@@ -50,11 +49,6 @@ class CnT9InputEngine(
 
     // ── 核心状态同步 ────────────────────────────────────────────────
 
-    /**
-     * 从 session 重建 CnT9SessionState。
-     * - focusOverride: 明确指定新焦点；null 表示沿用 pinnedFocusedIndex
-     * - clearFocus:    true 强制清除焦点（clearComposing / 新增数字输入时）
-     */
     private fun buildStateFromSession(
         focusOverride: Int? = null,
         clearFocus: Boolean = false
@@ -105,9 +99,6 @@ class CnT9InputEngine(
 
     // ── 音节栏：焦点 + 锁定 ─────────────────────────────────────────
 
-    /**
-     * 点击音节栏某个音节：只移动焦点，不 rollback（保持锁定段不被重新解析）。
-     */
     fun focusMaterializedSegment(index: Int) {
         if (index !in session.pinyinStack.indices) return
         applyEvent(
@@ -117,10 +108,6 @@ class CnT9InputEngine(
         super.refreshCandidates()
     }
 
-    /**
-     * 替换焦点音节为指定拼音（音节消歧）。
-     * 只更新 pinyinStack 对应项，不改变 rawDigits / cuts。
-     */
     fun replaceFocusedSegmentWith(pinyin: String) {
         val focusedIdx = pinnedFocusedIndex ?: return
         val changed = session.replaceMaterializedSegmentAt(focusedIdx, pinyin)
@@ -134,27 +121,49 @@ class CnT9InputEngine(
     }
 
     /**
-     * 分词切换手势：在 rawDigits 首位插入/移除手动切分点。
-     * 注意：实际的"数字1键分词"触发入口在 ImeActionDispatcher.handleSpecialKey("分词")，
-     * 本方法供需要精细控制切分点位置的内部调用。
+     * 在焦点音节的右边界（即该音节 digitChunk 结束后的位置）循环插入/移除切分点。
+     *
+     * - 有焦点音节：在该音节对应 digitChunk 的累积右边界处切换切分点
+     * - 无焦点（或焦点为末段）：在 rawDigits 首位切换（原行为，作为降级）
+     *
+     * 切分点位置语义：position N 表示"第 N 位数字之后断开"（1-based）。
      */
     fun cycleManualCut() {
         if (session.rawT9Digits.isEmpty()) return
 
-        val cuts = session.t9ManualCuts
-        val cutPos = 1
+        val cutPos = resolveCutPosition()
 
+        val cuts = session.t9ManualCuts
         if (cuts.contains(cutPos)) {
             session.removeT9ManualCut(cutPos)
         } else {
             session.insertT9ManualCut(cutPos)
         }
 
-        applyEvent(
-            event = CnT9StateEvent.DigitsAppended(""),
-            clearFocus = false
-        )
+        applyEvent(event = CnT9StateEvent.DigitsAppended(""), clearFocus = false)
         super.refreshCandidates()
+    }
+
+    /**
+     * 计算切分点位置：
+     * - 有焦点音节 → 该音节 digitChunk 的长度之和（从头累积到焦点段，不含焦点段后的部分）
+     * - 无焦点 → 1（rawDigits 首位，原行为）
+     */
+    private fun resolveCutPosition(): Int {
+        val focusedIdx = pinnedFocusedIndex
+            ?.takeIf { it in session.t9MaterializedSegments.indices }
+            ?: return 1
+
+        // 累积焦点段之前所有段的 digit 长度，即焦点段左边界
+        // 切分点在焦点段右边界 = 左边界 + 焦点段自身 digit 长度
+        var accumulated = 0
+        val segs = session.t9MaterializedSegments
+        for (i in 0..focusedIdx) {
+            val chunk = segs[i].digitChunk.filter { it in '0'..'9' }
+            accumulated += chunk.length.coerceAtLeast(1)
+        }
+        // 右边界位置（切分点在此处表示焦点段之后断开）
+        return accumulated.coerceAtLeast(1)
     }
 
     // ── 覆写父类行为 ────────────────────────────────────────────────
@@ -166,16 +175,12 @@ class CnT9InputEngine(
 
     override fun clearComposing() {
         super.clearComposing()
-        applyEvent(
-            event = CnT9StateEvent.Cleared,
-            clearFocus = true
-        )
+        applyEvent(event = CnT9StateEvent.Cleared, clearFocus = true)
     }
 
     override fun handleT9Input(digit: String) {
         super.handleT9Input(digit)
         val normalized = digit.filter { it in '0'..'9' }
-        // 新输入数字时焦点退回末尾（规则：继续输入时不保持音节栏焦点）
         applyEvent(
             event = if (normalized.isNotEmpty()) CnT9StateEvent.DigitsAppended(normalized) else null,
             clearFocus = true
@@ -184,7 +189,6 @@ class CnT9InputEngine(
 
     override fun onPinyinSidebarClick(pinyin: String) {
         super.onPinyinSidebarClick(pinyin)
-        // 点击音节栏确认一个音节后，焦点跟随到刚锁定的那个音节
         applyEvent(
             event = CnT9StateEvent.SidebarSegmentFocused(lastMaterializedIndexOrNull() ?: 0),
             focusOverride = lastMaterializedIndexOrNull()
@@ -196,11 +200,9 @@ class CnT9InputEngine(
             ?.takeIf { it in session.pinyinStack.indices }
 
         if (focusedIndex != null) {
-            // 规则：焦点在某音节时，优先删该音节尾部最后一个 digit
             val consumed = session.backspaceMaterializedSegmentTailDigit(focusedIndex)
             if (consumed) {
                 super.refreshCandidates()
-                // 删完后焦点留在同一位；若该段被完全删空则退到前一段
                 val newFocus = when {
                     focusedIndex in session.pinyinStack.indices -> focusedIndex
                     session.pinyinStack.isNotEmpty() -> session.pinyinStack.lastIndex
@@ -215,7 +217,6 @@ class CnT9InputEngine(
             }
         }
 
-        // 无焦点或焦点段 digits 已空：走普通退格逻辑
         super.handleBackspace()
         applyEvent(
             event = CnT9StateEvent.BackspacePressed,
