@@ -85,9 +85,6 @@ class CnT9CandidateEngine(
 
     // ── Sidebar 交互 ───────────────────────────────────────────────
 
-    /**
-     * 用户在 sidebar 点选了一个拼音音节（如 "zhong"）。
-     */
     fun onSidebarItemClick(pinyin: String, t9Code: String) {
         if (pinyin.isEmpty()) return
         session.onPinyinSidebarClick(pinyin = pinyin, t9Code = t9Code)
@@ -95,9 +92,6 @@ class CnT9CandidateEngine(
         updateCandidates()
     }
 
-    /**
-     * 用户点击了已物化的拼音段（触发重切分 / 消歧）。
-     */
     fun onSegmentFocused(segmentIndex: Int) {
         if (segmentIndex < 0) return
         sidebarState.clearLocksFrom(segmentIndex)
@@ -137,15 +131,14 @@ class CnT9CandidateEngine(
         syncFilterButton()
         currentCandidates.clear()
 
-        // ── S0 Idle：不在 composing 状态 ──────────────────────────
+        // ── S0 Idle ───────────────────────────────────────────────
         if (!session.isComposing()) {
             composingPreviewOverride = null
-            enterCommitTextOverride = null
+            enterCommitTextOverride  = null
             resetUiSelectionToTop()
             sidebarState.clearAll()
             if (isExpanded) isExpanded = false
 
-            // Idle 状态下注入标点快捷候选（规则清单「标点候选快捷行」）
             CnT9PunctuationCandidates.injectIdlePunctuations(
                 candidates = currentCandidates,
                 isFullWidth = isFullWidthPunct()
@@ -158,19 +151,19 @@ class CnT9CandidateEngine(
             return
         }
 
-        // ── S1/S2 Composing：正常候选生成 ─────────────────────────
+        // ── S1/S2 Composing ───────────────────────────────────────
         val out: ImeModeHandler.Output = CnT9Handler.build(
-            session = session,
-            dictEngine = dictEngine,
+            session        = session,
+            dictEngine     = dictEngine,
             singleCharMode = isSingleCharMode,
             userChoiceStore = userChoiceStore,
-            contextWindow = contextWindow,
-            sidebarState = sidebarState
+            contextWindow   = contextWindow,
+            sidebarState    = sidebarState
         )
 
         composingPreviewOverride = out.composingPreviewText
-        enterCommitTextOverride = out.enterCommitText
-        currentCandidates = ArrayList(out.candidates)
+        enterCommitTextOverride  = out.enterCommitText
+        currentCandidates        = ArrayList(out.candidates)
         resetUiSelectionToTop()
 
         syncFilterButton()
@@ -178,12 +171,11 @@ class CnT9CandidateEngine(
         ui.setExpanded(isExpanded, isComposing = true)
 
         keyboardController.updateSidebar(
-            syllables = out.pinyinSidebar,
-            title = out.sidebarTitle,
-            resegmentPaths = out.resegmentPaths
+            syllables       = out.pinyinSidebar,
+            title           = out.sidebarTitle,
+            resegmentPaths  = out.resegmentPaths
         )
 
-        // ── 混输模式候选注入（规则清单「中英文混输」）────────────────
         val rawDigits = session.rawT9Digits
         if (rawDigits.length >= 3 && session.pinyinStack.isEmpty()) {
             injectMixedInputCandidates(rawDigits)
@@ -195,11 +187,8 @@ class CnT9CandidateEngine(
     /**
      * 根据混输模式检测结果，将英文/URL/邮箱候选插入候选列表头部。
      *
-     * 对应规则清单：
-     *  - 英文直出候选插入**头部**（之前是末尾），让用户无需翻页即可选取
-     *  - URL/邮箱模式同理
-     *
-     * @param rawDigits 当前未物化的纯数字串
+     * 修复：显式标注 injectWords 类型为 List<String>，
+     * CHINESE 分支明确返回 emptyList<String>() 避免类型推断歧义。
      */
     private fun injectMixedInputCandidates(rawDigits: String) {
         val mode = CnT9MixedInputDetector.detectMode(rawDigits)
@@ -215,3 +204,158 @@ class CnT9CandidateEngine(
                 CnT9MixedInputDetector.detectEnglishCandidates(rawDigits)
 
             CnT9MixedInputDetector.InputMode.CHINESE ->
+                emptyList()
+        }
+
+        if (injectWords.isEmpty()) return
+
+        val injected = injectWords.map { word ->
+            Candidate(
+                word           = word,
+                input          = rawDigits,
+                priority       = Int.MAX_VALUE,
+                matchedLength  = rawDigits.length,
+                pinyinCount    = 0,
+                pinyin         = null,
+                syllables      = 0,
+                acronym        = null
+            )
+        }
+        currentCandidates.addAll(0, injected)
+    }
+
+    // ── 选词提交 ───────────────────────────────────────────────────
+
+    fun handleSpaceKey() {
+        val idx = preferredIndex()
+        if (idx != null) commitCandidateAt(idx) else commitRaw(" ")
+    }
+
+    fun commitFirstCandidateOnEnter(): Boolean {
+        val idx  = preferredIndex()        ?: return false
+        val cand = preferredCandidate()    ?: return false
+
+        val shouldCommit = CnT9ConfidenceModel.shouldAutoCommit(
+            preferredIndex  = idx,
+            cand            = cand,
+            candidateCount  = currentCandidates.size,
+            session         = session,
+            dictEngine      = dictEngine,
+            isRawCommitMode = isRawCommitMode(),
+            userChoiceStore = userChoiceStore,
+            contextWindow   = contextWindow
+        )
+        if (!shouldCommit) return false
+
+        commitCandidateAt(idx)
+        return true
+    }
+
+    fun commitCandidateAt(index: Int) {
+        if (index !in currentCandidates.indices) {
+            val msg = "Candidate index out of range: CN_T9 index=$index size=${currentCandidates.size}"
+            if (isDebuggable()) { Log.wtf("CnT9CandidateEngine", msg); throw AssertionError(msg) }
+            return
+        }
+
+        ui.setSelectedCandidateIndex(index)
+        val cand = currentCandidates[index]
+
+        // ── 标点候选：直接上屏，跳过拼音匹配逻辑 ─────────────────
+        if (CnT9PunctuationCandidates.isPunctCandidate(cand)) {
+            commitRaw(cand.word)
+            return
+        }
+
+        recordUserChoice(cand)
+
+        if (isRawCommitMode()) {
+            resetUiSelectionToTop()
+            sidebarState.clearAll()
+            commitRaw(cand.word)
+            contextWindow?.record(cand.word)
+            clearComposing()
+            return
+        }
+
+        val consumeSyllables = CnT9CommitHelper.resolveConsumeSyllables(cand).coerceAtLeast(1)
+        val stackSizeBefore  = session.pinyinStack.size
+
+        CnT9CommitHelper.materializeSegmentsIfNeeded(session, consumeSyllables, dictEngine)
+
+        val availableStack = session.pinyinStack.size
+        if (availableStack > 0) {
+            val consume  = consumeSyllables.coerceAtMost(availableStack)
+            val pickCand = cand.copy(pinyinCount = consume)
+
+            when (val r = session.pickCandidate(
+                cand = pickCand, useT9Layout = true, isChinese = true,
+                restorePinyinCountOnUndo = stackSizeBefore.coerceAtMost(consume)
+            )) {
+                is ComposingSession.PickResult.Commit -> {
+                    resetUiSelectionToTop()
+                    sidebarState.clearAll()
+                    commitRaw(r.text)
+                    contextWindow?.record(cand.word)
+                    clearComposing()
+                }
+                is ComposingSession.PickResult.Updated -> {
+                    resetUiSelectionToTop()
+                    sidebarState.clearAll()
+                    updateCandidates()
+                }
+            }
+            return
+        }
+
+        if (session.rawT9Digits.isNotEmpty()) {
+            val consumeDigits = CnT9CommitHelper.resolveDigitsToConsume(cand)
+                .coerceAtLeast(1).coerceAtMost(session.rawT9Digits.length)
+            val pickCand = cand.copy(pinyinCount = 0)
+
+            when (val r = session.pickCandidate(
+                cand = pickCand, useT9Layout = true, isChinese = true,
+                t9ConsumedDigitsCount = consumeDigits
+            )) {
+                is ComposingSession.PickResult.Commit -> {
+                    resetUiSelectionToTop()
+                    sidebarState.clearAll()
+                    commitRaw(r.text)
+                    contextWindow?.record(cand.word)
+                    clearComposing()
+                }
+                is ComposingSession.PickResult.Updated -> {
+                    resetUiSelectionToTop()
+                    sidebarState.clearAll()
+                    updateCandidates()
+                }
+            }
+            return
+        }
+
+        resetUiSelectionToTop()
+        sidebarState.clearAll()
+        commitRaw(cand.word)
+        contextWindow?.record(cand.word)
+        clearComposing()
+    }
+
+    fun commitCandidate(cand: Candidate) {
+        val idx = currentCandidates.indexOf(cand)
+        if (idx < 0) {
+            val msg = "Candidate not in current CN_T9 list: cand=$cand"
+            if (isDebuggable()) { Log.wtf("CnT9CandidateEngine", msg); throw AssertionError(msg) }
+            return
+        }
+        commitCandidateAt(idx)
+    }
+
+    // ── 用户学习记录 ───────────────────────────────────────────────
+
+    private fun recordUserChoice(cand: Candidate) {
+        val store = userChoiceStore ?: return
+        if (CnT9PunctuationCandidates.isPunctCandidate(cand)) return
+        val key = CnT9PinyinSplitter.normalizeCandidate(cand.pinyin, cand.input)
+        store.recordChoice(key, cand.word)
+    }
+}
