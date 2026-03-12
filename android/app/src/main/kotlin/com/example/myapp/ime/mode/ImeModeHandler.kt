@@ -10,6 +10,11 @@ interface ImeModeHandler {
         val candidates: ArrayList<Candidate>,
         val pinyinSidebar: List<String> = emptyList(),
         /**
+         * 当前焦点段对应的原始数字串，供 UI 在 sidebar 顶部展示（如 "94664"）。
+         * null 表示处于正常输入模式（无焦点段，展示 rawDigits 前段）。
+         */
+        val sidebarTitle: String? = null,
+        /**
          * Optional UI composing preview override (mainly for CN preedit segmentation / T9 preview line).
          * When null, UI should fall back to session.displayText(...).
          */
