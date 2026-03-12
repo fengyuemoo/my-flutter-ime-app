@@ -12,6 +12,8 @@ import com.example.myapp.dict.impl.T9Lookup
  * 职责：
  *  1. detectMode()              — 识别当前输入模式（中文/英文/URL/邮箱）
  *  2. detectEnglishCandidates() — 生成英文字符串候选列表（按评分排序）
+ *  3. detectUrlCandidates()     — 生成 URL 前缀候选
+ *  4. detectEmailSuffixCandidates() — 生成邮箱域名后缀候选
  *
  * InputMode 语义：
  *  - CHINESE  → 正常走中文拼音候选，不注入英文候选
@@ -27,36 +29,23 @@ object CnT9MixedInputDetector {
     // ── 输入模式枚举 ──────────────────────────────────────────────
 
     enum class InputMode {
-        /** 正常中文拼音模式。*/
         CHINESE,
-        /** 英文直出模式（数字串更可能是英文字母组合）。*/
         ENGLISH,
-        /** URL 模式（数字串以 www/http/https 对应的 T9 前缀开头）。*/
         URL,
-        /** 邮箱模式（数字串中含有 @ 键位对应序列，且结构符合邮箱格式）。*/
         EMAIL
     }
 
     /**
      * URL 模式的 T9 数字前缀：
-     *  - "www"   → 999-999  (9=wxyz)
-     *  - "http"  → 4884     (4=ghi, 8=tuv, 8=tuv, 7=pqrs — 注：p 在 7)
-     *  - "https" → 48847    (s=7)
-     *
-     * 实际 T9 映射：
-     *  h=4, t=8, t=8, p=7 → "http" = 4887
-     *  w=9, w=9, w=9      → "www"  = 999
+     *  "www"   → 999  (w=9)
+     *  "http"  → 4887 (h=4, t=8, t=8, p=7)
+     *  "https" → 48879 (s=7 — 注：s 在 7 上)
      */
-    private val URL_T9_PREFIXES = setOf(
-        "999",   // www
-        "4887",  // http
-        "48879"  // https
-    )
+    private val URL_T9_PREFIXES = setOf("999", "4887", "48879")
 
     /**
-     * @ 符号在九宫格上通常通过特殊键或长按触发；
-     * 邮箱模式识别：数字串长度 >= 5 且能拼出 "com"/"net"/"org" 等常见后缀。
-     * "com" → 266, "net" → 638, "org" → 674
+     * 常见邮箱域名后缀的 T9 编码：
+     *  "com" → 266, "net" → 638, "org" → 674
      */
     private val EMAIL_DOMAIN_T9_SUFFIXES = setOf("266", "638", "674", "484", "988")
 
@@ -64,40 +53,27 @@ object CnT9MixedInputDetector {
 
     /**
      * 识别当前数字串的输入模式。
-     *
      * 优先级：URL > EMAIL > ENGLISH > CHINESE
-     *
-     * @param rawDigits 当前未物化的纯数字串
-     * @return 识别到的 InputMode
      */
     fun detectMode(rawDigits: String): InputMode {
         if (rawDigits.length < MIN_DIGITS_FOR_DETECTION) return InputMode.CHINESE
-
-        // URL 模式
         if (URL_T9_PREFIXES.any { rawDigits.startsWith(it) }) return InputMode.URL
-
-        // 邮箱模式：长度足够 + 含常见域名后缀 T9 序列
         if (rawDigits.length >= 6 &&
             EMAIL_DOMAIN_T9_SUFFIXES.any { rawDigits.endsWith(it) }
         ) return InputMode.EMAIL
-
-        // 英文模式：每个数字都有字母映射且综合评分偏英文
         if (looksLikeEnglish(rawDigits)) return InputMode.ENGLISH
-
         return InputMode.CHINESE
     }
 
     /**
      * 检测并返回建议的英文字符串候选（最多 MAX_EN_CANDIDATES 个）。
-     * 若不像英文直出则返回空列表。
-     *
-     * @param rawDigits 当前未物化的纯数字串
      */
     fun detectEnglishCandidates(rawDigits: String): List<String> {
         if (rawDigits.length < MIN_DIGITS_FOR_DETECTION) return emptyList()
 
+        // T9Lookup.charsFromDigit 接受 Char 参数
         val charSets = rawDigits.map { d ->
-            T9Lookup.charsFromDigit(d.toString())
+            T9Lookup.charsFromDigit(d)
         }
         if (charSets.any { it.isEmpty() }) return emptyList()
 
@@ -112,20 +88,18 @@ object CnT9MixedInputDetector {
 
     /**
      * 生成 URL 前缀候选（如 "www.", "http://", "https://"）。
-     * 供调用方在 URL 模式下注入候选头部。
      */
     fun detectUrlCandidates(rawDigits: String): List<String> {
         if (rawDigits.length < 3) return emptyList()
         val results = mutableListOf<String>()
-        if (rawDigits.startsWith("999")) results.add("www.")
-        if (rawDigits.startsWith("4887")) results.add("http://")
+        if (rawDigits.startsWith("999"))   results.add("www.")
+        if (rawDigits.startsWith("4887"))  results.add("http://")
         if (rawDigits.startsWith("48879")) results.add("https://")
         return results
     }
 
     /**
-     * 生成邮箱域名后缀候选（如 "@gmail.com", "@qq.com"）。
-     * 供调用方在 EMAIL 模式下注入候选末尾。
+     * 生成邮箱域名后缀候选（如 "@gmail.com"）。
      */
     fun detectEmailSuffixCandidates(rawDigits: String): List<String> {
         if (rawDigits.length < 6) return emptyList()
@@ -144,19 +118,16 @@ object CnT9MixedInputDetector {
     /**
      * 判断数字串是否「看起来像英文」。
      *
-     * 策略：
-     *  - 所有数字均有字母映射（无 0/1）
-     *  - 数字串中不含过多 9（9=wxyz，中文少用 w/x/y/z 开头）
-     *  - 长度在 3–8 之间（太短不判断，太长更可能是拼音）
+     * 策略：所有数字均有字母映射（无 0/1），且含较多 7/9 键位（pqrs/wxyz）。
+     * 中文拼音里 w/x/y/z 开头的音节极少，7/9 比例高时更可能是英文。
      */
     private fun looksLikeEnglish(rawDigits: String): Boolean {
         if (rawDigits.length > 8) return false
 
-        val charSets = rawDigits.map { T9Lookup.charsFromDigit(it.toString()) }
+        // T9Lookup.charsFromDigit 接受 Char
+        val charSets = rawDigits.map { T9Lookup.charsFromDigit(it) }
         if (charSets.any { it.isEmpty() }) return false
 
-        // 若数字串中有超过 40% 的位是 7 或 9（对应 pqrs/wxyz），
-        // 中文拼音里这些字母出现率较低，更可能是英文
         val highKeyCount = rawDigits.count { it == '7' || it == '9' }
         return highKeyCount.toFloat() / rawDigits.length >= 0.4f
     }
@@ -182,8 +153,7 @@ object CnT9MixedInputDetector {
     }
 
     /**
-     * 简单英文字符串评分：优先全小写 + 无重复字母 + 长度适中。
-     * 后续可替换为真实英文词频字典。
+     * 简单英文字符串评分：全小写 + 无重复字母 + 长度适中。
      */
     private fun scoreEnglishString(s: String): Int {
         var score = 0
