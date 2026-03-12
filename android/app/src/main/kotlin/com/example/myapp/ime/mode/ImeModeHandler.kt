@@ -15,6 +15,15 @@ interface ImeModeHandler {
          */
         val sidebarTitle: String? = null,
         /**
+         * 当前焦点段的所有合法拼音切分路径，供 UI「重切分」功能展示。
+         *
+         * 对应规则清单「音节栏的重新切分」：
+         *  - 每一项是一条完整路径（音节列表），如 [["zhong"], ["zhi","ong"]]
+         *  - 第 0 条是最优路径（最长匹配贪婪优先）
+         *  - 正常输入模式（无焦点）或非 T9 模式下为空列表
+         */
+        val resegmentPaths: List<List<String>> = emptyList(),
+        /**
          * Optional UI composing preview override (mainly for CN preedit segmentation / T9 preview line).
          * When null, UI should fall back to session.displayText(...).
          */
