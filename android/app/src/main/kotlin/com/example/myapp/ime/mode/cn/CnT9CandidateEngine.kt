@@ -8,7 +8,6 @@ import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.mode.ImeModeHandler
 import com.example.myapp.ime.ui.ImeUi
-import java.util.Locale
 
 /**
  * CN-T9 候选引擎（协调器）。
@@ -20,9 +19,9 @@ import java.util.Locale
  *  4. 管理 UI 展开/收起、单字过滤模式
  *
  * 不包含：
- *  - 拼音切分工具函数  → CnT9PinyinSplitter
- *  - 音节物化 & 消费计算 → CnT9CommitHelper
- *  - 首选置信度模型    → CnT9ConfidenceModel
+ *  - 拼音切分工具函数    → CnT9PinyinSplitter
+ *  - 音节物化 & 消费计算  → CnT9CommitHelper
+ *  - 首选置信度模型      → CnT9ConfidenceModel
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -234,8 +233,8 @@ class CnT9CandidateEngine(
 
     private fun recordUserChoice(cand: Candidate) {
         val store = userChoiceStore ?: return
-        val key = (cand.pinyin ?: cand.input)
-            .trim().lowercase(Locale.ROOT).replace("'", "'")
+        // 统一使用 CnT9PinyinSplitter.normalizeCandidate，与 getBoost 侧 key 格式保持一致
+        val key = CnT9PinyinSplitter.normalizeCandidate(cand.pinyin, cand.input)
         store.recordChoice(key, cand.word)
     }
 }
