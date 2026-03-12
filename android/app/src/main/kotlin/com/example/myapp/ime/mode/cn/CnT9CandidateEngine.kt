@@ -17,9 +17,9 @@ import com.example.myapp.ime.ui.ImeUi
  *  2. 处理用户选词提交（commitCandidateAt / commitCandidate）
  *  3. 处理空格键与 Enter 首选上屏
  *  4. 管理 UI 展开/收起、单字过滤模式
- *  5. 管理 sidebar 焦点（CnT9SidebarState）
+ *  5. 管理 sidebar 焦点与锁定（CnT9SidebarState）
  *     - onSidebarItemClick   → 用户点选一个拼音音节（锁定 + 前进焦点）
- *     - onSegmentFocused     → 用户点击已物化段（触发 rollback + 设焦）
+ *     - onSegmentFocused     → 用户点击已物化段（rollback + 清锁 + 设焦）
  *
  * 不包含：
  *  - 拼音切分工具函数    → CnT9PinyinSplitter
@@ -27,6 +27,7 @@ import com.example.myapp.ime.ui.ImeUi
  *  - 首选置信度模型      → CnT9ConfidenceModel
  *  - sidebar 内容构建    → CnT9SidebarBuilder
  *  - sidebar 焦点状态    → CnT9SidebarState
+ *  - 段锁定状态         → CnT9SegmentLockMap（通过 sidebarState.lockMap 访问）
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -86,7 +87,7 @@ class CnT9CandidateEngine(
      *
      * 流程：
      *  1. session.onPinyinSidebarClick() → 把 (pinyin, t9Code) 物化进 pinyinStack
-     *  2. sidebarState.advanceFocus()   → 焦点自动前进（或回到正常模式）
+     *  2. sidebarState.advanceFocus()   → 锁定当前段，焦点自动前进（或回到正常模式）
      *  3. updateCandidates()            → 刷新候选区
      *
      * @param pinyin  用户点选的拼音字符串（如 "zhong"）
@@ -103,14 +104,19 @@ class CnT9CandidateEngine(
      * 用户点击了已物化的拼音段（触发重切分 / 消歧）。
      *
      * 流程：
-     *  1. session.rollbackMaterializedSegmentsFrom(index) → 把该段及后续段还原为 rawDigits
-     *  2. sidebarState.setFocus(index)                   → 焦点设到该段位置
-     *  3. updateCandidates()                             → 刷新 sidebar 和候选区
+     *  1. sidebarState.clearLocksFrom(index)              → 清除该段及之后所有失效锁定
+     *  2. session.rollbackMaterializedSegmentsFrom(index) → 把该段及后续段还原为 rawDigits
+     *  3. sidebarState.setFocus(index)                    → 焦点设到该段位置
+     *  4. updateCandidates()                              → 刷新 sidebar 和候选区
+     *
+     * 注意：clearLocksFrom 必须在 rollback 之前调用，
+     * 确保 lockMap 里该 index 之后的锁定在物化段消失前就被清除。
      *
      * @param segmentIndex 被点击的物化段下标（0-based）
      */
     fun onSegmentFocused(segmentIndex: Int) {
         if (segmentIndex < 0) return
+        sidebarState.clearLocksFrom(segmentIndex)
         session.rollbackMaterializedSegmentsFrom(segmentIndex)
         sidebarState.setFocus(segmentIndex)
         updateCandidates()
@@ -119,23 +125,35 @@ class CnT9CandidateEngine(
     // ── 退格（含焦点同步）─────────────────────────────────────────
 
     /**
-     * 处理退格键，同时同步 sidebarState 焦点。
+     * 处理退格键，同时同步 sidebarState 焦点与锁定。
      *
-     * 规则：
-     *  - 有 rawDigits → 删一个 digit，焦点不变（还在正常模式或消歧模式，视情况）
-     *  - rawDigits 为空、有物化段 → 弹出最后一个物化段，焦点 retreatFocus
-     *  - 全空 → clearFocus
+     * 规则（对应规则清单「音节栏的回退规则」）：
+     *  - 有 rawDigits → 删一个 digit，焦点维持当前状态
+     *  - rawDigits 为空、有物化段 → 弹出最后一个物化段
+     *    → 通知 sidebarState.onSegmentRemoved() 同步下移锁定索引
+     *  - 全空 → clearAll（清焦点 + 清全部锁定）
      */
     fun handleBackspace(): Boolean {
+        val hadRawDigits = session.rawT9Digits.isNotEmpty()
+        val stackSizeBefore = session.pinyinStack.size
+
         val consumed = session.backspace(useT9Layout = true)
-        if (!session.isComposing()) {
-            sidebarState.clearFocus()
-        } else if (session.rawT9Digits.isEmpty() && session.pinyinStack.isEmpty()) {
-            sidebarState.clearFocus()
-        } else if (sidebarState.isDisambiguating && session.rawT9Digits.isEmpty()) {
-            // 退格后 rawDigits 已空但仍在消歧模式 → 退一格焦点
-            sidebarState.retreatFocus()
+
+        when {
+            !session.isComposing() -> {
+                sidebarState.clearAll()
+            }
+            // 原来有物化段且退格弹出了一段
+            !hadRawDigits && session.pinyinStack.size < stackSizeBefore -> {
+                val removedIndex = session.pinyinStack.size
+                sidebarState.onSegmentRemoved(removedIndex)
+            }
+            // rawDigits 已空但仍在消歧模式 → 退一格焦点
+            sidebarState.isDisambiguating && session.rawT9Digits.isEmpty() -> {
+                sidebarState.retreatFocus()
+            }
         }
+
         updateCandidates()
         return consumed
     }
@@ -150,7 +168,7 @@ class CnT9CandidateEngine(
             composingPreviewOverride = null
             enterCommitTextOverride = null
             resetUiSelectionToTop()
-            sidebarState.clearFocus()
+            sidebarState.clearAll()
             if (isExpanded) isExpanded = false
             ui.showIdleState()
             ui.setExpanded(false, isComposing = false)
@@ -158,13 +176,14 @@ class CnT9CandidateEngine(
             return
         }
 
+        // ✅ 使用新签名：传 sidebarState 整体，而非裸 focusedSegmentIndex
         val out: ImeModeHandler.Output = CnT9Handler.build(
             session = session,
             dictEngine = dictEngine,
             singleCharMode = isSingleCharMode,
             userChoiceStore = userChoiceStore,
             contextWindow = contextWindow,
-            focusedSegmentIndex = sidebarState.focusedSegmentIndex
+            sidebarState = sidebarState
         )
 
         composingPreviewOverride = out.composingPreviewText
@@ -176,8 +195,12 @@ class CnT9CandidateEngine(
         ui.showComposingState(isExpanded = isExpanded)
         ui.setExpanded(isExpanded, isComposing = true)
 
-        // sidebar：传递标题 + 内容
-        keyboardController.updateSidebar(out.pinyinSidebar, out.sidebarTitle)
+        // ✅ 透传 resegmentPaths 给 keyboardController，供重切分 UI 使用
+        keyboardController.updateSidebar(
+            syllables = out.pinyinSidebar,
+            title = out.sidebarTitle,
+            resegmentPaths = out.resegmentPaths
+        )
 
         ui.setCandidates(currentCandidates)
 
@@ -240,7 +263,7 @@ class CnT9CandidateEngine(
 
         if (isRawCommitMode()) {
             resetUiSelectionToTop()
-            sidebarState.clearFocus()
+            sidebarState.clearAll()
             commitRaw(cand.word)
             contextWindow?.record(cand.word)
             clearComposing()
@@ -263,14 +286,14 @@ class CnT9CandidateEngine(
             )) {
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
-                    sidebarState.clearFocus()
+                    sidebarState.clearAll()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
                 }
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
-                    sidebarState.clearFocus()
+                    sidebarState.clearAll()
                     updateCandidates()
                 }
             }
@@ -288,14 +311,14 @@ class CnT9CandidateEngine(
             )) {
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
-                    sidebarState.clearFocus()
+                    sidebarState.clearAll()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
                 }
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
-                    sidebarState.clearFocus()
+                    sidebarState.clearAll()
                     updateCandidates()
                 }
             }
@@ -303,7 +326,7 @@ class CnT9CandidateEngine(
         }
 
         resetUiSelectionToTop()
-        sidebarState.clearFocus()
+        sidebarState.clearAll()
         commitRaw(cand.word)
         contextWindow?.record(cand.word)
         clearComposing()
