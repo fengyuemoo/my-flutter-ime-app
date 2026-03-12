@@ -61,7 +61,7 @@ class ImeActionDispatcher(
     private fun sessionByMode(mode: KeyboardMode): ComposingSession {
         return when {
             mode.isChinese && !mode.useT9Layout -> sessions.cnQwerty
-            mode.isChinese && mode.useT9Layout -> sessions.cnT9
+            mode.isChinese && mode.useT9Layout  -> sessions.cnT9
             !mode.isChinese && !mode.useT9Layout -> sessions.enQwerty
             else -> sessions.enT9
         }
@@ -69,20 +69,19 @@ class ImeActionDispatcher(
 
     private fun assertSessionCleared(mode: KeyboardMode, from: String) {
         if (!DebugFlags.MODE_SWITCH_ASSERT || !debuggableApp) return
-
         val s = sessionByMode(mode)
         val display = s.displayText(mode.useT9Layout)
-
         if (s.isComposing() || !display.isNullOrEmpty()) {
-            val msg =
-                "Mode switch must clear composing: from=$from, mode=$mode, isComposing=${s.isComposing()}, display=$display"
-            throw AssertionError(msg)
+            throw AssertionError(
+                "Mode switch must clear composing: from=$from, mode=$mode, " +
+                "isComposing=${s.isComposing()}, display=$display"
+            )
         }
     }
 
     private fun enginesReady(): Boolean =
-        ::ui.isInitialized && ::keyboardController.isInitialized && ::candidateController.isInitialized &&
-            ::cnQwertyEngine.isInitialized
+        ::ui.isInitialized && ::keyboardController.isInitialized &&
+        ::candidateController.isInitialized && ::cnQwertyEngine.isInitialized
 
     private fun mainMode(): KeyboardMode {
         if (!::keyboardController.isInitialized) {
@@ -94,8 +93,8 @@ class ImeActionDispatcher(
     private fun engineByModeOrNull(mode: KeyboardMode): ModeInputEngine? {
         if (!enginesReady()) return null
         return when {
-            mode.isChinese && !mode.useT9Layout -> cnQwertyEngine
-            mode.isChinese && mode.useT9Layout -> cnT9Engine
+            mode.isChinese && !mode.useT9Layout  -> cnQwertyEngine
+            mode.isChinese && mode.useT9Layout   -> cnT9Engine
             !mode.isChinese && !mode.useT9Layout -> enQwertyEngine
             else -> enT9Engine
         }
@@ -108,16 +107,15 @@ class ImeActionDispatcher(
             ?.getTransientComposingPreviewText()
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
-
         if (transientPreview != null) return transientPreview
-
         return candidateController.resolveComposingPreviewText()
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
     }
 
     private fun syncResolvedComposingToUiAndEditor() {
-        if (!::ui.isInitialized || !::candidateController.isInitialized || !::keyboardController.isInitialized) return
+        if (!::ui.isInitialized || !::candidateController.isInitialized ||
+            !::keyboardController.isInitialized) return
 
         val preview = resolveUnifiedPreviewText()
         ui.setComposingPreview(preview)
@@ -136,10 +134,6 @@ class ImeActionDispatcher(
         }
     }
 
-    /**
-     * 供 CandidateController 通过 lambda 读取当前 CN-T9 焦点音节下标。
-     * 只在 cnT9Engine 已初始化且为 CnT9InputEngine 时有效，否则返回 -1。
-     */
     fun getCnT9FocusedSegmentIndex(): Int {
         if (!::cnT9Engine.isInitialized) return -1
         return (cnT9Engine as? CnT9InputEngine)?.getFocusedSegmentIndex() ?: -1
@@ -173,7 +167,6 @@ class ImeActionDispatcher(
             candidateController = candidateController,
             session = sessions.cnT9,
             inputConnectionProvider = { inputConnectionProvider() }
-            // userChoiceStore / contextWindow 由 ImeGraph → CandidateController → CnT9CandidateEngine 注入
         )
         enQwertyEngine = EnQwertyInputEngine(
             ui = ui,
@@ -208,7 +201,6 @@ class ImeActionDispatcher(
         }
 
         applyEnQwertyPredictPrefIfNeeded(mainMode())
-
         currentEngineOrNull()?.syncEnglishPredictUi()
         syncSymbolPanelUi()
         refreshComposingView()
@@ -219,46 +211,36 @@ class ImeActionDispatcher(
             lastKnownMainMode = newMode
             return
         }
-
         if (inHandleMainModeChanged) {
             deferredMainMode = newMode
             return
         }
-
         inHandleMainModeChanged = true
         try {
             var target = newMode
-
             while (true) {
                 val oldMode = lastKnownMainMode
                 lastKnownMainMode = target
-
                 if (oldMode != null && oldMode != target) {
                     val oldEngine = engineByModeOrNull(oldMode)
                     val newEngine = engineByModeOrNull(target)
                     if (oldEngine != null && newEngine != null) {
                         oldEngine.beforeModeSwitch()
-
                         oldEngine.clearComposing()
                         newEngine.clearComposing()
                         newEngine.afterModeSwitch()
-
                         applyEnQwertyPredictPrefIfNeeded(target)
-
-                        assertSessionCleared(oldMode, from = "handleMainModeChanged ${oldMode} -> ${target} (old)")
-                        assertSessionCleared(target, from = "handleMainModeChanged ${oldMode} -> ${target} (new)")
-
+                        assertSessionCleared(oldMode, from = "handleMainModeChanged $oldMode -> $target (old)")
+                        assertSessionCleared(target,  from = "handleMainModeChanged $oldMode -> $target (new)")
                         syncSymbolPanelUi()
                         refreshComposingView()
                     }
                 }
-
                 val next = deferredMainMode
                 if (next == null || next == target) {
                     deferredMainMode = null
                     break
                 }
-
                 deferredMainMode = null
                 target = next
             }
@@ -304,14 +286,24 @@ class ImeActionDispatcher(
         refreshComposingView()
     }
 
-    override fun onPinyinSidebarClick(pinyin: String) {
+    // ── 修复：签名与 ImeActions 接口对齐 ─────────────────────────
+
+    /**
+     * 用户点选 sidebar 中的拼音音节。
+     * 接口签名：onPinyinSidebarClick(pinyin: String, t9Code: String = "")
+     */
+    override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         val engine = currentEngineOrNull() ?: return
         engine.beforeModeSwitch()
-        engine.onPinyinSidebarClick(pinyin)
+        engine.onPinyinSidebarClick(pinyin, t9Code)
         refreshComposingView()
     }
 
-    override fun onPinyinSidebarSegmentClick(index: Int, pinyin: String?) {
+    /**
+     * 用户点击了已物化的拼音段（触发重切分 / 消歧）。
+     * 接口签名：onPinyinSidebarSegmentClick(index: Int)
+     */
+    override fun onPinyinSidebarSegmentClick(index: Int) {
         val cnT9 = if (mainMode().isChinese && mainMode().useT9Layout) {
             cnT9Engine as? CnT9InputEngine
         } else null
@@ -320,13 +312,10 @@ class ImeActionDispatcher(
             cnT9.beforeModeSwitch()
             cnT9.focusMaterializedSegment(index)
             refreshComposingView()
-            return
-        }
-
-        if (!pinyin.isNullOrEmpty()) {
-            onPinyinSidebarClick(pinyin)
         }
     }
+
+    // ─────────────────────────────────────────────────────────────
 
     override fun commitText(text: String) {
         inputConnectionProvider()?.commitText(text, 1)
@@ -349,17 +338,16 @@ class ImeActionDispatcher(
         currentEngineOrNull()?.handleBackspace() ?: run {
             val ic = inputConnectionProvider() ?: return
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
-            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP,   KeyEvent.KEYCODE_DEL))
         }
         refreshComposingView()
     }
 
     override fun handleSpecialKey(keyLabel: String) {
         val engine = currentEngineOrNull() ?: return
-
         engine.beforeModeSwitch()
 
-        // ── 分词键（数字1键）────────────────────────────────────────
+        // ── 分词键 ────────────────────────────────────────────────
         if (keyLabel == "分词") {
             val mode = mainMode()
             if (mode.isChinese && mode.useT9Layout) {
@@ -379,7 +367,7 @@ class ImeActionDispatcher(
             return
         }
 
-        // ── 回车键 ─────────────────────────────────────────────────
+        // ── 回车键 ────────────────────────────────────────────────
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
             val enterOverride = candidateController.resolveEnterCommitText()
@@ -390,29 +378,27 @@ class ImeActionDispatcher(
                 refreshComposingView()
                 return
             }
-
             val consumed = engine.handleEnter(inputConnectionProvider())
             if (!consumed) {
                 val ic = inputConnectionProvider() ?: return
                 ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP,   KeyEvent.KEYCODE_ENTER))
             }
             refreshComposingView()
             return
         }
 
-        // ── 空格键 ─────────────────────────────────────────────────
+        // ── 空格键 ────────────────────────────────────────────────
         if (keyLabel == "SPACE") {
             handleSpaceKey()
             return
         }
 
-        // ── 全角标点转换（中文模式）────────────────────────────────
+        // ── 全角标点转换 ──────────────────────────────────────────
         val mode = mainMode()
         if (mode.isChinese && CnPunctuationHelper.isPunctuation(keyLabel)) {
             val fullWidth = CnPunctuationHelper.toFullWidth(keyLabel)
             val ic = inputConnectionProvider() ?: return
-
             if (sessionByMode(mode).isComposing()) {
                 val committed = candidateController.commitFirstCandidateOnEnter()
                 if (!committed) {
@@ -423,7 +409,6 @@ class ImeActionDispatcher(
                     }
                 }
             }
-
             ic.commitText(fullWidth, 1)
             refreshComposingView()
             return
@@ -445,10 +430,8 @@ class ImeActionDispatcher(
     override fun switchToNumericMode() {
         val engine = currentEngineOrNull()
         engine?.beforeModeSwitch()
-
         if (!::keyboardController.isInitialized) return
         keyboardController.openPanel(PanelType.NUMERIC)
-
         engine?.syncEnglishPredictUi()
         refreshComposingView()
     }
@@ -456,14 +439,10 @@ class ImeActionDispatcher(
     override fun openSymbolPanel() {
         val engine = currentEngineOrNull()
         engine?.beforeModeSwitch()
-
         if (!::keyboardController.isInitialized) return
-
         symbolCategory = ImeActions.SymbolCategory.COMMON
         symbolPage = 0
-
         keyboardController.openPanel(PanelType.SYMBOL)
-
         engine?.syncEnglishPredictUi()
         syncSymbolPanelUi()
         refreshComposingView()
@@ -472,17 +451,13 @@ class ImeActionDispatcher(
     override fun closeSymbolPanel() {
         val engine = currentEngineOrNull()
         engine?.beforeModeSwitch()
-
         if (!::keyboardController.isInitialized) return
         keyboardController.closePanel()
-
         engine?.syncEnglishPredictUi()
         refreshComposingView()
     }
 
-    override fun exitNumericMode() {
-        closeSymbolPanel()
-    }
+    override fun exitNumericMode() { closeSymbolPanel() }
 
     override fun setSymbolCategory(category: ImeActions.SymbolCategory) {
         symbolCategory = category
@@ -508,11 +483,7 @@ class ImeActionDispatcher(
     override fun commitSymbolFromPanel(symbol: String) {
         SymbolPrefs.recordMruCommon(context, symbol)
         commitText(symbol)
-        if (!symbolLocked) {
-            closeSymbolPanel()
-        } else {
-            syncSymbolPanelUi()
-        }
+        if (!symbolLocked) closeSymbolPanel() else syncSymbolPanelUi()
     }
 
     override fun getEnglishPredictEnabled(): Boolean {
@@ -527,15 +498,12 @@ class ImeActionDispatcher(
 
     override fun setEnglishPredict(enabled: Boolean) {
         val mode = mainMode()
-        if (!mode.isChinese && !mode.useT9Layout) {
-            saveEnQwertyPredictPref(enabled)
-        }
+        if (!mode.isChinese && !mode.useT9Layout) saveEnQwertyPredictPref(enabled)
         currentEngineOrNull()?.setEnglishPredict(enabled)
         refreshComposingView()
     }
 
     override fun toggleEnglishPredict() {
-        val next = !getEnglishPredictEnabled()
-        setEnglishPredict(next)
+        setEnglishPredict(!getEnglishPredictEnabled())
     }
 }
