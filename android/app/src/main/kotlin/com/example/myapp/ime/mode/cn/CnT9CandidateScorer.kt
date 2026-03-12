@@ -46,7 +46,7 @@ object CnT9CandidateScorer {
         val syllableDistance: Int,
         val exactInput: Boolean,
         val planRank: Int,
-        val contextBoost: Int,   // ← 新增
+        val contextBoost: Int,
         val userBoost: Int,
         val priority: Int,
         val syllables: Int,
@@ -60,7 +60,7 @@ object CnT9CandidateScorer {
         rawDigits: String,
         lockedSegmentCount: Int,
         userChoiceStore: CnT9UserChoiceStore? = null,
-        contextWindow: CnT9ContextWindow? = null    // ← 新增
+        contextWindow: CnT9ContextWindow? = null
     ): Map<Candidate, CandidateScore?> {
         if (candidates.isEmpty() || plans.isEmpty()) return emptyMap()
 
@@ -92,7 +92,7 @@ object CnT9CandidateScorer {
                 .thenBy { scoreCache[it]?.syllableDistance ?: Int.MAX_VALUE }
                 .thenByDescending { if (scoreCache[it]?.exactInput == true) 1 else 0 }
                 .thenBy { scoreCache[it]?.planRank ?: Int.MAX_VALUE }
-                .thenByDescending { scoreCache[it]?.contextBoost ?: 0 }  // ← 新增
+                .thenByDescending { scoreCache[it]?.contextBoost ?: 0 }
                 .thenByDescending { scoreCache[it]?.userBoost ?: 0 }
                 .thenByDescending { scoreCache[it]?.priority ?: it.priority }
                 .thenByDescending { scoreCache[it]?.wordLength ?: it.word.length }
@@ -113,12 +113,16 @@ object CnT9CandidateScorer {
         val syllables = CnT9CandidateFilter.resolveCandidateSyllables(cand)
         if (syllables.isEmpty()) return null
 
-        // contextBoost 只与候选词本身有关，不随 plan 变化
         val contextBoost = contextWindow?.getContextBoost(cand.word) ?: 0
 
         var best: CandidateScore? = null
         for (plan in plans) {
-            val userBoost = userChoiceStore?.getBoost(plan.text, cand.word) ?: 0
+            // 修复：normalize plan.text（去掉 '）再查 userBoost，与 recordChoice 存入格式一致
+            val userBoost = userChoiceStore?.getBoost(
+                CnT9PinyinSplitter.normalize(plan.text),
+                cand.word
+            ) ?: 0
+
             val score = scoreAgainstPlan(
                 cand, plan, syllables, rawDigits, lockedSegmentCount, contextBoost, userBoost
             )
@@ -201,23 +205,23 @@ object CnT9CandidateScorer {
     private fun isBetter(a: CandidateScore, b: CandidateScore): Boolean {
         return when {
             a.lockedExactSegments != b.lockedExactSegments -> a.lockedExactSegments > b.lockedExactSegments
-            a.lockedExactChars != b.lockedExactChars -> a.lockedExactChars > b.lockedExactChars
+            a.lockedExactChars != b.lockedExactChars       -> a.lockedExactChars > b.lockedExactChars
             a.lockedPrefixSegments != b.lockedPrefixSegments -> a.lockedPrefixSegments > b.lockedPrefixSegments
-            a.exactSegments != b.exactSegments -> a.exactSegments > b.exactSegments
-            a.exactChars != b.exactChars -> a.exactChars > b.exactChars
-            a.prefixSegments != b.prefixSegments -> a.prefixSegments > b.prefixSegments
-            a.prefixChars != b.prefixChars -> a.prefixChars > b.prefixChars
-            a.consumedDigits != b.consumedDigits -> a.consumedDigits > b.consumedDigits
-            a.uncoveredDigits != b.uncoveredDigits -> a.uncoveredDigits < b.uncoveredDigits
-            a.syllableDistance != b.syllableDistance -> a.syllableDistance < b.syllableDistance
-            a.exactInput != b.exactInput -> a.exactInput
-            a.planRank != b.planRank -> a.planRank < b.planRank
-            a.contextBoost != b.contextBoost -> a.contextBoost > b.contextBoost  // ← 新增
-            a.userBoost != b.userBoost -> a.userBoost > b.userBoost
-            a.priority != b.priority -> a.priority > b.priority
-            a.wordLength != b.wordLength -> a.wordLength > b.wordLength
-            a.syllables != b.syllables -> a.syllables > b.syllables
-            else -> a.inputLength > b.inputLength
+            a.exactSegments != b.exactSegments             -> a.exactSegments > b.exactSegments
+            a.exactChars != b.exactChars                   -> a.exactChars > b.exactChars
+            a.prefixSegments != b.prefixSegments           -> a.prefixSegments > b.prefixSegments
+            a.prefixChars != b.prefixChars                 -> a.prefixChars > b.prefixChars
+            a.consumedDigits != b.consumedDigits           -> a.consumedDigits > b.consumedDigits
+            a.uncoveredDigits != b.uncoveredDigits         -> a.uncoveredDigits < b.uncoveredDigits
+            a.syllableDistance != b.syllableDistance       -> a.syllableDistance < b.syllableDistance
+            a.exactInput != b.exactInput                   -> a.exactInput
+            a.planRank != b.planRank                       -> a.planRank < b.planRank
+            a.contextBoost != b.contextBoost               -> a.contextBoost > b.contextBoost
+            a.userBoost != b.userBoost                     -> a.userBoost > b.userBoost
+            a.priority != b.priority                       -> a.priority > b.priority
+            a.wordLength != b.wordLength                   -> a.wordLength > b.wordLength
+            a.syllables != b.syllables                     -> a.syllables > b.syllables
+            else                                           -> a.inputLength > b.inputLength
         }
     }
 }
