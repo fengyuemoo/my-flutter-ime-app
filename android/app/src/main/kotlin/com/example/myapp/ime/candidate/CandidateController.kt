@@ -23,7 +23,9 @@ class CandidateController(
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
     private val userChoiceStore: CnT9UserChoiceStore? = null,
-    private val contextWindow: CnT9ContextWindow? = null    // ← 新增
+    private val contextWindow: CnT9ContextWindow? = null,
+    // 供 sidebar 焦点消歧：返回当前 CN-T9 焦点音节下标，-1 表示无焦点
+    private val focusedT9SegmentIndexProvider: () -> Int = { -1 }
 ) : UiStateActions {
 
     private val cnQwertyEngine = CnQwertyCandidateEngine(
@@ -45,7 +47,8 @@ class CandidateController(
         clearComposing = clearComposing,
         isRawCommitMode = { keyboardController.isRawCommitMode() },
         userChoiceStore = userChoiceStore,
-        contextWindow = contextWindow                        // ← 新增
+        contextWindow = contextWindow,
+        focusedSegmentIndexProvider = focusedT9SegmentIndexProvider   // ← 注入
     )
 
     private val enQwertyEngine = EnQwertyCandidateEngine(

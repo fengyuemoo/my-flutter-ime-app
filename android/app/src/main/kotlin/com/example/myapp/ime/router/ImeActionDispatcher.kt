@@ -136,6 +136,15 @@ class ImeActionDispatcher(
         }
     }
 
+    /**
+     * 供 CandidateController 通过 lambda 读取当前 CN-T9 焦点音节下标。
+     * 只在 cnT9Engine 已初始化且为 CnT9InputEngine 时有效，否则返回 -1。
+     */
+    fun getCnT9FocusedSegmentIndex(): Int {
+        if (!::cnT9Engine.isInitialized) return -1
+        return (cnT9Engine as? CnT9InputEngine)?.getFocusedSegmentIndex() ?: -1
+    }
+
     fun attach(
         ui: ImeUi,
         keyboardController: KeyboardController,
@@ -356,12 +365,10 @@ class ImeActionDispatcher(
             if (mode.isChinese && mode.useT9Layout) {
                 val cnT9Session = sessions.cnT9
                 if (cnT9Session.isComposing()) {
-                    // 有拼音输入 → 插入切分点
                     cnT9Session.insertT9ManualCutAtEnd()
                     engine.refreshCandidates()
                     refreshComposingView()
                 } else {
-                    // 无输入 → 退化为数字 1
                     inputConnectionProvider()?.commitText("1", 1)
                     refreshComposingView()
                 }
@@ -406,11 +413,9 @@ class ImeActionDispatcher(
             val fullWidth = CnPunctuationHelper.toFullWidth(keyLabel)
             val ic = inputConnectionProvider() ?: return
 
-            // 若正在 composing，标点触发首选上屏后再插入标点
             if (sessionByMode(mode).isComposing()) {
                 val committed = candidateController.commitFirstCandidateOnEnter()
                 if (!committed) {
-                    // 首选置信度不足，先强制上屏 composing 内容（rawDigits / preedit）
                     val preview = candidateController.resolveComposingPreviewText()
                     if (!preview.isNullOrEmpty()) {
                         ic.commitText(preview, 1)

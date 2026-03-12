@@ -35,7 +35,6 @@ class ImeGraph(
     val layoutController: LayoutController,
     val toolbarController: ToolbarController,
     val uiBinder: ImeUiBinder,
-    // ↓ 提升为成员，供 ImeBootstrapper 在 onStartInputView 时 clear
     val contextWindow: CnT9ContextWindow
 ) {
 
@@ -89,10 +88,7 @@ class ImeGraph(
             modeHolder.mode = keyboardController.getMainMode()
             keyboardController.onModeChanged = { modeHolder.mode = it }
 
-            // 用户选词学习存储：持久化，生命周期与 ImeGraph 一致
             val userChoiceStore = CnT9UserChoiceStore(context)
-
-            // 上下文窗口：会话级内存，切换输入框时由 ImeBootstrapper 主动 clear
             val contextWindow = CnT9ContextWindow()
 
             val candidateController = CandidateController(
@@ -103,7 +99,9 @@ class ImeGraph(
                 commitRaw = { text -> inputConnectionProvider()?.commitText(text, 1) },
                 clearComposing = { dispatcher.clearComposing() },
                 userChoiceStore = userChoiceStore,
-                contextWindow = contextWindow
+                contextWindow = contextWindow,
+                // 延迟读取：dispatcher.attach() 后 cnT9Engine 才初始化，lambda 保证每次调用时才解析
+                focusedT9SegmentIndexProvider = { dispatcher.getCnT9FocusedSegmentIndex() }
             )
 
             val toolbarController = ToolbarController(
@@ -171,7 +169,7 @@ class ImeGraph(
                 layoutController = layoutController,
                 toolbarController = toolbarController,
                 uiBinder = uiBinder,
-                contextWindow = contextWindow        // ← 传入
+                contextWindow = contextWindow
             )
         }
     }
