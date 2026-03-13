@@ -26,47 +26,50 @@ class CandidateController(
     private val contextWindow: CnT9ContextWindow? = null
 ) : UiStateActions {
 
+    // P1 修复：持有 CnT9PreeditFormatter 实例，启用缓存与 invalidate() 能力
+    private val preeditFormatter = CnT9PreeditFormatter()
+
     private val cnQwertyEngine = CnQwertyCandidateEngine(
-        ui                = ui,
+        ui                 = ui,
         keyboardController = keyboardController,
-        dictEngine        = dictEngine,
-        session           = sessions.cnQwerty,
-        commitRaw         = commitRaw,
-        clearComposing    = clearComposing,
-        isRawCommitMode   = { keyboardController.isRawCommitMode() }
+        dictEngine         = dictEngine,
+        session            = sessions.cnQwerty,
+        commitRaw          = commitRaw,
+        clearComposing     = clearComposing,
+        isRawCommitMode    = { keyboardController.isRawCommitMode() }
     )
 
-    // 修复：删除不存在的 focusedSegmentIndexProvider 参数
     private val cnT9Engine = CnT9CandidateEngine(
-        ui                = ui,
+        ui                 = ui,
         keyboardController = keyboardController,
-        dictEngine        = dictEngine,
-        session           = sessions.cnT9,
-        commitRaw         = commitRaw,
-        clearComposing    = clearComposing,
-        isRawCommitMode   = { keyboardController.isRawCommitMode() },
-        userChoiceStore   = userChoiceStore,
-        contextWindow     = contextWindow
+        dictEngine         = dictEngine,
+        session            = sessions.cnT9,
+        commitRaw          = commitRaw,
+        clearComposing     = clearComposing,
+        isRawCommitMode    = { keyboardController.isRawCommitMode() },
+        userChoiceStore    = userChoiceStore,
+        contextWindow      = contextWindow,
+        onPreeditInvalidate = { preeditFormatter.invalidate() }   // P1 修复：注入 invalidate 回调
     )
 
     private val enQwertyEngine = EnQwertyCandidateEngine(
-        ui                = ui,
+        ui                 = ui,
         keyboardController = keyboardController,
-        dictEngine        = dictEngine,
-        session           = sessions.enQwerty,
-        commitRaw         = commitRaw,
-        clearComposing    = clearComposing,
-        isRawCommitMode   = { keyboardController.isRawCommitMode() }
+        dictEngine         = dictEngine,
+        session            = sessions.enQwerty,
+        commitRaw          = commitRaw,
+        clearComposing     = clearComposing,
+        isRawCommitMode    = { keyboardController.isRawCommitMode() }
     )
 
     private val enT9Engine = EnT9CandidateEngine(
-        ui                = ui,
+        ui                 = ui,
         keyboardController = keyboardController,
-        dictEngine        = dictEngine,
-        session           = sessions.enT9,
-        commitRaw         = commitRaw,
-        clearComposing    = clearComposing,
-        isRawCommitMode   = { keyboardController.isRawCommitMode() }
+        dictEngine         = dictEngine,
+        session            = sessions.enT9,
+        commitRaw          = commitRaw,
+        clearComposing     = clearComposing,
+        isRawCommitMode    = { keyboardController.isRawCommitMode() }
     )
 
     private enum class ModeKey {
@@ -121,7 +124,7 @@ class CandidateController(
 
     fun resolveComposingPreviewText(): String? {
         return when (currentModeKey()) {
-            ModeKey.CN_T9 -> CnT9PreeditFormatter.format(
+            ModeKey.CN_T9 -> preeditFormatter.format(     // P1 修复：使用实例，启用缓存
                 session        = sessions.cnT9,
                 dict           = dictEngine,
                 engineOverride = cnT9Engine.getComposingPreviewOverride()

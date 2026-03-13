@@ -14,21 +14,22 @@ import java.util.Locale
  *  2. committedPrefix（已物化上屏前缀）直接拼在最前
  *  3. lockedSegs（pinyinStack 已确认音节）接在 committedPrefix 之后
  *  4. plannedSegs（planAll 推算的 rawDigits 对应拼音段）接在最后
- *  5. 段与段之间用 ' 分隔，显示拼音字母而非数字
- *  6. dict 未加载时展示 [abc] 形式的键位字母组，而非原始数字或单字母
+ *  5. 段与段之间用 ' 分隔，展示拼音字母而非原始数字
+ *  6. dict 未加载时展示 [abc] 形式的键位字母组（P2 修复），而非单字母或原始数字
  *
  * ── 缓存策略（P1 修复）────────────────────────────────────────────────
  *  对 (rawDigits, lockedSegs, committedPrefix, dictLoaded) 四元组做轻量缓存：
- *  - 相同输入下直接返回上次结果，避免每帧重跑 planAll()
- *  - 词库加载完成（dictLoaded 由 false→true）会触发自动重算
+ *  - 相同输入下直接复用上次结果，避免每帧重跑 planAll()
+ *  - 词库加载完成（dictLoaded: false → true）触发自动重算
  *  - rawDigits / lockedSegs / committedPrefix 任意变化也会触发重算
- *  - 外部可调用 invalidate() 强制下次重算（如 session clear 后）
+ *  - 外部可调用 invalidate() 强制下次重算（Idle/选词上屏后）
  *
  * 线程安全：仅在 IME 主线程调用，无需加锁。
+ * 生命周期：由 CandidateController 持有，与 IME Service 同生命周期。
  */
 class CnT9PreeditFormatter {
 
-    // ── 缓存字段 ──────────────────────────────────────────────────────
+    // ── 缓存 ──────────────────────────────────────────────────────────
 
     private data class CacheKey(
         val rawDigits: String,
@@ -55,7 +56,7 @@ class CnT9PreeditFormatter {
         dict: Dictionary,
         engineOverride: String? = null
     ): String? {
-        // engineOverride 优先，不走缓存（外部已确保只在需要时注入）
+        // engineOverride 优先，不走缓存
         val override = engineOverride?.trim()?.takeIf { it.isNotEmpty() }
         if (override != null) return override
 
@@ -65,29 +66,29 @@ class CnT9PreeditFormatter {
             .filter { it.isNotEmpty() }
         val rawDigits = session.rawT9Digits
 
+        // Idle：清缓存并返回 null
         if (committedPrefix.isEmpty() && lockedSegs.isEmpty() && rawDigits.isEmpty()) {
-            // Idle：清缓存并返回 null
             invalidate()
             return null
         }
 
-        // ── 缓存命中检查 ──────────────────────────────────────────────
+        // 缓存命中检查
         val key = CacheKey(
-            rawDigits      = rawDigits,
-            lockedSegs     = lockedSegs,
+            rawDigits       = rawDigits,
+            lockedSegs      = lockedSegs,
             committedPrefix = committedPrefix,
-            dictLoaded     = dict.isLoaded
+            dictLoaded      = dict.isLoaded
         )
         if (key == lastKey) return lastResult
 
-        // ── 重新计算 ──────────────────────────────────────────────────
+        // 重新计算
         val result = compute(
             committedPrefix = committedPrefix,
             lockedSegs      = lockedSegs,
             rawDigits       = rawDigits,
-            dict            = dict
+            dict            = dict,
+            session         = session
         )
-
         lastKey    = key
         lastResult = result
         return result
@@ -95,35 +96,36 @@ class CnT9PreeditFormatter {
 
     /**
      * 强制使下次 format() 重算（不使用缓存）。
-     * 在 session clear / 用户选词上屏后由外部调用。
+     * 在 session clear / 用户选词上屏 / Idle 时由外部或 format() 自身调用。
      */
     fun invalidate() {
         lastKey    = null
         lastResult = null
     }
 
-    // ── 私有：核心计算逻辑 ────────────────────────────────────────────
+    // ── 私有：核心计算 ────────────────────────────────────────────────
 
     private fun compute(
         committedPrefix: String,
         lockedSegs: List<String>,
         rawDigits: String,
-        dict: Dictionary
+        dict: Dictionary,
+        session: ComposingSession
     ): String? {
         val plannedSegs: List<String> = when {
             rawDigits.isEmpty() -> emptyList()
             dict.isLoaded -> {
                 CnT9SentencePlanner.planAll(
                     digits     = rawDigits,
-                    manualCuts = emptySet(),   // preedit 仅做展示，不需要 manualCuts 影响
+                    manualCuts = session.t9ManualCuts,
                     dict       = dict
                 ).firstOrNull()
                     ?.segments
                     ?.map { it.trim().lowercase(Locale.ROOT) }
                     ?.filter { it.isNotEmpty() }
-                    ?: fallbackKeyLabels(rawDigits)   // planAll 返回空时降级
+                    ?: fallbackKeyLabels(rawDigits)
             }
-            else -> fallbackKeyLabels(rawDigits)      // 词库未加载时使用键位标签
+            else -> fallbackKeyLabels(rawDigits)
         }
 
         val allSegs = lockedSegs + plannedSegs
@@ -140,12 +142,12 @@ class CnT9PreeditFormatter {
     /**
      * P2 修复：词库未加载时的键位标签兜底。
      *
-     * 旧实现：每个数字只取第一个字母（2→a, 3→d, 4→g…），用户看到无意义字母串。
-     * 新实现：每个数字展示该键对应的全部字母，格式为 [abc]，
+     * 旧实现：每个数字只取第一个字母（2→a, 3→d…），用户看到无意义字母串。
+     * 新实现：每个数字展示该键对应的全部字母，格式 [abc]，
      *         明确传达"词库加载中，当前按键对应这些字母"的语义。
      *
-     * 示例：rawDigits = "46" → listOf("[ghi]", "[mno]")
-     *       拼接后 preedit 显示：[ghi]'[mno]
+     * 示例：rawDigits = "46" → ["[ghi]", "[mno]"]
+     *       preedit 显示：[ghi]'[mno]
      */
     private fun fallbackKeyLabels(digits: String): List<String> {
         return digits.map { d ->
