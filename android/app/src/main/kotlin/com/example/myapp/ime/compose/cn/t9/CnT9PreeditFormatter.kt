@@ -11,18 +11,17 @@ import java.util.Locale
  *
  * 生成规则（对应规则清单「Preedit 顶部预览」）：
  *  1. engineOverride 优先级最高（由 CnT9CandidateEngine 在特殊状态下注入）
- *  2. committedPrefix（已物化上屏前缀）直接拼在最前
+ *  2. committedPrefix（已物化上屏前缀汉字）直接拼在最前，与后续拼音之间无额外分隔
  *  3. lockedSegs（pinyinStack 已确认音节）接在 committedPrefix 之后
  *  4. plannedSegs（planAll 推算的 rawDigits 对应拼音段）接在最后
- *  5. 段与段之间用 ' 分隔，展示拼音字母而非原始数字
- *  6. dict 未加载时展示 [abc] 形式的键位字母组（P2 修复），而非单字母或原始数字
+ *  5. 拼音段与段之间用 ' 分隔，不显示数字
+ *  6. dict 未加载时展示 [abc] 格式键位字母组（P2 修复），而非单字母或原始数字
  *
  * ── 缓存策略（P1 修复）────────────────────────────────────────────────
  *  对 (rawDigits, lockedSegs, committedPrefix, dictLoaded) 四元组做轻量缓存：
- *  - 相同输入下直接复用上次结果，避免每帧重跑 planAll()
- *  - 词库加载完成（dictLoaded: false → true）触发自动重算
- *  - rawDigits / lockedSegs / committedPrefix 任意变化也会触发重算
- *  - 外部可调用 invalidate() 强制下次重算（Idle/选词上屏后）
+ *  - 相同输入状态下直接复用结果，避免每帧重跑 planAll()
+ *  - 任意字段变化（含 dictLoaded: false→true）触发自动重算
+ *  - 外部调用 invalidate() 强制下次重算（Idle/选词上屏后）
  *
  * 线程安全：仅在 IME 主线程调用，无需加锁。
  * 生命周期：由 CandidateController 持有，与 IME Service 同生命周期。
@@ -56,7 +55,6 @@ class CnT9PreeditFormatter {
         dict: Dictionary,
         engineOverride: String? = null
     ): String? {
-        // engineOverride 优先，不走缓存
         val override = engineOverride?.trim()?.takeIf { it.isNotEmpty() }
         if (override != null) return override
 
@@ -66,13 +64,11 @@ class CnT9PreeditFormatter {
             .filter { it.isNotEmpty() }
         val rawDigits = session.rawT9Digits
 
-        // Idle：清缓存并返回 null
         if (committedPrefix.isEmpty() && lockedSegs.isEmpty() && rawDigits.isEmpty()) {
             invalidate()
             return null
         }
 
-        // 缓存命中检查
         val key = CacheKey(
             rawDigits       = rawDigits,
             lockedSegs      = lockedSegs,
@@ -81,7 +77,6 @@ class CnT9PreeditFormatter {
         )
         if (key == lastKey) return lastResult
 
-        // 重新计算
         val result = compute(
             committedPrefix = committedPrefix,
             lockedSegs      = lockedSegs,
@@ -131,11 +126,10 @@ class CnT9PreeditFormatter {
         val allSegs = lockedSegs + plannedSegs
 
         return buildString {
+            // committedPrefix 是已上屏汉字，直接拼接，不在其后加 ' 分隔符
+            // （' 仅用于拼音音节之间，汉字与拼音之间无需分隔）
             if (committedPrefix.isNotEmpty()) append(committedPrefix)
-            if (allSegs.isNotEmpty()) {
-                if (committedPrefix.isNotEmpty()) append("'")
-                append(allSegs.joinToString("'"))
-            }
+            if (allSegs.isNotEmpty()) append(allSegs.joinToString("'"))
         }.takeIf { it.isNotEmpty() }
     }
 
@@ -143,7 +137,7 @@ class CnT9PreeditFormatter {
      * P2 修复：词库未加载时的键位标签兜底。
      *
      * 旧实现：每个数字只取第一个字母（2→a, 3→d…），用户看到无意义字母串。
-     * 新实现：每个数字展示该键对应的全部字母，格式 [abc]，
+     * 新实现：每个数字展示该键对应全部字母，格式 [abc]，
      *         明确传达"词库加载中，当前按键对应这些字母"的语义。
      *
      * 示例：rawDigits = "46" → ["[ghi]", "[mno]"]
