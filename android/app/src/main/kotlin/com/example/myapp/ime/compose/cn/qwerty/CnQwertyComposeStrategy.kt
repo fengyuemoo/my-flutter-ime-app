@@ -13,24 +13,18 @@ class CnQwertyComposeStrategy(
 
     override fun onComposingInput(text: String): StrategyResult {
         if (text.isEmpty()) return StrategyResult.Noop
-
-        // Chinese QWERTY: Always append to session（统一小写）
         session().appendQwerty(text.lowercase())
         return StrategyResult.SessionMutated
     }
 
     override fun onT9Input(digit: String): StrategyResult {
-        // Not handled in QWERTY mode
         return StrategyResult.Noop
     }
 
-    override fun onPinyinSidebarClick(pinyin: String) {
+    // 修复：签名加 t9Code（CN-QWERTY 模式不使用 sidebar，忽略 t9Code 即可）
+    override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         val s = session()
-
-        // 关键：如果已有 committedPrefix（已选词但仍在 composing），这里不要 clear，避免前缀丢失
-        // 当前 CN-QWERTY 正常情况下也不会出现 sidebar（sidebar 主要来自 CN-T9），保守处理即可。
         if (s.committedPrefix.isNotEmpty()) return
-
         s.clear()
         s.appendQwerty(pinyin.lowercase())
     }
@@ -42,7 +36,6 @@ class CnQwertyComposeStrategy(
         val s = session()
         if (!s.isComposing()) return StrategyResult.Noop
 
-        // 中文全键盘 composing 时，Enter 提交 raw input
         val textToCommit = (s.committedPrefix + s.qwertyInput.lowercase())
         return if (textToCommit.isNotEmpty()) {
             StrategyResult.DirectCommit(textToCommit)

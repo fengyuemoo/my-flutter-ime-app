@@ -31,20 +31,18 @@ abstract class ModeInputEngine {
 
     abstract fun handleComposingInput(text: String)
     abstract fun handleT9Input(digit: String)
-    abstract fun onPinyinSidebarClick(pinyin: String)
+
+    // 修复：增加 t9Code 参数，与 ImeActions 接口签名对齐
+    abstract fun onPinyinSidebarClick(pinyin: String, t9Code: String = "")
+
     abstract fun handleBackspace()
-
     abstract fun handleSpaceKey()
-
     abstract fun handleEnter(ic: InputConnection?): Boolean
-
     abstract fun beforeModeSwitch()
     abstract fun afterModeSwitch()
-
     abstract fun getEnglishPredictEnabled(): Boolean
     abstract fun setEnglishPredict(enabled: Boolean)
     fun toggleEnglishPredict() = setEnglishPredict(!getEnglishPredictEnabled())
-
     abstract fun syncEnglishPredictUi()
 }
 
@@ -107,8 +105,9 @@ abstract class CnBaseInputEngine(
         handleStrategyResult(strategy.onT9Input(digit))
     }
 
-    override fun onPinyinSidebarClick(pinyin: String) {
-        strategy.onPinyinSidebarClick(pinyin)
+    // 修复：override 签名加 t9Code，传给 strategy
+    override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
+        strategy.onPinyinSidebarClick(pinyin, t9Code)
         afterSessionMutated()
     }
 
@@ -166,8 +165,8 @@ abstract class CnBaseInputEngine(
     private fun handleStrategyResult(result: StrategyResult) {
         when (result) {
             is StrategyResult.SessionMutated -> afterSessionMutated()
-            is StrategyResult.DirectCommit -> commitAndReset(result.text)
-            is StrategyResult.Noop -> {}
+            is StrategyResult.DirectCommit   -> commitAndReset(result.text)
+            is StrategyResult.Noop           -> {}
         }
     }
 }
@@ -223,7 +222,8 @@ abstract class EnBaseInputEngine(
         handleStrategyResult(strategy.onT9Input(digit))
     }
 
-    override fun onPinyinSidebarClick(pinyin: String) {
+    // 修复：override 签名加 t9Code（英文模式不使用，忽略即可）
+    override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         @Suppress("UNUSED_PARAMETER")
         val ignored = pinyin
     }
@@ -291,8 +291,8 @@ abstract class EnBaseInputEngine(
     private fun handleStrategyResult(result: StrategyResult) {
         when (result) {
             is StrategyResult.SessionMutated -> afterSessionMutated()
-            is StrategyResult.DirectCommit -> commitAndReset(result.text)
-            is StrategyResult.Noop -> {}
+            is StrategyResult.DirectCommit   -> commitAndReset(result.text)
+            is StrategyResult.Noop           -> {}
         }
     }
 }

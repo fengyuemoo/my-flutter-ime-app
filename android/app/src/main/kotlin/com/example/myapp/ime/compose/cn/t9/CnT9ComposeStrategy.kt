@@ -25,11 +25,13 @@ class CnT9ComposeStrategy(
         return StrategyResult.SessionMutated
     }
 
-    override fun onPinyinSidebarClick(pinyin: String) {
+    // 修复：签名加 t9Code；直接使用传入的 t9Code，不再自己重新计算
+    override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         val normalized = normalizePinyin(pinyin)
         if (normalized.isEmpty()) return
 
-        val code = pinyinToT9Code(normalized)
+        // 优先用上层传入的 t9Code；若为空则降级自算（兼容旧调用路径）
+        val code = t9Code.ifEmpty { pinyinToT9Code(normalized) }
         if (code.isEmpty()) return
 
         session().onPinyinSidebarClick(normalized, code)
@@ -51,7 +53,7 @@ class CnT9ComposeStrategy(
         return raw
             .trim()
             .lowercase(Locale.ROOT)
-            .replace("’", "'")
+            .replace("\u2019", "\u0027")
             .replace("'", "")
             .filter { it in 'a'..'z' || it == 'ü' || it == 'v' }
             .replace('v', 'ü')
@@ -62,7 +64,7 @@ class CnT9ComposeStrategy(
         return raw
             .trim()
             .lowercase(Locale.ROOT)
-            .replace("’", "'")
+            .replace("\u2019", "\u0027")
             .filter { it in 'a'..'z' || it == 'ü' || it == 'v' }
             .replace('ü', 'v')
     }
@@ -71,14 +73,14 @@ class CnT9ComposeStrategy(
         val sb = StringBuilder()
         for (ch in pinyin.lowercase(Locale.ROOT)) {
             val d = when (ch) {
-                'a', 'b', 'c' -> '2'
-                'd', 'e', 'f' -> '3'
-                'g', 'h', 'i' -> '4'
-                'j', 'k', 'l' -> '5'
-                'm', 'n', 'o' -> '6'
-                'p', 'q', 'r', 's' -> '7'
-                't', 'u', 'v', 'ü' -> '8'
-                'w', 'x', 'y', 'z' -> '9'
+                'a', 'b', 'c'       -> '2'
+                'd', 'e', 'f'       -> '3'
+                'g', 'h', 'i'       -> '4'
+                'j', 'k', 'l'       -> '5'
+                'm', 'n', 'o'       -> '6'
+                'p', 'q', 'r', 's'  -> '7'
+                't', 'u', 'v', 'ü'  -> '8'
+                'w', 'x', 'y', 'z'  -> '9'
                 else -> null
             }
             if (d != null) sb.append(d)
