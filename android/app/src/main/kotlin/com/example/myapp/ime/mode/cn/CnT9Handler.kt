@@ -44,8 +44,11 @@ object CnT9Handler : ImeModeHandler {
         )
 
         // ── 锁定段信息 ──────────────────────────────────────────────────
-        // 已锁定段不参与 SentencePlanner 重算，只重算锁后的 rawDigits 部分
-        val lockedSegmentIndices = sidebarState?.lockMap?.lockedSnapshot ?: emptyList()
+        // P4 修复：直接取稀疏锁定下标列表，不再转换为数量传入 Scorer。
+        // lockedSnapshot 是升序排列的已锁定段 index 列表（如 [0, 2]），
+        // Scorer 内部用 contains(i) 逐段判断，支持非连续锁定场景。
+        val lockedSegmentIndices: List<Int> =
+            sidebarState?.lockMap?.lockedSnapshot ?: emptyList()
 
         // ── 候选规划 ────────────────────────────────────────────────────
         val autoPlans = if (dictEngine.isLoaded && rawDigits.isNotEmpty()) {
@@ -65,15 +68,15 @@ object CnT9Handler : ImeModeHandler {
         val filtered = if (singleCharMode) queried.filter { it.word.length == 1 } else queried
 
         val finalList = ArrayList<Candidate>(filtered)
-        val lockedSegmentCount = lockedSegmentIndices.size.coerceAtLeast(stackSegs.size)
 
+        // P4 修复：传 lockedIndices（稀疏列表）替代原来的 lockedSegmentCount（数量）。
         val scoreCache = CnT9CandidateScorer.buildScoreCache(
-            candidates = finalList,
-            plans = plans,
-            rawDigits = rawDigits,
-            lockedSegmentCount = lockedSegmentCount,
+            candidates      = finalList,
+            plans           = plans,
+            rawDigits       = rawDigits,
+            lockedIndices   = lockedSegmentIndices,
             userChoiceStore = userChoiceStore,
-            contextWindow = contextWindow
+            contextWindow   = contextWindow
         )
 
         CnT9CandidateScorer.sortCandidates(finalList, scoreCache)

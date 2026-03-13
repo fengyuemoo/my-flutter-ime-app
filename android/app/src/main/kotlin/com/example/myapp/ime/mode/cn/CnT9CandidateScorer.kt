@@ -32,6 +32,11 @@ import kotlin.math.min
  *  19. syllables             音节数
  *  20. inputLength           input 长度
  *  21. word (字典序)          最终保证决定性排序
+ *
+ * lockedIndices 语义说明：
+ *  传入的是 CnT9SegmentLockMap.lockedSnapshot 的稀疏升序列表（如 [0, 2]），
+ *  表示用户已显式锁定的段下标集合。scoreAgainstPlan 用 contains(i) 逐段判断，
+ *  不再假设"锁定段是连续前 N 段"，修复稀疏锁定场景下的排序偏差。
  */
 object CnT9CandidateScorer {
 
@@ -58,11 +63,17 @@ object CnT9CandidateScorer {
         val inputLength: Int
     )
 
+    /**
+     * 为候选列表批量构建得分缓存。
+     *
+     * @param lockedIndices  已锁定段的稀疏下标集合（来自 CnT9SegmentLockMap.lockedSnapshot）；
+     *                       空列表表示无锁定段。
+     */
     fun buildScoreCache(
         candidates: List<Candidate>,
         plans: List<PathPlan>,
         rawDigits: String,
-        lockedSegmentCount: Int,
+        lockedIndices: List<Int>,
         userChoiceStore: CnT9UserChoiceStore? = null,
         contextWindow: CnT9ContextWindow? = null
     ): Map<Candidate, CandidateScore?> {
@@ -70,7 +81,7 @@ object CnT9CandidateScorer {
         val out = HashMap<Candidate, CandidateScore?>(candidates.size)
         for (cand in candidates) {
             out[cand] = bestScore(
-                cand, plans, rawDigits, lockedSegmentCount, userChoiceStore, contextWindow
+                cand, plans, rawDigits, lockedIndices, userChoiceStore, contextWindow
             )
         }
         return out
@@ -112,7 +123,7 @@ object CnT9CandidateScorer {
         cand: Candidate,
         plans: List<PathPlan>,
         rawDigits: String,
-        lockedSegmentCount: Int,
+        lockedIndices: List<Int>,
         userChoiceStore: CnT9UserChoiceStore?,
         contextWindow: CnT9ContextWindow?
     ): CandidateScore? {
@@ -140,7 +151,7 @@ object CnT9CandidateScorer {
                 plan               = plan,
                 candidateSyllables = syllables,
                 rawDigits          = rawDigits,
-                lockedSegmentCount = lockedSegmentCount,
+                lockedIndices      = lockedIndices,
                 contextBoost       = contextBoost,
                 userBoost          = userBoost,
                 lengthBoost        = lengthBoost,
@@ -158,15 +169,19 @@ object CnT9CandidateScorer {
         plan: PathPlan,
         candidateSyllables: List<String>,
         rawDigits: String,
-        lockedSegmentCount: Int,
+        lockedIndices: List<Int>,
         contextBoost: Int,
         userBoost: Int,
         lengthBoost: Int,
         penaltyScore: Int
     ): CandidateScore {
-        val planSegs      = plan.segments
-        val n             = min(planSegs.size, candidateSyllables.size)
-        val effectiveLocked = lockedSegmentCount.coerceAtMost(planSegs.size)
+        val planSegs = plan.segments
+        val n        = min(planSegs.size, candidateSyllables.size)
+
+        // P4 修复：用 lockedIndices.contains(i) 逐段判断是否属于锁定段，
+        // 替代原来的"连续前 N 段"假设，正确支持稀疏锁定（如只锁了 index 0 和 2）。
+        val lockedSet = if (lockedIndices.isEmpty()) emptySet<Int>()
+                        else lockedIndices.toHashSet()
 
         var lockedExactSegments  = 0
         var lockedExactChars     = 0
@@ -181,13 +196,14 @@ object CnT9CandidateScorer {
             val expected  = planSegs[i].lowercase(Locale.ROOT)
             val actual    = candidateSyllables[i].lowercase(Locale.ROOT)
             val segDigits = T9Lookup.encodeLetters(expected).length.coerceAtLeast(1)
+            val isLocked  = lockedSet.contains(i)
 
             when {
                 expected == actual -> {
                     exactSegments++;  exactChars    += expected.length
                     prefixSegments++; prefixChars   += expected.length
                     consumedDigits += segDigits
-                    if (i < effectiveLocked) {
+                    if (isLocked) {
                         lockedExactSegments++;  lockedExactChars += expected.length
                         lockedPrefixSegments++
                     }
@@ -196,13 +212,13 @@ object CnT9CandidateScorer {
                     // 候选音节以规划段为前缀（如规划 "zh" 候选 "zhong"）
                     prefixSegments++; prefixChars += expected.length
                     consumedDigits += segDigits
-                    if (i < effectiveLocked) lockedPrefixSegments++
+                    if (isLocked) lockedPrefixSegments++
                 }
                 expected.startsWith(actual) -> {
                     // 规划段以候选音节为前缀（如规划 "zhong" 候选 "zh"）
                     prefixSegments++; prefixChars += actual.length
                     consumedDigits += T9Lookup.encodeLetters(actual).length.coerceAtLeast(1)
-                    if (i < effectiveLocked) lockedPrefixSegments++
+                    if (isLocked) lockedPrefixSegments++
                 }
                 else -> {
                     // 无匹配：不计入 consumedDigits，直接跳过
@@ -210,7 +226,7 @@ object CnT9CandidateScorer {
             }
         }
 
-        // 未覆盖数字数：rawDigits 长度减去实际覆盖
+        // 未覆盖数字数：规划总 digits 减去实际覆盖
         val totalPlanDigits = planSegs.sumOf {
             T9Lookup.encodeLetters(it).length.coerceAtLeast(1)
         }
@@ -251,8 +267,14 @@ object CnT9CandidateScorer {
 
     /**
      * 判断 candidate a 的得分是否优于 b。
-     * 与 sortCandidates 中的 Comparator 维度顺序完全一致，
-     * 保证 bestScore 选出的最优分和排序结果一致。
+     * 与 sortCandidates 中的 Comparator 维度顺序完全一致（含第 21 维字典序），
+     * 保证 bestScore 选出的最优分和排序结果完全对称。
+     *
+     * word 字典序（第 21 维）：word 字典序较小的优先，与 sortCandidates 的
+     * .thenBy { it.word } 保持对称。isBetter 中通过比较两个 CandidateScore
+     * 所属候选的 word 实现——但 CandidateScore 本身不持有 word，因此这一维
+     * 在多 plan 择优时实际无法触发（同一 Candidate 对象 word 不变），返回
+     * false 即"视为相等"，仍保持正确性。
      */
     private fun isBetter(a: CandidateScore, b: CandidateScore): Boolean {
         // 1. lockedExactSegments ↑
@@ -316,7 +338,10 @@ object CnT9CandidateScorer {
         // 20. inputLength ↑
         if (a.inputLength          != b.inputLength)
             return a.inputLength          > b.inputLength
-        // 21. 完全相同 → a 不优于 b
+        // 21. word 字典序（P3 修复）：
+        //     isBetter 比较的是同一 Candidate 的不同 plan 得分，word 不变，
+        //     此分支实际不会触发，但保留以确保与 sortCandidates 完全对称。
+        //     若未来 CandidateScore 持有 word，可在此直接比较。
         return false
     }
 }
