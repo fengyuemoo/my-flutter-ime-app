@@ -9,28 +9,16 @@ import kotlin.math.min
 /**
  * CN-T9 候选硬过滤器。
  *
- * 职责：
- *  1. 从字典查询原始候选
- *  2. 用"读音必须与当前拼音路径匹配"的硬规则过滤
- *     - 精确/前缀匹配（严格）
- *     - 模糊音匹配（CnT9FuzzyPinyin，宽松兜底）
- * 不做软排序，不依赖 UI。
+ * ── R-C02 修复 ──────────────────────────────────────────────────────
+ * 新增候选字数约束：候选词字数（word.length）不得超过当前 activePath
+ * 的音节段数（plan.segments.size）。
  *
- * ── 候选来源分层说明（对应规则清单「来源优先级」）────────────────────────
+ * 理由：若候选词的汉字数多于可用音节数，则该词无论如何都无法被当前输入
+ * 完整匹配，提前过滤可减少无效排序计算量，同时避免不合理的长词出现在顶部。
  *
- * 规则清单描述的"用户词库 > 系统词库高频词 > 短语成语 > 单字"分层，
- * 在当前架构中**不通过数据库分表**实现，而是由两层机制共同保证：
- *
- *  1. 【数据库层】单张表，所有词条靠 COL_FREQ（词频）区分高低：
- *       高频系统词（priority > 40000）→ CnT9CandidateScorer 无惩罚
- *       低频/生僻词（priority < 5000） → penaltyScore 施压降排名
- *
- *  2. 【排序层】CnT9UserChoiceStore 运行时加分（userBoost，最高 +200）：
- *       用户选过的词在 Scorer 第 14 维获得加权，效果等价于"用户词库优先"。
- *       含时间衰减（30/90/180 天三档）+ streak 加乘（最多 ×1.4）。
- *
- * 因此本类只负责"硬过滤"（读音匹配），不需要感知词条来源。
- * 软排序完全交由 CnT9CandidateScorer 处理。
+ * 例外：pinyinStack（已物化段）参与构建 plan.segments，单字模糊兜底路径
+ * 中 plan.segments 可能为空（stackSegs 为空 + autoPlans 为空），此时
+ * 不施加约束，避免把 Fallback 候选过滤掉。
  */
 object CnT9CandidateFilter {
 
@@ -100,6 +88,12 @@ object CnT9CandidateFilter {
     }
 
     private fun passesHardFilter(cand: Candidate, plan: PathPlan): Boolean {
+        // R-C02 修复：候选字数不得超过当前路径的音节段数
+        // plan.segments 为空时跳过此约束（避免过滤 Fallback 路径下的兜底候选）
+        if (plan.segments.isNotEmpty() && cand.word.length > plan.segments.size) {
+            return false
+        }
+
         val syllables = resolveCandidateSyllables(cand)
         if (syllables.isNotEmpty()) {
             // 1. 精确/前缀匹配（优先）
@@ -130,10 +124,6 @@ object CnT9CandidateFilter {
         return candConcat.isNotEmpty() && candConcat == planConcat
     }
 
-    /**
-     * 模糊音匹配：对每个 plan 音节，检查候选对应音节是否模糊等价。
-     * 要求至少第一个音节模糊匹配，整体才通过。
-     */
     private fun matchesPlanFuzzy(
         candidateSyllables: List<String>,
         plan: PathPlan
@@ -148,7 +138,7 @@ object CnT9CandidateFilter {
             if (!CnT9FuzzyPinyin.isFuzzyMatch(expected, actual)
                 && !actual.startsWith(expected)
             ) {
-                return i > 0  // 至少匹配了 1 段才算通过
+                return i > 0
             }
         }
         return true

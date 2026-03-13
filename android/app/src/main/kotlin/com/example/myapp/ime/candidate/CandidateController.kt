@@ -3,6 +3,7 @@ package com.example.myapp.ime.candidate
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.cn.t9.CnT9PreeditFormatter
+import com.example.myapp.ime.compose.cn.t9.PreeditDisplay
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
@@ -23,7 +24,9 @@ class CandidateController(
     private val commitRaw: (String) -> Unit,
     private val clearComposing: () -> Unit,
     private val userChoiceStore: CnT9UserChoiceStore? = null,
-    private val contextWindow: CnT9ContextWindow? = null
+    private val contextWindow: CnT9ContextWindow? = null,
+    /** R-P04：由外部（ImeActionDispatcher / CnT9InputEngine）注入当前焦点段下标查询函数 */
+    private val focusedSegmentIndexProvider: (() -> Int)? = null
 ) : UiStateActions {
 
     // P1 修复：持有 CnT9PreeditFormatter 实例，启用缓存与 invalidate() 能力
@@ -122,24 +125,48 @@ class CandidateController(
         }
     }
 
-    fun resolveComposingPreviewText(): String? {
+    /**
+     * R-P04：返回带段样式的 PreeditDisplay（供 ImeActionDispatcher 渲染）。
+     * plainText 用于 setComposingText()，segments 用于 UI 样式渲染。
+     */
+    fun resolveComposingPreviewDisplay(): PreeditDisplay {
         return when (currentModeKey()) {
-            ModeKey.CN_T9 -> preeditFormatter.format(     // P1 修复：使用实例，启用缓存
-                session        = sessions.cnT9,
-                dict           = dictEngine,
-                engineOverride = cnT9Engine.getComposingPreviewOverride()
+            ModeKey.CN_T9 -> preeditFormatter.format(   // P1 + R-P04 修复
+                session              = sessions.cnT9,
+                dict                 = dictEngine,
+                engineOverride       = cnT9Engine.getComposingPreviewOverride(),
+                focusedSegmentIndex  = focusedSegmentIndexProvider?.invoke() ?: -1
             )
             else -> {
                 val override = getComposingPreviewOverride()
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
-                if (override != null) return override
-                currentSession()
-                    .displayText(useT9Layout = currentUseT9Layout())
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
+                val plain = override
+                    ?: currentSession()
+                        .displayText(useT9Layout = currentUseT9Layout())
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                if (plain.isNullOrEmpty()) PreeditDisplay.EMPTY
+                else PreeditDisplay(
+                    plainText = plain,
+                    segments  = listOf(
+                        com.example.myapp.ime.compose.cn.t9.PreeditSegment(
+                            text  = plain,
+                            style = com.example.myapp.ime.compose.cn.t9.PreeditSegment.Style.NORMAL
+                        )
+                    )
+                )
             }
         }
+    }
+
+    /**
+     * 兼容旧调用方，仅返回纯文字。
+     * 新代码应调用 resolveComposingPreviewDisplay()。
+     */
+    fun resolveComposingPreviewText(): String? {
+        val d = resolveComposingPreviewDisplay()
+        return d.plainText.takeIf { it.isNotEmpty() }
     }
 
     fun resolveEnterCommitText(): String? {

@@ -113,19 +113,43 @@ class ImeActionDispatcher(
             ?.takeIf { it.isNotEmpty() }
     }
 
+    /**
+     * R-P04 修复：同步 Preedit 到 UI 和 Editor。
+     *
+     * 使用 resolveComposingPreviewDisplay() 取得带段样式的 PreeditDisplay：
+     *  - plainText → InputConnection.setComposingText()（编辑器光标定位用）
+     *  - display   → ui.setComposingPreviewDisplay()（渲染高亮/下划线样式）
+     *
+     * transient preview（英文 T9 边打边出）仍走旧路径（无段样式需求）。
+     */
     private fun syncResolvedComposingToUiAndEditor() {
         if (!::ui.isInitialized || !::candidateController.isInitialized ||
             !::keyboardController.isInitialized) return
 
-        val preview = resolveUnifiedPreviewText()
-        ui.setComposingPreview(preview)
+        // transient 优先（英文模式边打边出，无样式需求）
+        val transient = currentEngineOrNull()
+            ?.getTransientComposingPreviewText()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
 
-        val ic = inputConnectionProvider() ?: return
-        if (preview.isNullOrEmpty()) {
-            ic.setComposingText("", 0)
+        if (transient != null) {
+            ui.setComposingPreview(transient)
+            inputConnectionProvider()?.setComposingText(transient, 1)
             return
         }
-        ic.setComposingText(preview, 1)
+
+        // CN-T9 / 其他模式：使用带样式的 Display
+        val display = candidateController.resolveComposingPreviewDisplay()
+
+        if (display.plainText.isEmpty()) {
+            ui.setComposingPreview(null)
+            inputConnectionProvider()?.setComposingText("", 0)
+            return
+        }
+
+        // 推送段样式给 UI（UI 层自行决定如何渲染 SpannableString）
+        ui.setComposingPreviewDisplay(display)
+        inputConnectionProvider()?.setComposingText(display.plainText, 1)
     }
 
     private fun applyEnQwertyPredictPrefIfNeeded(mode: KeyboardMode) {
@@ -286,12 +310,6 @@ class ImeActionDispatcher(
         refreshComposingView()
     }
 
-    // ── 修复：签名与 ImeActions 接口对齐 ─────────────────────────
-
-    /**
-     * 用户点选 sidebar 中的拼音音节。
-     * 接口签名：onPinyinSidebarClick(pinyin: String, t9Code: String = "")
-     */
     override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         val engine = currentEngineOrNull() ?: return
         engine.beforeModeSwitch()
@@ -299,10 +317,6 @@ class ImeActionDispatcher(
         refreshComposingView()
     }
 
-    /**
-     * 用户点击了已物化的拼音段（触发重切分 / 消歧）。
-     * 接口签名：onPinyinSidebarSegmentClick(index: Int)
-     */
     override fun onPinyinSidebarSegmentClick(index: Int) {
         val cnT9 = if (mainMode().isChinese && mainMode().useT9Layout) {
             cnT9Engine as? CnT9InputEngine
@@ -314,8 +328,6 @@ class ImeActionDispatcher(
             refreshComposingView()
         }
     }
-
-    // ─────────────────────────────────────────────────────────────
 
     override fun commitText(text: String) {
         inputConnectionProvider()?.commitText(text, 1)
@@ -347,7 +359,6 @@ class ImeActionDispatcher(
         val engine = currentEngineOrNull() ?: return
         engine.beforeModeSwitch()
 
-        // ── 分词键 ────────────────────────────────────────────────
         if (keyLabel == "分词") {
             val mode = mainMode()
             if (mode.isChinese && mode.useT9Layout) {
@@ -367,7 +378,6 @@ class ImeActionDispatcher(
             return
         }
 
-        // ── 回车键 ────────────────────────────────────────────────
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
             val enterOverride = candidateController.resolveEnterCommitText()
@@ -388,13 +398,11 @@ class ImeActionDispatcher(
             return
         }
 
-        // ── 空格键 ────────────────────────────────────────────────
         if (keyLabel == "SPACE") {
             handleSpaceKey()
             return
         }
 
-        // ── 全角标点转换 ──────────────────────────────────────────
         val mode = mainMode()
         if (mode.isChinese && CnPunctuationHelper.isPunctuation(keyLabel)) {
             val fullWidth = CnPunctuationHelper.toFullWidth(keyLabel)

@@ -8,6 +8,13 @@ import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.mode.ImeModeHandler
 import com.example.myapp.ime.ui.ImeUi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * CN-T9 候选引擎（协调器）。
@@ -21,6 +28,16 @@ import com.example.myapp.ime.ui.ImeUi
  *  6. Idle 状态下注入标点快捷候选
  *  7. 混输模式（英文/URL/邮箱）候选插入头部
  *  8. 候选排序稳定化（CnT9CandidateStabilizer）
+ *
+ * ── R-Perf01 修复：后台异步候选生成 ──────────────────────────────────
+ *  updateCandidates() 将 CnT9Handler.build()（包含 planAll + 字典查询 + 多维排序）
+ *  分发到 Dispatchers.Default 后台线程执行，结果通过 withContext(Dispatchers.Main)
+ *  回到主线程更新 UI，避免阻塞 IME 主线程（防 ANR / 掉帧）。
+ *
+ *  - 每次新调用 updateCandidates() 时取消上一个未完成的 Job（debounce cancel），
+ *    保证最终展示的永远是最新输入状态的结果。
+ *  - Idle 路径（无 session.isComposing()）不需要后台，直接同步执行。
+ *  - 调用方需在 IME 生命周期结束时调用 destroy() 取消协程 scope。
  *
  * [onPreeditInvalidate] 为可选回调，在选词上屏或 Idle 时通知外部
  * （CandidateController）使 CnT9PreeditFormatter 缓存失效（P1 修复）。
@@ -47,8 +64,20 @@ class CnT9CandidateEngine(
 
     private val stabilizer = CnT9CandidateStabilizer()
 
+    // R-Perf01：候选生成协程 scope，与 IME 生命周期绑定
+    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // 当前候选生成 Job，新请求到来时 cancel 旧 Job（debounce cancel）
+    private var candidateJob: Job? = null
+
     fun getComposingPreviewOverride(): String? = composingPreviewOverride
     fun getEnterCommitTextOverride(): String? = enterCommitTextOverride
+
+    /**
+     * 释放协程 scope。在 IME Service onDestroy() 时调用。
+     */
+    fun destroy() {
+        engineScope.cancel()
+    }
 
     private fun isDebuggable(): Boolean =
         (ui.rootView.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -122,20 +151,24 @@ class CnT9CandidateEngine(
         return consumed
     }
 
-    // ── 候选更新 ───────────────────────────────────────────────────
+    // ── 候选更新（R-Perf01：异步化）──────────────────────────────
 
     fun updateCandidates() {
         syncFilterButton()
-        currentCandidates.clear()
 
-        // ── S0 Idle ───────────────────────────────────────────────
+        // ── S0 Idle（同步，无需后台）──────────────────────────────
         if (!session.isComposing()) {
+            // 取消任何挂起的后台 Job
+            candidateJob?.cancel()
+            candidateJob = null
+
+            currentCandidates.clear()
             composingPreviewOverride = null
             enterCommitTextOverride = null
             resetUiSelectionToTop()
             sidebarState.clearAll()
             stabilizer.reset()
-            onPreeditInvalidate?.invoke()   // P1 修复：Idle 时通知 preedit 缓存失效
+            onPreeditInvalidate?.invoke()
             if (isExpanded) isExpanded = false
 
             CnT9PunctuationCandidates.injectIdlePunctuations(
@@ -150,38 +183,55 @@ class CnT9CandidateEngine(
             return
         }
 
-        // ── S1/S2 Composing ───────────────────────────────────────
-        val out: ImeModeHandler.Output = CnT9Handler.build(
-            session         = session,
-            dictEngine      = dictEngine,
-            singleCharMode  = isSingleCharMode,
-            userChoiceStore = userChoiceStore,
-            contextWindow   = contextWindow,
-            sidebarState    = sidebarState
-        )
+        // ── S1/S2 Composing（后台异步）──────────────────────────
+        // 取消上一次未完成的候选 Job（debounce cancel）
+        candidateJob?.cancel()
 
-        composingPreviewOverride = out.composingPreviewText
-        enterCommitTextOverride  = out.enterCommitText
-        currentCandidates        = ArrayList(out.candidates)
-        resetUiSelectionToTop()
+        // 快照当前输入状态（避免后台线程访问 session 可变状态）
+        val snapSingleCharMode  = isSingleCharMode
+        val snapRawDigits       = session.rawT9Digits
+        // CnT9Handler 内部会访问 session，session 是主线程单例，
+        // 这里将整个 build 调用放到后台但不传 session 引用——
+        // 改为传 session 的不可变快照（见下方 buildSnapshot）。
+        val sessionSnapshot     = session.buildSnapshot()
 
-        syncFilterButton()
-        ui.showComposingState(isExpanded = isExpanded)
-        ui.setExpanded(isExpanded, isComposing = true)
+        candidateJob = engineScope.launch {
+            // ── 后台：CPU 密集型计算 ──────────────────────────────
+            val out: ImeModeHandler.Output = withContext(Dispatchers.Default) {
+                CnT9Handler.buildFromSnapshot(
+                    snapshot        = sessionSnapshot,
+                    dictEngine      = dictEngine,
+                    singleCharMode  = snapSingleCharMode,
+                    userChoiceStore = userChoiceStore,
+                    contextWindow   = contextWindow,
+                    sidebarState    = sidebarState
+                )
+            }
 
-        keyboardController.updateSidebar(
-            syllables      = out.pinyinSidebar,
-            title          = out.sidebarTitle,
-            resegmentPaths = out.resegmentPaths
-        )
+            // ── 主线程：更新 UI ──────────────────────────────────
+            // Job 未被取消时才更新（保证最新请求生效）
+            composingPreviewOverride = out.composingPreviewText
+            enterCommitTextOverride  = out.enterCommitText
+            currentCandidates        = ArrayList(out.candidates)
+            resetUiSelectionToTop()
 
-        val rawDigits = session.rawT9Digits
-        if (rawDigits.length >= 3 && session.pinyinStack.isEmpty()) {
-            injectMixedInputCandidates(rawDigits)
+            syncFilterButton()
+            ui.showComposingState(isExpanded = isExpanded)
+            ui.setExpanded(isExpanded, isComposing = true)
+
+            keyboardController.updateSidebar(
+                syllables      = out.pinyinSidebar,
+                title          = out.sidebarTitle,
+                resegmentPaths = out.resegmentPaths
+            )
+
+            if (snapRawDigits.length >= 3 && sessionSnapshot.pinyinStack.isEmpty()) {
+                injectMixedInputCandidates(snapRawDigits)
+            }
+
+            currentCandidates = stabilizer.stabilize(currentCandidates, snapRawDigits)
+            ui.setCandidates(currentCandidates)
         }
-
-        currentCandidates = stabilizer.stabilize(currentCandidates, rawDigits)
-        ui.setCandidates(currentCandidates)
     }
 
     private fun injectMixedInputCandidates(rawDigits: String) {
@@ -237,6 +287,10 @@ class CnT9CandidateEngine(
     }
 
     fun commitCandidateAt(index: Int) {
+        // 选词时立即取消后台 Job，避免旧结果覆盖上屏后状态
+        candidateJob?.cancel()
+        candidateJob = null
+
         if (index !in currentCandidates.indices) {
             val msg = "Candidate index out of range: CN_T9 index=$index size=${currentCandidates.size}"
             if (isDebuggable()) { Log.wtf("CnT9CandidateEngine", msg); throw AssertionError(msg) }
@@ -249,7 +303,7 @@ class CnT9CandidateEngine(
         // ── 标点候选：直接上屏 ────────────────────────────────────
         if (CnT9PunctuationCandidates.isPunctCandidate(cand)) {
             stabilizer.invalidate()
-            onPreeditInvalidate?.invoke()   // P1 修复
+            onPreeditInvalidate?.invoke()
             commitRaw(cand.word)
             return
         }
@@ -260,7 +314,7 @@ class CnT9CandidateEngine(
             resetUiSelectionToTop()
             sidebarState.clearAll()
             stabilizer.invalidate()
-            onPreeditInvalidate?.invoke()   // P1 修复
+            onPreeditInvalidate?.invoke()
             commitRaw(cand.word)
             contextWindow?.record(cand.word)
             clearComposing()
@@ -285,7 +339,7 @@ class CnT9CandidateEngine(
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
                     stabilizer.invalidate()
-                    onPreeditInvalidate?.invoke()   // P1 修复
+                    onPreeditInvalidate?.invoke()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
@@ -294,7 +348,7 @@ class CnT9CandidateEngine(
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
                     stabilizer.invalidate()
-                    onPreeditInvalidate?.invoke()   // P1 修复
+                    onPreeditInvalidate?.invoke()
                     updateCandidates()
                 }
             }
@@ -314,7 +368,7 @@ class CnT9CandidateEngine(
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
                     stabilizer.invalidate()
-                    onPreeditInvalidate?.invoke()   // P1 修复
+                    onPreeditInvalidate?.invoke()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
@@ -323,7 +377,7 @@ class CnT9CandidateEngine(
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
                     stabilizer.invalidate()
-                    onPreeditInvalidate?.invoke()   // P1 修复
+                    onPreeditInvalidate?.invoke()
                     updateCandidates()
                 }
             }
@@ -333,7 +387,7 @@ class CnT9CandidateEngine(
         resetUiSelectionToTop()
         sidebarState.clearAll()
         stabilizer.invalidate()
-        onPreeditInvalidate?.invoke()   // P1 修复
+        onPreeditInvalidate?.invoke()
         commitRaw(cand.word)
         contextWindow?.record(cand.word)
         clearComposing()
