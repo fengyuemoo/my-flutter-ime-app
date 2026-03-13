@@ -20,16 +20,7 @@ import com.example.myapp.ime.ui.ImeUi
  *  5. 管理 sidebar 焦点与锁定（CnT9SidebarState）
  *  6. Idle 状态下注入标点快捷候选
  *  7. 混输模式（英文/URL/邮箱）候选插入头部
- *
- * 不包含：
- *  - 拼音切分工具函数    → CnT9PinyinSplitter
- *  - 音节物化 & 消费计算  → CnT9CommitHelper
- *  - 首选置信度模型      → CnT9ConfidenceModel
- *  - sidebar 内容构建    → CnT9SidebarBuilder
- *  - sidebar 焦点状态    → CnT9SidebarState
- *  - 段锁定状态         → CnT9SegmentLockMap
- *  - 标点候选数据        → CnT9PunctuationCandidates
- *  - 混输检测           → CnT9MixedInputDetector
+ *  8. 候选排序稳定化（CnT9CandidateStabilizer）
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -49,6 +40,9 @@ class CnT9CandidateEngine(
     private var currentCandidates: ArrayList<Candidate> = ArrayList()
     private var composingPreviewOverride: String? = null
     private var enterCommitTextOverride: String? = null
+
+    // 排序稳定化器（内部持有，不暴露给外部）
+    private val stabilizer = CnT9CandidateStabilizer()
 
     fun getComposingPreviewOverride(): String? = composingPreviewOverride
     fun getEnterCommitTextOverride(): String? = enterCommitTextOverride
@@ -134,9 +128,10 @@ class CnT9CandidateEngine(
         // ── S0 Idle ───────────────────────────────────────────────
         if (!session.isComposing()) {
             composingPreviewOverride = null
-            enterCommitTextOverride  = null
+            enterCommitTextOverride = null
             resetUiSelectionToTop()
             sidebarState.clearAll()
+            stabilizer.reset()  // Idle 时重置稳定化快照
             if (isExpanded) isExpanded = false
 
             CnT9PunctuationCandidates.injectIdlePunctuations(
@@ -153,17 +148,17 @@ class CnT9CandidateEngine(
 
         // ── S1/S2 Composing ───────────────────────────────────────
         val out: ImeModeHandler.Output = CnT9Handler.build(
-            session        = session,
-            dictEngine     = dictEngine,
+            session = session,
+            dictEngine = dictEngine,
             singleCharMode = isSingleCharMode,
             userChoiceStore = userChoiceStore,
-            contextWindow   = contextWindow,
-            sidebarState    = sidebarState
+            contextWindow = contextWindow,
+            sidebarState = sidebarState
         )
 
         composingPreviewOverride = out.composingPreviewText
-        enterCommitTextOverride  = out.enterCommitText
-        currentCandidates        = ArrayList(out.candidates)
+        enterCommitTextOverride = out.enterCommitText
+        currentCandidates = ArrayList(out.candidates)
         resetUiSelectionToTop()
 
         syncFilterButton()
@@ -171,54 +166,43 @@ class CnT9CandidateEngine(
         ui.setExpanded(isExpanded, isComposing = true)
 
         keyboardController.updateSidebar(
-            syllables       = out.pinyinSidebar,
-            title           = out.sidebarTitle,
-            resegmentPaths  = out.resegmentPaths
+            syllables = out.pinyinSidebar,
+            title = out.sidebarTitle,
+            resegmentPaths = out.resegmentPaths
         )
 
+        // ── 混输模式候选注入 ──────────────────────────────────────
         val rawDigits = session.rawT9Digits
         if (rawDigits.length >= 3 && session.pinyinStack.isEmpty()) {
             injectMixedInputCandidates(rawDigits)
         }
 
+        // ── 排序稳定化（在 setCandidates 前最后一步）─────────────
+        currentCandidates = stabilizer.stabilize(currentCandidates, rawDigits)
+
         ui.setCandidates(currentCandidates)
     }
 
-    /**
-     * 根据混输模式检测结果，将英文/URL/邮箱候选插入候选列表头部。
-     *
-     * 修复：显式标注 injectWords 类型为 List<String>，
-     * CHINESE 分支明确返回 emptyList<String>() 避免类型推断歧义。
-     */
     private fun injectMixedInputCandidates(rawDigits: String) {
         val mode = CnT9MixedInputDetector.detectMode(rawDigits)
 
         val injectWords: List<String> = when (mode) {
             CnT9MixedInputDetector.InputMode.URL ->
                 CnT9MixedInputDetector.detectUrlCandidates(rawDigits)
-
             CnT9MixedInputDetector.InputMode.EMAIL ->
                 CnT9MixedInputDetector.detectEmailSuffixCandidates(rawDigits)
-
             CnT9MixedInputDetector.InputMode.ENGLISH ->
                 CnT9MixedInputDetector.detectEnglishCandidates(rawDigits)
-
-            CnT9MixedInputDetector.InputMode.CHINESE ->
-                emptyList()
+            CnT9MixedInputDetector.InputMode.CHINESE -> emptyList()
         }
 
         if (injectWords.isEmpty()) return
 
         val injected = injectWords.map { word ->
             Candidate(
-                word           = word,
-                input          = rawDigits,
-                priority       = Int.MAX_VALUE,
-                matchedLength  = rawDigits.length,
-                pinyinCount    = 0,
-                pinyin         = null,
-                syllables      = 0,
-                acronym        = null
+                word = word, input = rawDigits, priority = Int.MAX_VALUE,
+                matchedLength = rawDigits.length, pinyinCount = 0,
+                pinyin = null, syllables = 0, acronym = null
             )
         }
         currentCandidates.addAll(0, injected)
@@ -232,18 +216,18 @@ class CnT9CandidateEngine(
     }
 
     fun commitFirstCandidateOnEnter(): Boolean {
-        val idx  = preferredIndex()        ?: return false
-        val cand = preferredCandidate()    ?: return false
+        val idx = preferredIndex() ?: return false
+        val cand = preferredCandidate() ?: return false
 
         val shouldCommit = CnT9ConfidenceModel.shouldAutoCommit(
-            preferredIndex  = idx,
-            cand            = cand,
-            candidateCount  = currentCandidates.size,
-            session         = session,
-            dictEngine      = dictEngine,
+            preferredIndex = idx,
+            cand = cand,
+            candidateCount = currentCandidates.size,
+            session = session,
+            dictEngine = dictEngine,
             isRawCommitMode = isRawCommitMode(),
             userChoiceStore = userChoiceStore,
-            contextWindow   = contextWindow
+            contextWindow = contextWindow
         )
         if (!shouldCommit) return false
 
@@ -261,8 +245,9 @@ class CnT9CandidateEngine(
         ui.setSelectedCandidateIndex(index)
         val cand = currentCandidates[index]
 
-        // ── 标点候选：直接上屏，跳过拼音匹配逻辑 ─────────────────
+        // ── 标点候选：直接上屏 ────────────────────────────────────
         if (CnT9PunctuationCandidates.isPunctCandidate(cand)) {
+            stabilizer.invalidate()
             commitRaw(cand.word)
             return
         }
@@ -272,6 +257,7 @@ class CnT9CandidateEngine(
         if (isRawCommitMode()) {
             resetUiSelectionToTop()
             sidebarState.clearAll()
+            stabilizer.invalidate()
             commitRaw(cand.word)
             contextWindow?.record(cand.word)
             clearComposing()
@@ -279,13 +265,13 @@ class CnT9CandidateEngine(
         }
 
         val consumeSyllables = CnT9CommitHelper.resolveConsumeSyllables(cand).coerceAtLeast(1)
-        val stackSizeBefore  = session.pinyinStack.size
+        val stackSizeBefore = session.pinyinStack.size
 
         CnT9CommitHelper.materializeSegmentsIfNeeded(session, consumeSyllables, dictEngine)
 
         val availableStack = session.pinyinStack.size
         if (availableStack > 0) {
-            val consume  = consumeSyllables.coerceAtMost(availableStack)
+            val consume = consumeSyllables.coerceAtMost(availableStack)
             val pickCand = cand.copy(pinyinCount = consume)
 
             when (val r = session.pickCandidate(
@@ -295,6 +281,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
+                    stabilizer.invalidate()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
@@ -302,6 +289,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
+                    stabilizer.invalidate()
                     updateCandidates()
                 }
             }
@@ -320,6 +308,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
+                    stabilizer.invalidate()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
@@ -327,6 +316,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
+                    stabilizer.invalidate()
                     updateCandidates()
                 }
             }
@@ -335,6 +325,7 @@ class CnT9CandidateEngine(
 
         resetUiSelectionToTop()
         sidebarState.clearAll()
+        stabilizer.invalidate()
         commitRaw(cand.word)
         contextWindow?.record(cand.word)
         clearComposing()
