@@ -42,16 +42,13 @@ class EnT9ComposeStrategy(
     override fun setEnglishPredictEnabled(enabled: Boolean) {
         if (englishPredictEnabled == enabled) return
         englishPredictEnabled = enabled
-
         session().clear()
         resetMultiTapState()
         ic()?.setComposingText("", 0)
         onPreviewStateChanged()
     }
 
-    override fun onComposingInput(text: String): StrategyResult {
-        return StrategyResult.Noop
-    }
+    override fun onComposingInput(text: String): StrategyResult = StrategyResult.Noop
 
     override fun onT9Input(digit: String): StrategyResult {
         if (digit.isEmpty()) return StrategyResult.Noop
@@ -66,7 +63,8 @@ class EnT9ComposeStrategy(
         }
     }
 
-    override fun onPinyinSidebarClick(pinyin: String) {
+    // 修复：加 t9Code 参数（英文模式忽略）
+    override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         // Not handled in English
     }
 
@@ -112,7 +110,7 @@ class EnT9ComposeStrategy(
             multiTapIndex = (multiTapIndex + 1) % len
         } else {
             confirmMultiTapInternalCommitIfAny()
-            multiTapKey = digit
+            multiTapKey   = digit
             multiTapIndex = 0
         }
 
@@ -168,7 +166,7 @@ class EnT9ComposeStrategy(
     private fun resetMultiTapState(): Boolean {
         multiTapHandler.removeCallbacks(multiTapConfirmRunnable)
         if (multiTapKey == ' ') return false
-        multiTapKey = ' '
+        multiTapKey   = ' '
         multiTapIndex = 0
         return true
     }

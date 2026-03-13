@@ -13,9 +13,6 @@ class EnQwertyComposeStrategy(
     private fun session(): ComposingSession = sessionProvider()
     private fun ic(): InputConnection? = inputConnectionProvider()
 
-    /**
-     * Per-mode state: EN-QWERTY only (independent from EN-T9).
-     */
     private var englishPredictEnabled: Boolean = false
 
     override fun getEnglishPredictEnabled(): Boolean = englishPredictEnabled
@@ -23,8 +20,6 @@ class EnQwertyComposeStrategy(
     override fun setEnglishPredictEnabled(enabled: Boolean) {
         if (englishPredictEnabled == enabled) return
         englishPredictEnabled = enabled
-
-        // Keep old UX: switching predict mode clears composing.
         session().clear()
         ic()?.setComposingText("", 0)
     }
@@ -40,7 +35,8 @@ class EnQwertyComposeStrategy(
 
     override fun onT9Input(digit: String): StrategyResult = StrategyResult.Noop
 
-    override fun onPinyinSidebarClick(pinyin: String) {
+    // 修复：加 t9Code 参数（英文模式忽略）
+    override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         // Not handled in English
     }
 
