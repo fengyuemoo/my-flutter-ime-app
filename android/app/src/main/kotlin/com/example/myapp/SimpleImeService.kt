@@ -12,9 +12,12 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import com.example.myapp.ime.ImeGraph
 import com.example.myapp.ime.bootstrap.ImeBootstrapper
+import com.example.myapp.ime.compose.cn.t9.PreeditDisplay
+import com.example.myapp.ime.compose.cn.t9.PreeditSegment
 import com.example.myapp.ime.keyboard.KeyboardHost
 import com.example.myapp.ime.prefs.KeyboardPrefs
 import com.example.myapp.ime.ui.ImeUi
+import com.example.myapp.ime.ui.PreeditSpanBuilder
 import java.util.Locale
 
 class SimpleImeService : InputMethodService(), KeyboardHost {
@@ -26,15 +29,13 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     private lateinit var graph: ImeGraph
     private lateinit var bootstrapper: ImeBootstrapper
 
-    // Index-based candidate click.
     private var onCandidateIndexClick: (Int) -> Unit = {}
 
-    // --- floating preedit overlay (WindowManager) ---
+    // ── 悬浮 Preedit Overlay（WindowManager + 原生 TextView）────────
     private var preeditOverlayView: TextView? = null
     private var preeditOverlayParams: WindowManager.LayoutParams? = null
     private val wm: WindowManager by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
 
-    // cache for overlay typeface
     private val typefaceCache = HashMap<String, Typeface>()
 
     override fun onToolbarUpdate() {
@@ -48,15 +49,17 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     override fun onCreateInputView(): View {
         ui = ImeUi()
 
-        // Use index-based inflate API.
         mainView = ui.inflateWithIndex(
             inflater = layoutInflater,
             onCandidateIndexClick = { index -> onCandidateIndexClick(index) }
         )
         bodyFrame = ui.bodyFrame
 
-        ui.setComposingPreviewListener { text ->
-            updateFloatingPreedit(text)
+        // ── R-P04：使用带段样式的 PreeditDisplay 监听器 ──────────────
+        // 完全在原生 Android 端渲染，通过 PreeditSpanBuilder 生成 SpannableString
+        // 直接设置到悬浮 TextView，无任何 Flutter/跨框架回调。
+        ui.setPreeditDisplayListener { display ->
+            updateFloatingPreeditDisplay(display)
         }
 
         graph = ImeGraph.build(
@@ -80,7 +83,7 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         graph.themeController.load()
         graph.themeController.apply()
 
-        updateFloatingPreedit(null)
+        updateFloatingPreeditDisplay(null)
         return mainView
     }
 
@@ -105,7 +108,10 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         }
     }
 
-    override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
+    override fun onStartInputView(
+        info: android.view.inputmethod.EditorInfo?,
+        restarting: Boolean
+    ) {
         super.onStartInputView(info, restarting)
 
         if (!this::graph.isInitialized) return
@@ -116,13 +122,13 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         graph.themeController.load()
         graph.themeController.apply()
 
-        updateFloatingPreedit(null)
+        updateFloatingPreeditDisplay(null)
         refreshFloatingPreeditStyle()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
-        updateFloatingPreedit(null)
+        updateFloatingPreeditDisplay(null)
         removeFloatingPreedit()
     }
 
@@ -131,23 +137,23 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         super.onDestroy()
     }
 
+    // ── 工具 ───────────────────────────────────────────────────────────
+
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun isDarkTheme(): Boolean =
+        KeyboardPrefs.loadThemeMode(this) == KeyboardPrefs.THEME_DARK
 
     private fun resolveTypefaceFromSpec(spec: String): Typeface {
         synchronized(typefaceCache) {
             typefaceCache[spec]?.let { return it }
-
             val tf = runCatching {
                 if (spec.startsWith("asset:")) {
-                    val path = spec.removePrefix("asset:")
-                    Typeface.createFromAsset(assets, path)
+                    Typeface.createFromAsset(assets, spec.removePrefix("asset:"))
                 } else {
                     Typeface.create(spec, Typeface.NORMAL)
                 }
-            }.getOrElse {
-                Typeface.DEFAULT
-            }
-
+            }.getOrElse { Typeface.DEFAULT }
             typefaceCache[spec] = tf
             return tf
         }
@@ -156,14 +162,12 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
     private fun applyPreeditOverlayFontFromPrefs(tv: TextView) {
         val familySpec = KeyboardPrefs.loadFontFamily(this)
         val scale = KeyboardPrefs.loadFontScale(this).coerceIn(0.7f, 1.4f)
-
         tv.typeface = resolveTypefaceFromSpec(familySpec)
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f * scale)
     }
 
     private fun applyPreeditOverlayThemeFromPrefs(tv: TextView) {
-        val themeMode = KeyboardPrefs.loadThemeMode(this)
-        if (themeMode == KeyboardPrefs.THEME_DARK) {
+        if (isDarkTheme()) {
             tv.setTextColor(Color.WHITE)
             tv.setBackgroundColor(Color.parseColor("#CC333333"))
         } else {
@@ -181,11 +185,10 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         val tv = preeditOverlayView ?: return
         applyPreeditOverlayStyleFromPrefs(tv)
         val lp = preeditOverlayParams ?: return
-        try {
-            wm.updateViewLayout(tv, lp)
-        } catch (_: Throwable) {
-        }
+        try { wm.updateViewLayout(tv, lp) } catch (_: Throwable) {}
     }
+
+    // ── 悬浮 Preedit：核心渲染逻辑 ────────────────────────────────────
 
     private fun ensureFloatingPreedit() {
         if (preeditOverlayView != null) return
@@ -208,9 +211,9 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
             this.token = token
             flags =
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
             format = PixelFormat.TRANSLUCENT
             gravity = Gravity.START or Gravity.TOP
             x = dp(8)
@@ -223,8 +226,22 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         preeditOverlayParams = params
     }
 
-    private fun updateFloatingPreedit(text: String?) {
-        if (text.isNullOrEmpty()) {
+    /**
+     * R-P04：使用 PreeditSpanBuilder 将 PreeditDisplay 各段的 Style
+     * 渲染为 SpannableString，直接设置到悬浮 TextView。
+     *
+     * 样式对应关系：
+     *   LOCKED           → 深蓝 + 粗体（已锁定/物化音节）
+     *   FOCUSED          → 深橙 + 下划线 + 粗体（当前焦点音节）
+     *   NORMAL           → 默认颜色（未物化待输入音节）
+     *   FALLBACK         → 灰色斜体（词库未加载时的键位占位符）
+     *   COMMITTED_PREFIX → 深绿（已上屏的汉字前缀）
+     *
+     * 完全在原生 Android 端完成，无任何跨框架调用。
+     */
+    private fun updateFloatingPreeditDisplay(display: PreeditDisplay?) {
+        // Idle 或空 preedit：隐藏悬浮条
+        if (display == null || display.plainText.isEmpty()) {
             preeditOverlayView?.visibility = View.GONE
             preeditOverlayView?.text = ""
             return
@@ -234,25 +251,26 @@ class SimpleImeService : InputMethodService(), KeyboardHost {
         val tv = preeditOverlayView ?: return
         val lp = preeditOverlayParams ?: return
 
+        // 重新应用字体/主题（处理主题切换后样式同步）
         applyPreeditOverlayStyleFromPrefs(tv)
 
-        tv.text = text
+        // ── 核心：用 PreeditSpanBuilder 生成带高亮/下划线的 SpannableString ──
+        val spannable = PreeditSpanBuilder.build(display, darkTheme = isDarkTheme())
+        tv.text = spannable
+
         tv.visibility = View.VISIBLE
 
+        // 定位到键盘顶部上方
         val loc = IntArray(2)
         mainView.getLocationOnScreen(loc)
-        val keyboardTopOnScreenY = loc[1]
-
-        lp.y = keyboardTopOnScreenY - dp(32)
+        lp.y = loc[1] - dp(32)
         wm.updateViewLayout(tv, lp)
     }
 
     private fun removeFloatingPreedit() {
         val v = preeditOverlayView ?: return
-        try {
-            wm.removeViewImmediate(v)
-        } catch (_: Throwable) {
-        } finally {
+        try { wm.removeViewImmediate(v) } catch (_: Throwable) {}
+        finally {
             preeditOverlayView = null
             preeditOverlayParams = null
         }
