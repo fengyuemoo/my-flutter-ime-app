@@ -181,3 +181,33 @@ class CnT9UserChoiceStore(context: Context) {
         val penalizedCount = (entry.count - PENALTY_PER_UNDO).coerceAtLeast(0)
         val penalized = entry.copy(count = penalizedCount, streak = 1)
         cache[key] = penalized
+
+        prefs.edit().putString(key, penalized.serialize()).apply()
+
+        // 重置时间戳，防止同一次误触被二次惩罚
+        lastChoiceTimestamp = 0L
+        lastChoiceStoreKey  = ""
+    }
+
+    /**
+     * 清空所有学习数据（用于「重置输入习惯」设置项）。
+     */
+    fun clearAll() {
+        cache.clear()
+        prefs.edit().clear().apply()
+        lastPinyinKey = ""
+        lastWord = ""
+        lastChoiceTimestamp = 0L
+        lastChoiceStoreKey  = ""
+    }
+
+    // ── 私有辅助 ─────────────────────────────────────────────────────────────
+
+    /**
+     * 构造 SharedPreferences 存储 Key。
+     * 格式："pinyinKey|word"，如 "ni'hao|你好"
+     * 使用 '|' 作为分隔符，因为拼音路径和汉字中均不包含此字符。
+     */
+    private fun buildKey(pinyinKey: String, word: String): String =
+        "${pinyinKey}|${word}"
+}
