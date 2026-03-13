@@ -60,10 +60,10 @@ class ImeActionDispatcher(
 
     private fun sessionByMode(mode: KeyboardMode): ComposingSession {
         return when {
-            mode.isChinese && !mode.useT9Layout -> sessions.cnQwerty
-            mode.isChinese && mode.useT9Layout  -> sessions.cnT9
+            mode.isChinese && !mode.useT9Layout  -> sessions.cnQwerty
+            mode.isChinese && mode.useT9Layout   -> sessions.cnT9
             !mode.isChinese && !mode.useT9Layout -> sessions.enQwerty
-            else -> sessions.enT9
+            else                                 -> sessions.enT9
         }
     }
 
@@ -96,41 +96,28 @@ class ImeActionDispatcher(
             mode.isChinese && !mode.useT9Layout  -> cnQwertyEngine
             mode.isChinese && mode.useT9Layout   -> cnT9Engine
             !mode.isChinese && !mode.useT9Layout -> enQwertyEngine
-            else -> enT9Engine
+            else                                 -> enT9Engine
         }
     }
 
     private fun currentEngineOrNull(): ModeInputEngine? = engineByModeOrNull(mainMode())
 
-    private fun resolveUnifiedPreviewText(): String? {
-        val transientPreview = currentEngineOrNull()
-            ?.getTransientComposingPreviewText()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-        if (transientPreview != null) return transientPreview
-        return candidateController.resolveComposingPreviewText()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-    }
-
     /**
-     * R-P04 修复：同步 Preedit 到 UI 和 Editor。
+     * R-P04 修复：同步 Preedit 带样式到 UI 和 Editor。
      *
-     * 使用 resolveComposingPreviewDisplay() 取得带段样式的 PreeditDisplay：
-     *  - plainText → InputConnection.setComposingText()（编辑器光标定位用）
-     *  - display   → ui.setComposingPreviewDisplay()（渲染高亮/下划线样式）
-     *
-     * transient preview（英文 T9 边打边出）仍走旧路径（无段样式需求）。
+     * 优先路径（transient，英文 T9 边打边出）→ 仍走纯文本，无段样式需求。
+     * 常规路径（CN-T9 / 其他）→ 使用带 PreeditDisplay 样式的路径：
+     *   - plainText → InputConnection.setComposingText()（编辑器光标）
+     *   - display   → ui.setComposingPreviewDisplay()（高亮/下划线渲染）
      */
     private fun syncResolvedComposingToUiAndEditor() {
         if (!::ui.isInitialized || !::candidateController.isInitialized ||
             !::keyboardController.isInitialized) return
 
-        // transient 优先（英文模式边打边出，无样式需求）
+        // transient preview 优先（英文 T9，无样式需求）
         val transient = currentEngineOrNull()
             ?.getTransientComposingPreviewText()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+            ?.trim()?.takeIf { it.isNotEmpty() }
 
         if (transient != null) {
             ui.setComposingPreview(transient)
@@ -147,7 +134,6 @@ class ImeActionDispatcher(
             return
         }
 
-        // 推送段样式给 UI（UI 层自行决定如何渲染 SpannableString）
         ui.setComposingPreviewDisplay(display)
         inputConnectionProvider()?.setComposingText(display.plainText, 1)
     }
@@ -230,6 +216,37 @@ class ImeActionDispatcher(
         refreshComposingView()
     }
 
+    /**
+     * R-P04 注入点：创建 CandidateController 时传入焦点下标 provider。
+     *
+     * 注意：此方法供调用方（ImeService / ImeActivity）在 attach() 之前使用，
+     * 以便构建注入了 focusedSegmentIndexProvider 的 CandidateController。
+     *
+     * 示例（ImeService）：
+     *   val candidateController = dispatcher.buildCandidateController(ui, keyboardController)
+     *   dispatcher.attach(ui, keyboardController, candidateController)
+     */
+    fun buildCandidateController(
+        ui: ImeUi,
+        keyboardController: KeyboardController,
+        userChoiceStore: com.example.myapp.ime.mode.cn.CnT9UserChoiceStore? = null,
+        contextWindow: com.example.myapp.ime.mode.cn.CnT9ContextWindow? = null,
+        dictEngine: com.example.myapp.dict.api.Dictionary,
+        commitRaw: (String) -> Unit,
+        clearComposing: () -> Unit
+    ): CandidateController = CandidateController(
+        ui                         = ui,
+        keyboardController         = keyboardController,
+        dictEngine                 = dictEngine,
+        sessions                   = sessions,
+        commitRaw                  = commitRaw,
+        clearComposing             = clearComposing,
+        userChoiceStore            = userChoiceStore,
+        contextWindow              = contextWindow,
+        // R-P04：注入焦点下标查询，每帧 preedit 渲染时同步焦点状态
+        focusedSegmentIndexProvider = { getCnT9FocusedSegmentIndex() }
+    )
+
     private fun handleMainModeChanged(newMode: KeyboardMode) {
         if (!enginesReady()) {
             lastKnownMainMode = newMode
@@ -279,8 +296,8 @@ class ImeActionDispatcher(
         if (panel is PanelState.Open && panel.type == PanelType.SYMBOL) {
             keyboardController.updateSymbolPanelUi(
                 category = symbolCategory,
-                page = symbolPage,
-                locked = symbolLocked
+                page     = symbolPage,
+                locked   = symbolLocked
             )
         }
     }
@@ -359,6 +376,7 @@ class ImeActionDispatcher(
         val engine = currentEngineOrNull() ?: return
         engine.beforeModeSwitch()
 
+        // ── 分词键 ────────────────────────────────────────────────
         if (keyLabel == "分词") {
             val mode = mainMode()
             if (mode.isChinese && mode.useT9Layout) {
@@ -378,6 +396,7 @@ class ImeActionDispatcher(
             return
         }
 
+        // ── 回车键 ────────────────────────────────────────────────
         val isEnter = keyLabel.contains("⏎") || keyLabel.contains("\n")
         if (isEnter) {
             val enterOverride = candidateController.resolveEnterCommitText()
@@ -398,11 +417,13 @@ class ImeActionDispatcher(
             return
         }
 
+        // ── 空格键 ────────────────────────────────────────────────
         if (keyLabel == "SPACE") {
             handleSpaceKey()
             return
         }
 
+        // ── 全角标点转换 ──────────────────────────────────────────
         val mode = mainMode()
         if (mode.isChinese && CnPunctuationHelper.isPunctuation(keyLabel)) {
             val fullWidth = CnPunctuationHelper.toFullWidth(keyLabel)

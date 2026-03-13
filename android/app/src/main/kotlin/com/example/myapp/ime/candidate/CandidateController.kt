@@ -4,6 +4,7 @@ import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.cn.t9.CnT9PreeditFormatter
 import com.example.myapp.ime.compose.cn.t9.PreeditDisplay
+import com.example.myapp.ime.compose.cn.t9.PreeditSegment
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.compose.common.ComposingSessionHub
 import com.example.myapp.ime.keyboard.KeyboardController
@@ -25,7 +26,11 @@ class CandidateController(
     private val clearComposing: () -> Unit,
     private val userChoiceStore: CnT9UserChoiceStore? = null,
     private val contextWindow: CnT9ContextWindow? = null,
-    /** R-P04：由外部（ImeActionDispatcher / CnT9InputEngine）注入当前焦点段下标查询函数 */
+    /**
+     * R-P04：由外部（ImeActionDispatcher）注入的焦点段下标查询函数。
+     * 每次 resolveComposingPreviewDisplay() 时调用，获取 CnT9InputEngine 当前焦点。
+     * 为 null 时退化为 -1（无焦点高亮）。
+     */
     private val focusedSegmentIndexProvider: (() -> Int)? = null
 ) : UiStateActions {
 
@@ -43,16 +48,16 @@ class CandidateController(
     )
 
     private val cnT9Engine = CnT9CandidateEngine(
-        ui                 = ui,
-        keyboardController = keyboardController,
-        dictEngine         = dictEngine,
-        session            = sessions.cnT9,
-        commitRaw          = commitRaw,
-        clearComposing     = clearComposing,
-        isRawCommitMode    = { keyboardController.isRawCommitMode() },
-        userChoiceStore    = userChoiceStore,
-        contextWindow      = contextWindow,
-        onPreeditInvalidate = { preeditFormatter.invalidate() }   // P1 修复：注入 invalidate 回调
+        ui                  = ui,
+        keyboardController  = keyboardController,
+        dictEngine          = dictEngine,
+        session             = sessions.cnT9,
+        commitRaw           = commitRaw,
+        clearComposing      = clearComposing,
+        isRawCommitMode     = { keyboardController.isRawCommitMode() },
+        userChoiceStore     = userChoiceStore,
+        contextWindow       = contextWindow,
+        onPreeditInvalidate = { preeditFormatter.invalidate() }   // P1 修复
     )
 
     private val enQwertyEngine = EnQwertyCandidateEngine(
@@ -127,34 +132,30 @@ class CandidateController(
 
     /**
      * R-P04：返回带段样式的 PreeditDisplay（供 ImeActionDispatcher 渲染）。
-     * plainText 用于 setComposingText()，segments 用于 UI 样式渲染。
+     *
+     * CN-T9 模式：通过 focusedSegmentIndexProvider 获取当前焦点段，
+     *             传入 preeditFormatter.format() 生成带高亮的分段结果。
+     * 其他模式：  包装为单段 NORMAL 的 PreeditDisplay，保持兼容。
      */
     fun resolveComposingPreviewDisplay(): PreeditDisplay {
         return when (currentModeKey()) {
-            ModeKey.CN_T9 -> preeditFormatter.format(   // P1 + R-P04 修复
-                session              = sessions.cnT9,
-                dict                 = dictEngine,
-                engineOverride       = cnT9Engine.getComposingPreviewOverride(),
-                focusedSegmentIndex  = focusedSegmentIndexProvider?.invoke() ?: -1
+            ModeKey.CN_T9 -> preeditFormatter.format(
+                session             = sessions.cnT9,
+                dict                = dictEngine,
+                engineOverride      = cnT9Engine.getComposingPreviewOverride(),
+                focusedSegmentIndex = focusedSegmentIndexProvider?.invoke() ?: -1
             )
             else -> {
                 val override = getComposingPreviewOverride()
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
+                    ?.trim()?.takeIf { it.isNotEmpty() }
                 val plain = override
                     ?: currentSession()
                         .displayText(useT9Layout = currentUseT9Layout())
-                        ?.trim()
-                        ?.takeIf { it.isNotEmpty() }
-                if (plain.isNullOrEmpty()) PreeditDisplay.EMPTY
-                else PreeditDisplay(
+                        ?.trim()?.takeIf { it.isNotEmpty() }
+                if (plain.isNullOrEmpty()) return PreeditDisplay.EMPTY
+                PreeditDisplay(
                     plainText = plain,
-                    segments  = listOf(
-                        com.example.myapp.ime.compose.cn.t9.PreeditSegment(
-                            text  = plain,
-                            style = com.example.myapp.ime.compose.cn.t9.PreeditSegment.Style.NORMAL
-                        )
-                    )
+                    segments  = listOf(PreeditSegment(plain, PreeditSegment.Style.NORMAL))
                 )
             }
         }
@@ -165,14 +166,11 @@ class CandidateController(
      * 新代码应调用 resolveComposingPreviewDisplay()。
      */
     fun resolveComposingPreviewText(): String? {
-        val d = resolveComposingPreviewDisplay()
-        return d.plainText.takeIf { it.isNotEmpty() }
+        return resolveComposingPreviewDisplay().plainText.takeIf { it.isNotEmpty() }
     }
 
     fun resolveEnterCommitText(): String? {
-        return getEnterCommitTextOverride()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+        return getEnterCommitTextOverride()?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     override fun toggleCandidatesExpanded()  { toggleExpand() }
