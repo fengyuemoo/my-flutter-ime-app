@@ -91,16 +91,25 @@ class ImeGraph(
             val userChoiceStore = CnT9UserChoiceStore(context)
             val contextWindow = CnT9ContextWindow()
 
-            // 修复：删除不存在的 focusedT9SegmentIndexProvider 参数
+            // R-P04 修复：通过 dispatcher.getCnT9FocusedSegmentIndex() 注入焦点段查询。
+            //
+            // 注意构造顺序：dispatcher 先于 candidateController 创建，因此 lambda
+            // 捕获的是已初始化的 dispatcher 引用，不存在空引用问题。
+            // dispatcher.attach() 在 candidateController 构造完成后调用，
+            // 所以 getCnT9FocusedSegmentIndex() 内部的 cnT9Engine 此时尚未初始化——
+            // 该方法已做 isInitialized 保护，未 attach 前返回 -1（无焦点），行为正确。
             val candidateController = CandidateController(
-                ui                 = ui,
-                keyboardController = keyboardController,
-                dictEngine         = dictManager.dictionary,
-                sessions           = sessions,
-                commitRaw          = { text -> inputConnectionProvider()?.commitText(text, 1) },
-                clearComposing     = { dispatcher.clearComposing() },
-                userChoiceStore    = userChoiceStore,
-                contextWindow      = contextWindow
+                ui                          = ui,
+                keyboardController          = keyboardController,
+                dictEngine                  = dictManager.dictionary,
+                sessions                    = sessions,
+                commitRaw                   = { text -> inputConnectionProvider()?.commitText(text, 1) },
+                clearComposing              = { dispatcher.clearComposing() },
+                userChoiceStore             = userChoiceStore,
+                contextWindow               = contextWindow,
+                // R-P04：每帧 preedit 渲染时，从已 attach 的 dispatcher 读取 CN-T9 焦点段下标。
+                // attach() 前 dispatcher.getCnT9FocusedSegmentIndex() 安全返回 -1。
+                focusedSegmentIndexProvider = { dispatcher.getCnT9FocusedSegmentIndex() }
             )
 
             val toolbarController = ToolbarController(
@@ -109,10 +118,10 @@ class ImeGraph(
             )
 
             dispatcher.attach(
-                ui = ui,
-                keyboardController = keyboardController,
+                ui                  = ui,
+                keyboardController  = keyboardController,
                 candidateController = candidateController,
-                onToolbarUpdate = { host.onToolbarUpdate() }
+                onToolbarUpdate     = { host.onToolbarUpdate() }
             )
 
             val themeController = ThemeController(
@@ -146,29 +155,29 @@ class ImeGraph(
             }
 
             val uiBinder = ImeUiBinder(
-                rootView = rootView,
-                ui = ui,
-                imeActions = dispatcher as ImeActions,
-                uiStateActions = candidateController,
+                rootView         = rootView,
+                ui               = ui,
+                imeActions       = dispatcher as ImeActions,
+                uiStateActions   = candidateController,
                 layoutController = layoutController,
-                fontController = fontController,
+                fontController   = fontController,
                 keyboardController = keyboardController
             )
 
             ui.applySavedFontNow()
 
             return ImeGraph(
-                ui = ui,
-                sessions = sessions,
-                dispatcher = dispatcher,
-                dictManager = dictManager,
-                keyboardController = keyboardController,
+                ui                  = ui,
+                sessions            = sessions,
+                dispatcher          = dispatcher,
+                dictManager         = dictManager,
+                keyboardController  = keyboardController,
                 candidateController = candidateController,
-                themeController = themeController,
-                layoutController = layoutController,
-                toolbarController = toolbarController,
-                uiBinder = uiBinder,
-                contextWindow = contextWindow
+                themeController     = themeController,
+                layoutController    = layoutController,
+                toolbarController   = toolbarController,
+                uiBinder            = uiBinder,
+                contextWindow       = contextWindow
             )
         }
     }
