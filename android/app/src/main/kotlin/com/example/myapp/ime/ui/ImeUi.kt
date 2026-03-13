@@ -75,8 +75,6 @@ object FontApplier {
 //
 // R-P04 修复：将 PreeditDisplay 的各段按 Style 转为 SpannableString，
 // 供有 Android TextView 直接渲染 preedit 的场景（如 Wear OS、辅助测试视图）使用。
-// Flutter 主路径下 listener 直接拿到 PreeditDisplay，自行用 Flutter Widget 渲染样式。
-//
 // 颜色常量（Light 主题；Dark 主题下可由调用方覆盖）：
 //   LOCKED   → 深蓝高亮色 + 粗体
 //   FOCUSED  → 橙色 + 下划线 + 粗体
@@ -205,8 +203,6 @@ class ImeUi {
 
     /**
      * 带样式的 Preedit 监听器。
-     * - Flutter 主路径：宿主层通过 MethodChannel 拿到 plainText 传给编辑器，
-     *   同时可解析 segments 用 Flutter Widget 渲染高亮。
      * - 纯原生路径：使用 PreeditSpanBuilder.build(display) 得到 SpannableString。
      *
      * 每次 preedit 有变化（含样式变化，即使 plainText 相同）均触发回调。

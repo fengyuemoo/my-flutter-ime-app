@@ -18,7 +18,6 @@ import com.example.myapp.ime.keyboard.KeyboardHost
 import com.example.myapp.ime.prefs.KeyboardPrefs
 import com.example.myapp.ime.ui.ImeUi
 import com.example.myapp.ime.ui.PreeditSpanBuilder
-import java.util.Locale
 
 class SimpleImeService : InputMethodService(), KeyboardHost {
 
