@@ -25,7 +25,7 @@ import kotlin.math.min
  *  12. planRank (↑小)        路径规划排名
  *  13. contextBoost          上下文加分（bigram 偏置）
  *  14. userBoost             用户学习权重加分
- *  15. lengthBoost           词长偏好加分（2–4 字优先）
+ *  15. adjustedLengthBoost   长度偏好加分（含 R-D02 频率差阈值修正）
  *  16. penaltyScore (↑小)    惩罚分（生僻词/低频长词）
  *  17. priority              字典频率权重
  *  18. wordLength            词语长度（长词优先）
@@ -33,12 +33,26 @@ import kotlin.math.min
  *  20. inputLength           input 长度
  *  21. word (字典序)          最终保证决定性排序
  *
- * lockedIndices 语义说明：
- *  传入的是 CnT9SegmentLockMap.lockedSnapshot 的稀疏升序列表（如 [0, 2]），
- *  表示用户已显式锁定的段下标集合。scoreAgainstPlan 用 contains(i) 逐段判断，
- *  不再假设"锁定段是连续前 N 段"，修复稀疏锁定场景下的排序偏差。
+ * ── R-D02 修复（问题5）──────────────────────────────────────────────
+ * 首位候选策略「最长词优先，但频率差超过 20% 则短词优先」：
+ *  - 在批量 buildScoreCache 阶段，找出所有候选中最高词频 maxPriority。
+ *  - 对每个候选：若其 priority >= maxPriority * (1 - FREQ_DIFF_THRESHOLD)，
+ *    则视为「频率差在阈值内」，保留其 lengthBoost（长词优势生效）。
+ *  - 否则将 adjustedLengthBoost 压低为单字基准分（20），
+ *    让高频短词凭 priority 维度胜出。
+ *
+ * lockedIndices 语义：稀疏升序列表，来自 CnT9SegmentLockMap.lockedSnapshot。
  */
 object CnT9CandidateScorer {
+
+    /**
+     * 频率差阈值：候选 priority 低于最高频率的此比例时，长词优势失效。
+     * 0.20 = 20%。
+     */
+    private const val FREQ_DIFF_THRESHOLD = 0.20
+
+    /** 频率差超阈值时，长词 adjustedLengthBoost 退化为此基准分（单字级别）。 */
+    private const val FALLBACK_LENGTH_BOOST = 20
 
     data class CandidateScore(
         val lockedExactSegments: Int,
@@ -56,6 +70,8 @@ object CnT9CandidateScorer {
         val contextBoost: Int,
         val userBoost: Int,
         val lengthBoost: Int,
+        /** R-D02 修复：频率差阈值修正后的长度加分，用于排序。 */
+        val adjustedLengthBoost: Int,
         val penaltyScore: Int,
         val priority: Int,
         val syllables: Int,
@@ -66,8 +82,10 @@ object CnT9CandidateScorer {
     /**
      * 为候选列表批量构建得分缓存。
      *
-     * @param lockedIndices  已锁定段的稀疏下标集合（来自 CnT9SegmentLockMap.lockedSnapshot）；
-     *                       空列表表示无锁定段。
+     * R-D02：在此阶段统一计算 maxPriority，然后为每个候选修正
+     * adjustedLengthBoost，实现「频率差超 20% 则长词优势失效」。
+     *
+     * @param lockedIndices  已锁定段的稀疏下标集合；空列表表示无锁定段。
      */
     fun buildScoreCache(
         candidates: List<Candidate>,
@@ -78,11 +96,26 @@ object CnT9CandidateScorer {
         contextWindow: CnT9ContextWindow? = null
     ): Map<Candidate, CandidateScore?> {
         if (candidates.isEmpty() || plans.isEmpty()) return emptyMap()
+
+        // R-D02：找出所有候选中的最高词频（priority 最大值）
+        val maxPriority = candidates.maxOf { it.priority }.coerceAtLeast(1)
+        val freqFloor = (maxPriority * (1.0 - FREQ_DIFF_THRESHOLD)).toInt()
+
         val out = HashMap<Candidate, CandidateScore?>(candidates.size)
         for (cand in candidates) {
-            out[cand] = bestScore(
-                cand, plans, rawDigits, lockedIndices, userChoiceStore, contextWindow
-            )
+            val raw = bestScore(cand, plans, rawDigits, lockedIndices, userChoiceStore, contextWindow)
+            if (raw == null) {
+                out[cand] = null
+                continue
+            }
+            // R-D02：若候选词频低于阈值下限，压低其 adjustedLengthBoost
+            val adjusted = if (cand.priority >= freqFloor) {
+                raw.lengthBoost
+            } else {
+                // 频率差超过 20%，长词优势退化为基准分
+                minOf(raw.lengthBoost, FALLBACK_LENGTH_BOOST)
+            }
+            out[cand] = raw.copy(adjustedLengthBoost = adjusted)
         }
         return out
     }
@@ -107,7 +140,8 @@ object CnT9CandidateScorer {
                 .thenBy           { scoreCache[it]?.planRank ?: Int.MAX_VALUE }
                 .thenByDescending { scoreCache[it]?.contextBoost ?: 0 }
                 .thenByDescending { scoreCache[it]?.userBoost ?: 0 }
-                .thenByDescending { scoreCache[it]?.lengthBoost ?: 0 }
+                // 第15维：使用 adjustedLengthBoost（含频率差修正）
+                .thenByDescending { scoreCache[it]?.adjustedLengthBoost ?: 0 }
                 .thenBy           { scoreCache[it]?.penaltyScore ?: 0 }
                 .thenByDescending { scoreCache[it]?.priority ?: it.priority }
                 .thenByDescending { scoreCache[it]?.wordLength ?: it.word.length }
@@ -178,8 +212,6 @@ object CnT9CandidateScorer {
         val planSegs = plan.segments
         val n        = min(planSegs.size, candidateSyllables.size)
 
-        // P4 修复：用 lockedIndices.contains(i) 逐段判断是否属于锁定段，
-        // 替代原来的"连续前 N 段"假设，正确支持稀疏锁定（如只锁了 index 0 和 2）。
         val lockedSet = if (lockedIndices.isEmpty()) emptySet<Int>()
                         else lockedIndices.toHashSet()
 
@@ -209,31 +241,25 @@ object CnT9CandidateScorer {
                     }
                 }
                 actual.startsWith(expected) -> {
-                    // 候选音节以规划段为前缀（如规划 "zh" 候选 "zhong"）
                     prefixSegments++; prefixChars += expected.length
                     consumedDigits += segDigits
                     if (isLocked) lockedPrefixSegments++
                 }
                 expected.startsWith(actual) -> {
-                    // 规划段以候选音节为前缀（如规划 "zhong" 候选 "zh"）
                     prefixSegments++; prefixChars += actual.length
                     consumedDigits += T9Lookup.encodeLetters(actual).length.coerceAtLeast(1)
                     if (isLocked) lockedPrefixSegments++
                 }
-                else -> {
-                    // 无匹配：不计入 consumedDigits，直接跳过
-                }
+                else -> { /* 无匹配 */ }
             }
         }
 
-        // 未覆盖数字数：规划总 digits 减去实际覆盖
         val totalPlanDigits = planSegs.sumOf {
             T9Lookup.encodeLetters(it).length.coerceAtLeast(1)
         }
         val uncoveredDigits  = (totalPlanDigits - consumedDigits).coerceAtLeast(0)
         val syllableDistance = abs(planSegs.size - candidateSyllables.size)
 
-        // 完整拼音精确匹配：候选所有音节与规划段一一对应且完全相等
         val exactInput = candidateSyllables.size == planSegs.size &&
             candidateSyllables.zip(planSegs).all { (a, b) ->
                 a.lowercase(Locale.ROOT) == b.lowercase(Locale.ROOT)
@@ -255,6 +281,7 @@ object CnT9CandidateScorer {
             contextBoost         = contextBoost,
             userBoost            = userBoost,
             lengthBoost          = lengthBoost,
+            adjustedLengthBoost  = lengthBoost,   // 初始值与 lengthBoost 相同，由 buildScoreCache 修正
             penaltyScore         = penaltyScore,
             priority             = cand.priority,
             syllables            = cand.syllables,
@@ -265,83 +292,49 @@ object CnT9CandidateScorer {
 
     // ── 私有：两个分数比较（与 sortCandidates 维度完全对齐）────────
 
-    /**
-     * 判断 candidate a 的得分是否优于 b。
-     * 与 sortCandidates 中的 Comparator 维度顺序完全一致（含第 21 维字典序），
-     * 保证 bestScore 选出的最优分和排序结果完全对称。
-     *
-     * word 字典序（第 21 维）：word 字典序较小的优先，与 sortCandidates 的
-     * .thenBy { it.word } 保持对称。isBetter 中通过比较两个 CandidateScore
-     * 所属候选的 word 实现——但 CandidateScore 本身不持有 word，因此这一维
-     * 在多 plan 择优时实际无法触发（同一 Candidate 对象 word 不变），返回
-     * false 即"视为相等"，仍保持正确性。
-     */
     private fun isBetter(a: CandidateScore, b: CandidateScore): Boolean {
-        // 1. lockedExactSegments ↑
         if (a.lockedExactSegments  != b.lockedExactSegments)
             return a.lockedExactSegments  > b.lockedExactSegments
-        // 2. lockedExactChars ↑
         if (a.lockedExactChars     != b.lockedExactChars)
             return a.lockedExactChars     > b.lockedExactChars
-        // 3. lockedPrefixSegments ↑
         if (a.lockedPrefixSegments != b.lockedPrefixSegments)
             return a.lockedPrefixSegments > b.lockedPrefixSegments
-        // 4. exactSegments ↑
         if (a.exactSegments        != b.exactSegments)
             return a.exactSegments        > b.exactSegments
-        // 5. exactChars ↑
         if (a.exactChars           != b.exactChars)
             return a.exactChars           > b.exactChars
-        // 6. prefixSegments ↑
         if (a.prefixSegments       != b.prefixSegments)
             return a.prefixSegments       > b.prefixSegments
-        // 7. prefixChars ↑
         if (a.prefixChars          != b.prefixChars)
             return a.prefixChars          > b.prefixChars
-        // 8. consumedDigits ↑
         if (a.consumedDigits       != b.consumedDigits)
             return a.consumedDigits       > b.consumedDigits
-        // 9. uncoveredDigits ↓
         if (a.uncoveredDigits      != b.uncoveredDigits)
             return a.uncoveredDigits      < b.uncoveredDigits
-        // 10. syllableDistance ↓
         if (a.syllableDistance     != b.syllableDistance)
             return a.syllableDistance     < b.syllableDistance
-        // 11. exactInput ↑
         val aExact = if (a.exactInput) 1 else 0
         val bExact = if (b.exactInput) 1 else 0
         if (aExact != bExact) return aExact > bExact
-        // 12. planRank ↓
         if (a.planRank             != b.planRank)
             return a.planRank             < b.planRank
-        // 13. contextBoost ↑
         if (a.contextBoost         != b.contextBoost)
             return a.contextBoost         > b.contextBoost
-        // 14. userBoost ↑
         if (a.userBoost            != b.userBoost)
             return a.userBoost            > b.userBoost
-        // 15. lengthBoost ↑
-        if (a.lengthBoost          != b.lengthBoost)
-            return a.lengthBoost          > b.lengthBoost
-        // 16. penaltyScore ↓
+        // 第15维对齐：isBetter 中使用 adjustedLengthBoost
+        if (a.adjustedLengthBoost  != b.adjustedLengthBoost)
+            return a.adjustedLengthBoost  > b.adjustedLengthBoost
         if (a.penaltyScore         != b.penaltyScore)
             return a.penaltyScore         < b.penaltyScore
-        // 17. priority ↑
         if (a.priority             != b.priority)
             return a.priority             > b.priority
-        // 18. wordLength ↑
         if (a.wordLength           != b.wordLength)
             return a.wordLength           > b.wordLength
-        // 19. syllables ↑
         if (a.syllables            != b.syllables)
             return a.syllables            > b.syllables
-        // 20. inputLength ↑
         if (a.inputLength          != b.inputLength)
             return a.inputLength          > b.inputLength
-        // 21. word 字典序（P3 修复）：
-        //     isBetter 比较的是同一 Candidate 的不同 plan 得分，word 不变，
-        //     此分支实际不会触发，但保留以确保与 sortCandidates 完全对称。
-        //     若未来 CandidateScore 持有 word，可在此直接比较。
         return false
     }
 }

@@ -162,7 +162,6 @@ class CnT9InputEngine(
         )
     }
 
-    // 修复：签名加 t9Code，传给 super
     override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         super.onPinyinSidebarClick(pinyin, t9Code)
         applyEvent(
@@ -179,10 +178,16 @@ class CnT9InputEngine(
             val consumed = session.backspaceMaterializedSegmentTailDigit(focusedIndex)
             if (consumed) {
                 super.refreshCandidates()
+
+                // 修复问题3：退格后检查焦点段是否仍然存在且非空，
+                // 若已被删空则不再保持原 index，而是尝试退到前一段
                 val newFocus = when {
-                    focusedIndex in session.pinyinStack.indices -> focusedIndex
-                    session.pinyinStack.isNotEmpty()            -> session.pinyinStack.lastIndex
-                    else                                        -> null
+                    focusedIndex in session.pinyinStack.indices &&
+                        session.pinyinStack[focusedIndex].isNotEmpty() -> focusedIndex
+                    focusedIndex > 0 &&
+                        (focusedIndex - 1) in session.pinyinStack.indices -> focusedIndex - 1
+                    session.pinyinStack.isNotEmpty() -> session.pinyinStack.lastIndex
+                    else -> null
                 }
                 applyEvent(
                     event        = CnT9StateEvent.BackspacePressed,

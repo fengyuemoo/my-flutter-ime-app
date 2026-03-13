@@ -10,25 +10,30 @@ import kotlin.math.min
  * CN-T9 候选硬过滤器。
  *
  * ── R-C02 修复 ──────────────────────────────────────────────────────
- * 新增候选字数约束：候选词字数（word.length）不得超过当前 activePath
- * 的音节段数（plan.segments.size）。
+ * 候选词字数（word.length）不得超过当前 activePath 的音节段数。
  *
- * 理由：若候选词的汉字数多于可用音节数，则该词无论如何都无法被当前输入
- * 完整匹配，提前过滤可减少无效排序计算量，同时避免不合理的长词出现在顶部。
+ * ── R-S07 修复（问题4）──────────────────────────────────────────────
+ * 锁定段（lockedIndices）的模糊音不生效：对锁定段的匹配必须是精确匹配
+ * 或前缀匹配，不允许仅靠 CnT9FuzzyPinyin 模糊通过。
+ * 此规则在硬过滤层（passesHardFilter）中强制执行，不依赖排序偏置。
  *
- * 例外：pinyinStack（已物化段）参与构建 plan.segments，单字模糊兜底路径
- * 中 plan.segments 可能为空（stackSegs 为空 + autoPlans 为空），此时
- * 不施加约束，避免把 Fallback 候选过滤掉。
+ * lockedIndices 为空时退化为原有逻辑，不影响无锁定段的场景。
  */
 object CnT9CandidateFilter {
 
     private const val MAX_QUERY_PER_PLAN = 80
 
+    /**
+     * @param lockedIndices 已锁定段的稀疏下标集合（来自 CnT9SegmentLockMap.lockedSnapshot）。
+     *                      空列表表示无锁定段，过滤行为与修复前完全一致。
+     */
     fun queryCandidates(
         dict: Dictionary,
-        plans: List<PathPlan>
+        plans: List<PathPlan>,
+        lockedIndices: List<Int> = emptyList()
     ): List<Candidate> {
         val out = LinkedHashMap<String, Candidate>(plans.size * MAX_QUERY_PER_PLAN)
+        val lockedSet = lockedIndices.toHashSet()
 
         for (plan in plans) {
             if (plan.segments.isEmpty()) continue
@@ -41,7 +46,7 @@ object CnT9CandidateFilter {
             var taken = 0
             for (cand in exactByStack) {
                 val normalized = normalizeCandidateAgainstPlan(cand, plan)
-                if (!passesHardFilter(normalized, plan)) continue
+                if (!passesHardFilter(normalized, plan, lockedSet)) continue
                 if (!out.containsKey(normalized.word)) {
                     out[normalized.word] = normalized
                     taken++
@@ -57,7 +62,7 @@ object CnT9CandidateFilter {
                 )
                 for (cand in exactByJoined) {
                     val normalized = normalizeCandidateAgainstPlan(cand, plan)
-                    if (!passesHardFilter(normalized, plan)) continue
+                    if (!passesHardFilter(normalized, plan, lockedSet)) continue
                     if (!out.containsKey(normalized.word)) {
                         out[normalized.word] = normalized
                         taken++
@@ -87,19 +92,27 @@ object CnT9CandidateFilter {
         )
     }
 
-    private fun passesHardFilter(cand: Candidate, plan: PathPlan): Boolean {
-        // R-C02 修复：候选字数不得超过当前路径的音节段数
-        // plan.segments 为空时跳过此约束（避免过滤 Fallback 路径下的兜底候选）
+    /**
+     * 硬过滤主入口。
+     *
+     * @param lockedSet 已锁定段下标的 HashSet（由调用方从 lockedIndices 构建，避免重复转换）
+     */
+    private fun passesHardFilter(
+        cand: Candidate,
+        plan: PathPlan,
+        lockedSet: Set<Int> = emptySet()
+    ): Boolean {
+        // R-C02：候选字数不得超过当前路径音节段数
         if (plan.segments.isNotEmpty() && cand.word.length > plan.segments.size) {
             return false
         }
 
         val syllables = resolveCandidateSyllables(cand)
         if (syllables.isNotEmpty()) {
-            // 1. 精确/前缀匹配（优先）
+            // 1. 精确/前缀硬匹配（优先，不受锁定影响）
             if (matchesPlanHard(syllables, plan)) return true
-            // 2. 模糊音兜底
-            if (matchesPlanFuzzy(syllables, plan)) return true
+            // 2. 模糊音兜底 —— R-S07：锁定段必须精确通过，拒绝仅靠模糊音匹配锁定段
+            if (matchesPlanFuzzy(syllables, plan, lockedSet)) return true
             return false
         }
 
@@ -124,9 +137,17 @@ object CnT9CandidateFilter {
         return candConcat.isNotEmpty() && candConcat == planConcat
     }
 
+    /**
+     * 模糊音匹配（R-S07 修复版）。
+     *
+     * 对于位于 lockedSet 中的段（锁定段），仅允许精确匹配或前缀匹配通过；
+     * 模糊音扩展（CnT9FuzzyPinyin.isFuzzyMatch）在锁定段上被明确禁止。
+     * 对于未锁定段，行为与修复前相同（允许模糊音兜底）。
+     */
     private fun matchesPlanFuzzy(
         candidateSyllables: List<String>,
-        plan: PathPlan
+        plan: PathPlan,
+        lockedSet: Set<Int>
     ): Boolean {
         val planSegments = plan.segments
         if (planSegments.isEmpty() || candidateSyllables.isEmpty()) return false
@@ -134,10 +155,20 @@ object CnT9CandidateFilter {
         val n = min(candidateSyllables.size, planSegments.size)
         for (i in 0 until n) {
             val expected = planSegments[i].lowercase(Locale.ROOT)
-            val actual = candidateSyllables[i].lowercase(Locale.ROOT)
-            if (!CnT9FuzzyPinyin.isFuzzyMatch(expected, actual)
-                && !actual.startsWith(expected)
-            ) {
+            val actual   = candidateSyllables[i].lowercase(Locale.ROOT)
+
+            // 精确或前缀匹配：无论是否锁定都允许
+            if (expected == actual || actual.startsWith(expected) || expected.startsWith(actual)) {
+                continue
+            }
+
+            // R-S07：锁定段不允许仅凭模糊音通过——直接判定不匹配
+            if (lockedSet.contains(i)) {
+                return i > 0   // 已有前置匹配段则截断通过，否则彻底拒绝
+            }
+
+            // 未锁定段：允许模糊音兜底
+            if (!CnT9FuzzyPinyin.isFuzzyMatch(expected, actual)) {
                 return i > 0
             }
         }

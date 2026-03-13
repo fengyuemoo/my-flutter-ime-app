@@ -29,18 +29,16 @@ import kotlinx.coroutines.withContext
  *  7. 混输模式（英文/URL/邮箱）候选插入头部
  *  8. 候选排序稳定化（CnT9CandidateStabilizer）
  *
- * ── R-Perf01 修复：后台异步候选生成 ──────────────────────────────────
- *  updateCandidates() 将 CnT9Handler.build()（包含 planAll + 字典查询 + 多维排序）
- *  分发到 Dispatchers.Default 后台线程执行，结果通过 withContext(Dispatchers.Main)
- *  回到主线程更新 UI，避免阻塞 IME 主线程（防 ANR / 掉帧）。
+ * ── R-Perf01：后台异步候选生成 ──────────────────────────────────────
+ *  updateCandidates() 分发到 Dispatchers.Default 后台线程执行，
+ *  结果通过 withContext(Dispatchers.Main) 回到主线程更新 UI。
  *
- *  - 每次新调用 updateCandidates() 时取消上一个未完成的 Job（debounce cancel），
- *    保证最终展示的永远是最新输入状态的结果。
- *  - Idle 路径（无 session.isComposing()）不需要后台，直接同步执行。
- *  - 调用方需在 IME 生命周期结束时调用 destroy() 取消协程 scope。
- *
- * [onPreeditInvalidate] 为可选回调，在选词上屏或 Idle 时通知外部
- * （CandidateController）使 CnT9PreeditFormatter 缓存失效（P1 修复）。
+ * ── R-L04（问题7修复）：退词惩罚触发 ────────────────────────────────
+ *  handleBackspace() 在上屏后第一次被调用时，触发
+ *  userChoiceStore.penalizeLastChoiceIfRecent()。
+ *  若距上次选词在 UNDO_WINDOW_MS（2 秒）内，则对该词降权。
+ *  标志位 pendingPenaltyOnBackspace 在每次 commitCandidateAt() 上屏后置 true，
+ *  退格时消费一次后立即重置为 false，防止多次退格叠加惩罚。
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -54,7 +52,7 @@ class CnT9CandidateEngine(
     private val contextWindow: CnT9ContextWindow? = null,
     private val sidebarState: CnT9SidebarState = CnT9SidebarState(),
     private val isFullWidthPunct: () -> Boolean = { true },
-    private val onPreeditInvalidate: (() -> Unit)? = null   // P1 修复：preedit 缓存失效回调
+    private val onPreeditInvalidate: (() -> Unit)? = null
 ) {
     private var isExpanded: Boolean = false
     private var isSingleCharMode: Boolean = false
@@ -64,17 +62,20 @@ class CnT9CandidateEngine(
 
     private val stabilizer = CnT9CandidateStabilizer()
 
-    // R-Perf01：候选生成协程 scope，与 IME 生命周期绑定
+    // R-Perf01：候选生成协程 scope
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    // 当前候选生成 Job，新请求到来时 cancel 旧 Job（debounce cancel）
     private var candidateJob: Job? = null
+
+    /**
+     * R-L04：标记"上次上屏后尚未收到第一次退格"。
+     * commitCandidateAt() 成功上屏后置 true；
+     * handleBackspace() 消费一次后置 false。
+     */
+    private var pendingPenaltyOnBackspace: Boolean = false
 
     fun getComposingPreviewOverride(): String? = composingPreviewOverride
     fun getEnterCommitTextOverride(): String? = enterCommitTextOverride
 
-    /**
-     * 释放协程 scope。在 IME Service onDestroy() 时调用。
-     */
     fun destroy() {
         engineScope.cancel()
     }
@@ -126,9 +127,15 @@ class CnT9CandidateEngine(
         updateCandidates()
     }
 
-    // ── 退格（含焦点同步）─────────────────────────────────────────
+    // ── 退格（含焦点同步 + R-L04 退词惩罚触发）────────────────────
 
     fun handleBackspace(): Boolean {
+        // R-L04：上屏后第一次退格，触发退词惩罚（时间窗口内才生效）
+        if (pendingPenaltyOnBackspace) {
+            pendingPenaltyOnBackspace = false
+            userChoiceStore?.penalizeLastChoiceIfRecent()
+        }
+
         val hadRawDigits = session.rawT9Digits.isNotEmpty()
         val stackSizeBefore = session.pinyinStack.size
 
@@ -156,9 +163,8 @@ class CnT9CandidateEngine(
     fun updateCandidates() {
         syncFilterButton()
 
-        // ── S0 Idle（同步，无需后台）──────────────────────────────
+        // ── S0 Idle ───────────────────────────────────────────────
         if (!session.isComposing()) {
-            // 取消任何挂起的后台 Job
             candidateJob?.cancel()
             candidateJob = null
 
@@ -184,19 +190,13 @@ class CnT9CandidateEngine(
         }
 
         // ── S1/S2 Composing（后台异步）──────────────────────────
-        // 取消上一次未完成的候选 Job（debounce cancel）
         candidateJob?.cancel()
 
-        // 快照当前输入状态（避免后台线程访问 session 可变状态）
         val snapSingleCharMode  = isSingleCharMode
         val snapRawDigits       = session.rawT9Digits
-        // CnT9Handler 内部会访问 session，session 是主线程单例，
-        // 这里将整个 build 调用放到后台但不传 session 引用——
-        // 改为传 session 的不可变快照（见下方 buildSnapshot）。
         val sessionSnapshot     = session.buildSnapshot()
 
         candidateJob = engineScope.launch {
-            // ── 后台：CPU 密集型计算 ──────────────────────────────
             val out: ImeModeHandler.Output = withContext(Dispatchers.Default) {
                 CnT9Handler.buildFromSnapshot(
                     snapshot        = sessionSnapshot,
@@ -208,8 +208,6 @@ class CnT9CandidateEngine(
                 )
             }
 
-            // ── 主线程：更新 UI ──────────────────────────────────
-            // Job 未被取消时才更新（保证最新请求生效）
             composingPreviewOverride = out.composingPreviewText
             enterCommitTextOverride  = out.enterCommitText
             currentCandidates        = ArrayList(out.candidates)
@@ -287,7 +285,6 @@ class CnT9CandidateEngine(
     }
 
     fun commitCandidateAt(index: Int) {
-        // 选词时立即取消后台 Job，避免旧结果覆盖上屏后状态
         candidateJob?.cancel()
         candidateJob = null
 
@@ -300,7 +297,7 @@ class CnT9CandidateEngine(
         ui.setSelectedCandidateIndex(index)
         val cand = currentCandidates[index]
 
-        // ── 标点候选：直接上屏 ────────────────────────────────────
+        // ── 标点候选：直接上屏，不触发退词惩罚机制 ───────────────
         if (CnT9PunctuationCandidates.isPunctCandidate(cand)) {
             stabilizer.invalidate()
             onPreeditInvalidate?.invoke()
@@ -318,6 +315,8 @@ class CnT9CandidateEngine(
             commitRaw(cand.word)
             contextWindow?.record(cand.word)
             clearComposing()
+            // R-L04：上屏成功，标记下次退格触发惩罚检查
+            pendingPenaltyOnBackspace = true
             return
         }
 
@@ -343,12 +342,15 @@ class CnT9CandidateEngine(
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
+                    // R-L04：完整上屏，标记退词惩罚待触发
+                    pendingPenaltyOnBackspace = true
                 }
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
                     stabilizer.invalidate()
                     onPreeditInvalidate?.invoke()
+                    // Updated = 仍在 Composing，不标记惩罚（未完全上屏）
                     updateCandidates()
                 }
             }
@@ -372,6 +374,8 @@ class CnT9CandidateEngine(
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
+                    // R-L04：完整上屏，标记退词惩罚待触发
+                    pendingPenaltyOnBackspace = true
                 }
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
@@ -391,6 +395,8 @@ class CnT9CandidateEngine(
         commitRaw(cand.word)
         contextWindow?.record(cand.word)
         clearComposing()
+        // R-L04：兜底上屏路径，同样标记退词惩罚待触发
+        pendingPenaltyOnBackspace = true
     }
 
     fun commitCandidate(cand: Candidate) {
