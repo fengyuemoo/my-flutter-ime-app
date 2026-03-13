@@ -11,7 +11,8 @@ import java.util.Locale
  *
  * 生成规则（对应规则清单「Preedit 顶部预览」）：
  *  1. engineOverride 优先级最高（由 CnT9CandidateEngine 在特殊状态下注入）
- *  2. committedPrefix（已物化上屏前缀汉字）直接拼在最前，与后续拼音之间无额外分隔
+ *  2. committedPrefix（已物化上屏前缀汉字）直接拼在最前，与后续拼音之间无额外分隔符
+ *     （与 ComposingSession.displayText() 行为保持一致）
  *  3. lockedSegs（pinyinStack 已确认音节）接在 committedPrefix 之后
  *  4. plannedSegs（planAll 推算的 rawDigits 对应拼音段）接在最后
  *  5. 拼音段与段之间用 ' 分隔，不显示数字
@@ -126,8 +127,8 @@ class CnT9PreeditFormatter {
         val allSegs = lockedSegs + plannedSegs
 
         return buildString {
-            // committedPrefix 是已上屏汉字，直接拼接，不在其后加 ' 分隔符
-            // （' 仅用于拼音音节之间，汉字与拼音之间无需分隔）
+            // committedPrefix 是已上屏汉字，直接拼接，与 allSegs 之间无额外分隔符
+            // 与 ComposingSession.displayText() 的行为完全一致
             if (committedPrefix.isNotEmpty()) append(committedPrefix)
             if (allSegs.isNotEmpty()) append(allSegs.joinToString("'"))
         }.takeIf { it.isNotEmpty() }
