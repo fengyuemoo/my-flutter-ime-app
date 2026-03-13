@@ -4,6 +4,55 @@ import com.example.myapp.dict.impl.T9Lookup
 import com.example.myapp.dict.model.Candidate
 import java.util.Locale
 
+// ── 只读快照（后台线程用）────────────────────────────────────────────────────
+/**
+ * ComposingSession 的只读不可变快照。
+ *
+ * 用途：
+ *  - 供 CnT9Handler.buildFromSnapshot() 在后台线程安全地计算候选，
+ *    完全避免对主线程 ComposingSession 的并发读取
+ *  - 与 ComposingSession 的字段一一对应；字段语义与原 session 属性相同
+ *
+ * 不可变保证：
+ *  - 所有集合均为 List（只读接口），且在 buildSnapshot() 内已通过 toList()/sorted()
+ *    生成新对象，不持有任何对原 ArrayList/HashSet 的引用
+ *  - data class 保证 copy-by-value 语义
+ */
+data class ComposingSessionSnapshot(
+    /** 当前未物化的 T9 数字串，如 "4663" */
+    val rawT9Digits: String,
+    /** 已物化（锁定）的拼音音节列表，如 ["ni", "hao"] */
+    val pinyinStack: List<String>,
+    /** 用户手动切分点集合（已排序），位置是 rawT9Digits 的 index */
+    val t9ManualCuts: List<Int>,
+    /** 已选词上屏的汉字前缀，如 "你好" */
+    val committedPrefix: String,
+    /** 已物化段对应的 digit 块列表（与 pinyinStack 对齐） */
+    val t9DigitsStack: List<String>,
+    /** 已物化段对应的局部 cut 列表（与 pinyinStack 对齐） */
+    val t9CutsStack: List<List<Int>>
+) {
+    companion object {
+        /** 空快照，表示 Idle 状态 */
+        val EMPTY = ComposingSessionSnapshot(
+            rawT9Digits     = "",
+            pinyinStack     = emptyList(),
+            t9ManualCuts    = emptyList(),
+            committedPrefix = "",
+            t9DigitsStack   = emptyList(),
+            t9CutsStack     = emptyList()
+        )
+    }
+
+    /** 是否处于输入中状态（与 ComposingSession.isComposing() 语义对齐） */
+    fun isComposing(): Boolean =
+        committedPrefix.isNotEmpty() ||
+        pinyinStack.isNotEmpty()     ||
+        rawT9Digits.isNotEmpty()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
 class ComposingSession {
 
     data class T9MaterializedSegmentSnapshot(
@@ -39,12 +88,38 @@ class ComposingSession {
     val t9MaterializedSegments: List<T9MaterializedSegmentSnapshot>
         get() = _pinyinStack.indices.map { index ->
             T9MaterializedSegmentSnapshot(
-                syllable = _pinyinStack.getOrNull(index).orEmpty(),
+                syllable   = _pinyinStack.getOrNull(index).orEmpty(),
                 digitChunk = _t9DigitsStack.getOrNull(index).orEmpty(),
-                localCuts = _t9CutsStack.getOrNull(index)?.sorted() ?: emptyList(),
-                locked = true
+                localCuts  = _t9CutsStack.getOrNull(index)?.sorted() ?: emptyList(),
+                locked     = true
             )
         }
+
+    // ── 快照 API ─────────────────────────────────────────────────────────────
+
+    /**
+     * 将当前 session 的可变状态快照为不可变的 [ComposingSessionSnapshot]。
+     *
+     * 调用方保证在主线程（IME 事件线程）调用此方法；
+     * 返回的快照可安全传递给任意后台线程使用。
+     *
+     * 实现要点：
+     *  - 所有集合均通过 toList() / map { } 生成新对象，
+     *    不持有任何对内部 ArrayList / HashSet 的引用，确保不可变性
+     *  - t9ManualCuts 使用已排序的 toList().sorted() 与属性 getter 行为一致
+     */
+    fun buildSnapshot(): ComposingSessionSnapshot {
+        return ComposingSessionSnapshot(
+            rawT9Digits     = _rawT9Digits,
+            pinyinStack     = _pinyinStack.toList(),
+            t9ManualCuts    = _t9ManualCuts.toList().sorted(),
+            committedPrefix = _committedPrefix,
+            t9DigitsStack   = _t9DigitsStack.toList(),
+            t9CutsStack     = _t9CutsStack.map { it.toList() }
+        )
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
 
     private sealed class PickRecord {
         data class Qwerty(
@@ -390,7 +465,7 @@ class ComposingSession {
             _rawT9Digits = restoredDigits + _rawT9Digits
             val restoredCuts = flattenCutChunks(
                 digitChunks = restoredDigitChunks,
-                cutChunks = restoredCutChunks
+                cutChunks   = restoredCutChunks
             )
             restoreCutsOnPrepend(restoredDigits.length, restoredCuts)
         }
@@ -423,9 +498,9 @@ class ComposingSession {
                 .coerceAtMost(_pinyinStack.size)
 
             if (consumePinyin > 0) {
-                val consumedPinyins = _pinyinStack.take(consumePinyin)
-                val consumedDigitChunks = _t9DigitsStack.take(consumePinyin)
-                val consumedCutChunks = _t9CutsStack.take(consumePinyin)
+                val consumedPinyins      = _pinyinStack.take(consumePinyin)
+                val consumedDigitChunks  = _t9DigitsStack.take(consumePinyin)
+                val consumedCutChunks    = _t9CutsStack.take(consumePinyin)
 
                 val restoreCount = if (restorePinyinCountOnUndo >= 0) {
                     restorePinyinCountOnUndo.coerceIn(0, consumePinyin)
@@ -435,18 +510,18 @@ class ComposingSession {
 
                 pickHistory.add(
                     PickRecord.T9(
-                        word = cand.word,
-                        consumedPinyins = consumedPinyins,
-                        consumedDigitChunks = consumedDigitChunks,
-                        consumedCutChunks = consumedCutChunks,
+                        word                     = cand.word,
+                        consumedPinyins          = consumedPinyins,
+                        consumedDigitChunks      = consumedDigitChunks,
+                        consumedCutChunks        = consumedCutChunks,
                         restorePinyinCountOnUndo = restoreCount
                     )
                 )
 
                 repeat(consumePinyin) {
-                    if (_pinyinStack.isNotEmpty()) _pinyinStack.removeAt(0)
-                    if (_t9DigitsStack.isNotEmpty()) _t9DigitsStack.removeAt(0)
-                    if (_t9CutsStack.isNotEmpty()) _t9CutsStack.removeAt(0)
+                    if (_pinyinStack.isNotEmpty())    _pinyinStack.removeAt(0)
+                    if (_t9DigitsStack.isNotEmpty())  _t9DigitsStack.removeAt(0)
+                    if (_t9CutsStack.isNotEmpty())    _t9CutsStack.removeAt(0)
                 }
 
                 return if (_pinyinStack.isEmpty() && _rawT9Digits.isEmpty()) {
@@ -471,16 +546,16 @@ class ComposingSession {
             }
 
             val consumedDigits = _rawT9Digits.substring(0, consumeDigits)
-            val consumedCuts = consumeDigitsPrefixForCuts(consumeDigits)
+            val consumedCuts   = consumeDigitsPrefixForCuts(consumeDigits)
 
             _rawT9Digits = _rawT9Digits.substring(consumeDigits)
             trimCutsToLength(_rawT9Digits.length)
 
             pickHistory.add(
                 PickRecord.T9Digits(
-                    word = cand.word,
+                    word           = cand.word,
                     consumedDigits = consumedDigits,
-                    consumedCuts = consumedCuts
+                    consumedCuts   = consumedCuts
                 )
             )
 
@@ -504,7 +579,7 @@ class ComposingSession {
                 .coerceAtMost(nonEmptyParts.size)
 
             val consumedParts = nonEmptyParts.take(consume)
-            val remainParts = nonEmptyParts.drop(consume)
+            val remainParts   = nonEmptyParts.drop(consume)
 
             _committedPrefix += cand.word
             pickHistory.add(PickRecord.Apostrophe(cand.word, consumedParts))
@@ -523,7 +598,7 @@ class ComposingSession {
             .coerceAtMost(inputStr.length)
 
         val consumedPrefix = inputStr.substring(0, consume)
-        val remain = inputStr.substring(consume)
+        val remain         = inputStr.substring(consume)
 
         _committedPrefix += cand.word
         pickHistory.add(PickRecord.Qwerty(cand.word, consumedPrefix))
@@ -543,7 +618,7 @@ class ComposingSession {
             return
         }
 
-        val last = pickHistory.removeAt(pickHistory.size - 1)
+        val last     = pickHistory.removeAt(pickHistory.size - 1)
         val lastWord = lastWord(last)
 
         _committedPrefix = if (_committedPrefix.length >= lastWord.length) {
@@ -577,14 +652,14 @@ class ComposingSession {
                 }
 
                 val rawDigitChunks = last.consumedDigitChunks.drop(restoreStackCount)
-                val rawCutChunks = last.consumedCutChunks.drop(restoreStackCount)
+                val rawCutChunks   = last.consumedCutChunks.drop(restoreStackCount)
 
                 val restoredDigits = rawDigitChunks.joinToString("")
                 if (restoredDigits.isNotEmpty()) {
                     _rawT9Digits = restoredDigits + _rawT9Digits
                     val restoredCuts = flattenCutChunks(
                         digitChunks = rawDigitChunks,
-                        cutChunks = rawCutChunks
+                        cutChunks   = rawCutChunks
                     )
                     restoreCutsOnPrepend(restoredDigits.length, restoredCuts)
                     trimCutsToLength(_rawT9Digits.length)
@@ -601,10 +676,10 @@ class ComposingSession {
 
     private fun lastWord(r: PickRecord): String {
         return when (r) {
-            is PickRecord.Qwerty -> r.word
-            is PickRecord.Apostrophe -> r.word
-            is PickRecord.T9 -> r.word
-            is PickRecord.T9Digits -> r.word
+            is PickRecord.Qwerty      -> r.word
+            is PickRecord.Apostrophe  -> r.word
+            is PickRecord.T9          -> r.word
+            is PickRecord.T9Digits    -> r.word
         }
     }
 }
