@@ -19,16 +19,6 @@ import kotlinx.coroutines.withContext
 /**
  * CN-T9 候选引擎（协调器）。
  *
- * 职责：
- *  1. 驱动 CnT9Handler 生成候选列表（updateCandidates）
- *  2. 处理用户选词提交（commitCandidateAt / commitCandidate）
- *  3. 处理空格键与 Enter 首选上屏
- *  4. 管理 UI 展开/收起、单字过滤模式
- *  5. 管理 sidebar 焦点与锁定（CnT9SidebarState）
- *  6. Idle 状态下注入标点快捷候选
- *  7. 混输模式（英文/URL/邮箱）候选插入头部
- *  8. 候选排序稳定化（CnT9CandidateStabilizer）
- *
  * ── R-Perf01：后台异步候选生成 ──────────────────────────────────────
  *  updateCandidates() 分发到 Dispatchers.Default 后台线程执行，
  *  结果通过 withContext(Dispatchers.Main) 回到主线程更新 UI。
@@ -36,9 +26,15 @@ import kotlinx.coroutines.withContext
  * ── R-L04（问题7修复）：退词惩罚触发 ────────────────────────────────
  *  handleBackspace() 在上屏后第一次被调用时，触发
  *  userChoiceStore.penalizeLastChoiceIfRecent()。
- *  若距上次选词在 UNDO_WINDOW_MS（2 秒）内，则对该词降权。
  *  标志位 pendingPenaltyOnBackspace 在每次 commitCandidateAt() 上屏后置 true，
  *  退格时消费一次后立即重置为 false，防止多次退格叠加惩罚。
+ *
+ * ── 缺陷 B 修复：sidebarState 跨线程竞态消除 ────────────────────────
+ *  updateCandidates() 在进入协程前于主线程完成 sidebarState 快照：
+ *    snapLockedIndices = sidebarState.lockMap.lockedSnapshot.toList()
+ *    snapFocusedIndex  = sidebarState.focusedSegmentIndex
+ *  快照后的不可变值传入 CnT9Handler.buildFromSnapshot()，
+ *  不再将可变的 sidebarState 对象本身跨线程传递。
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -62,23 +58,19 @@ class CnT9CandidateEngine(
 
     private val stabilizer = CnT9CandidateStabilizer()
 
-    // R-Perf01：候选生成协程 scope
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var candidateJob: Job? = null
 
     /**
      * R-L04：标记"上次上屏后尚未收到第一次退格"。
-     * commitCandidateAt() 成功上屏后置 true；
-     * handleBackspace() 消费一次后置 false。
+     * commitCandidateAt() 成功上屏后置 true；handleBackspace() 消费一次后置 false。
      */
     private var pendingPenaltyOnBackspace: Boolean = false
 
     fun getComposingPreviewOverride(): String? = composingPreviewOverride
     fun getEnterCommitTextOverride(): String? = enterCommitTextOverride
 
-    fun destroy() {
-        engineScope.cancel()
-    }
+    fun destroy() { engineScope.cancel() }
 
     private fun isDebuggable(): Boolean =
         (ui.rootView.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -136,29 +128,26 @@ class CnT9CandidateEngine(
             userChoiceStore?.penalizeLastChoiceIfRecent()
         }
 
-        val hadRawDigits = session.rawT9Digits.isNotEmpty()
+        val hadRawDigits    = session.rawT9Digits.isNotEmpty()
         val stackSizeBefore = session.pinyinStack.size
 
         val consumed = session.backspace(useT9Layout = true)
 
         when {
-            !session.isComposing() -> {
-                sidebarState.clearAll()
-            }
+            !session.isComposing() -> sidebarState.clearAll()
             !hadRawDigits && session.pinyinStack.size < stackSizeBefore -> {
                 val removedIndex = session.pinyinStack.size
                 sidebarState.onSegmentRemoved(removedIndex)
             }
-            sidebarState.isDisambiguating && session.rawT9Digits.isEmpty() -> {
+            sidebarState.isDisambiguating && session.rawT9Digits.isEmpty() ->
                 sidebarState.retreatFocus()
-            }
         }
 
         updateCandidates()
         return consumed
     }
 
-    // ── 候选更新（R-Perf01：异步化）──────────────────────────────
+    // ── 候选更新（缺陷 B 修复版）──────────────────────────────────
 
     fun updateCandidates() {
         syncFilterButton()
@@ -170,7 +159,7 @@ class CnT9CandidateEngine(
 
             currentCandidates.clear()
             composingPreviewOverride = null
-            enterCommitTextOverride = null
+            enterCommitTextOverride  = null
             resetUiSelectionToTop()
             sidebarState.clearAll()
             stabilizer.reset()
@@ -178,7 +167,7 @@ class CnT9CandidateEngine(
             if (isExpanded) isExpanded = false
 
             CnT9PunctuationCandidates.injectIdlePunctuations(
-                candidates = currentCandidates,
+                candidates  = currentCandidates,
                 isFullWidth = isFullWidthPunct()
             )
 
@@ -192,9 +181,13 @@ class CnT9CandidateEngine(
         // ── S1/S2 Composing（后台异步）──────────────────────────
         candidateJob?.cancel()
 
-        val snapSingleCharMode  = isSingleCharMode
-        val snapRawDigits       = session.rawT9Digits
-        val sessionSnapshot     = session.buildSnapshot()
+        val snapSingleCharMode = isSingleCharMode
+        val snapRawDigits      = session.rawT9Digits
+        val sessionSnapshot    = session.buildSnapshot()
+
+        // 缺陷 B 修复：在主线程完成 sidebarState 快照，避免可变对象跨线程传递
+        val snapLockedIndices = sidebarState.lockMap.lockedSnapshot.toList()
+        val snapFocusedIndex  = sidebarState.focusedSegmentIndex
 
         candidateJob = engineScope.launch {
             val out: ImeModeHandler.Output = withContext(Dispatchers.Default) {
@@ -204,7 +197,8 @@ class CnT9CandidateEngine(
                     singleCharMode  = snapSingleCharMode,
                     userChoiceStore = userChoiceStore,
                     contextWindow   = contextWindow,
-                    sidebarState    = sidebarState
+                    lockedIndices   = snapLockedIndices,   // 传快照值，不传 sidebarState 对象
+                    focusedIndex    = snapFocusedIndex     // 同上
                 )
             }
 
@@ -265,7 +259,7 @@ class CnT9CandidateEngine(
     }
 
     fun commitFirstCandidateOnEnter(): Boolean {
-        val idx = preferredIndex() ?: return false
+        val idx  = preferredIndex() ?: return false
         val cand = preferredCandidate() ?: return false
 
         val shouldCommit = CnT9ConfidenceModel.shouldAutoCommit(
@@ -297,7 +291,7 @@ class CnT9CandidateEngine(
         ui.setSelectedCandidateIndex(index)
         val cand = currentCandidates[index]
 
-        // ── 标点候选：直接上屏，不触发退词惩罚机制 ───────────────
+        // 标点候选：直接上屏，不触发退词惩罚机制
         if (CnT9PunctuationCandidates.isPunctCandidate(cand)) {
             stabilizer.invalidate()
             onPreeditInvalidate?.invoke()
@@ -315,13 +309,12 @@ class CnT9CandidateEngine(
             commitRaw(cand.word)
             contextWindow?.record(cand.word)
             clearComposing()
-            // R-L04：上屏成功，标记下次退格触发惩罚检查
             pendingPenaltyOnBackspace = true
             return
         }
 
         val consumeSyllables = CnT9CommitHelper.resolveConsumeSyllables(cand).coerceAtLeast(1)
-        val stackSizeBefore = session.pinyinStack.size
+        val stackSizeBefore  = session.pinyinStack.size
 
         CnT9CommitHelper.materializeSegmentsIfNeeded(session, consumeSyllables, dictEngine)
 
@@ -342,7 +335,6 @@ class CnT9CandidateEngine(
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
-                    // R-L04：完整上屏，标记退词惩罚待触发
                     pendingPenaltyOnBackspace = true
                 }
                 is ComposingSession.PickResult.Updated -> {
@@ -350,7 +342,6 @@ class CnT9CandidateEngine(
                     sidebarState.clearAll()
                     stabilizer.invalidate()
                     onPreeditInvalidate?.invoke()
-                    // Updated = 仍在 Composing，不标记惩罚（未完全上屏）
                     updateCandidates()
                 }
             }
@@ -374,7 +365,6 @@ class CnT9CandidateEngine(
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
                     clearComposing()
-                    // R-L04：完整上屏，标记退词惩罚待触发
                     pendingPenaltyOnBackspace = true
                 }
                 is ComposingSession.PickResult.Updated -> {
@@ -395,7 +385,6 @@ class CnT9CandidateEngine(
         commitRaw(cand.word)
         contextWindow?.record(cand.word)
         clearComposing()
-        // R-L04：兜底上屏路径，同样标记退词惩罚待触发
         pendingPenaltyOnBackspace = true
     }
 

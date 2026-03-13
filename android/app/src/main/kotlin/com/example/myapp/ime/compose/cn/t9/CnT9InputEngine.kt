@@ -25,7 +25,7 @@ class CnT9InputEngine(
     useT9Layout = true,
     logTag = "CnT9InputEngine",
     strategy = CnT9ComposeStrategy(
-        sessionProvider = { session },
+        sessionProvider     = { session },
         enterCommitProvider = { candidateController.getEnterCommitTextOverride() }
     )
 ) {
@@ -58,9 +58,9 @@ class CnT9InputEngine(
         }
 
         val resolvedFocus = when {
-            clearFocus        -> null
+            clearFocus            -> null
             focusOverride != null -> focusOverride.takeIf { it in segments.indices }
-            else -> pinnedFocusedIndex?.takeIf { it in segments.indices }
+            else                  -> pinnedFocusedIndex?.takeIf { it in segments.indices }
         }
 
         pinnedFocusedIndex = resolvedFocus
@@ -82,8 +82,8 @@ class CnT9InputEngine(
         focusOverride: Int? = null,
         clearFocus: Boolean = false
     ) {
-        lastEvent     = event
-        currentState  = buildStateFromSession(
+        lastEvent    = event
+        currentState = buildStateFromSession(
             focusOverride = focusOverride,
             clearFocus    = clearFocus
         )
@@ -92,10 +92,24 @@ class CnT9InputEngine(
     private fun lastMaterializedIndexOrNull(): Int? =
         session.pinyinStack.lastIndex.takeIf { it >= 0 }
 
+    /**
+     * 缺陷 D 修复：从 preferred 开始向前查找第一个未锁定的段下标。
+     * 若所有段均已锁定（极端情况），返回 null，调用方将清空焦点。
+     */
+    private fun findNearestUnlockedIndex(preferred: Int): Int? {
+        var idx = preferred.coerceAtMost(session.pinyinStack.lastIndex)
+        while (idx >= 0) {
+            val seg = session.t9MaterializedSegments.getOrNull(idx)
+            if (seg != null && !seg.locked) return idx
+            idx--
+        }
+        return null
+    }
+
     fun focusMaterializedSegment(index: Int) {
         if (index !in session.pinyinStack.indices) return
         applyEvent(
-            event        = CnT9StateEvent.SidebarSegmentFocused(index),
+            event         = CnT9StateEvent.SidebarSegmentFocused(index),
             focusOverride = index
         )
         super.refreshCandidates()
@@ -103,11 +117,11 @@ class CnT9InputEngine(
 
     fun replaceFocusedSegmentWith(pinyin: String) {
         val focusedIdx = pinnedFocusedIndex ?: return
-        val changed = session.replaceMaterializedSegmentAt(focusedIdx, pinyin)
+        val changed    = session.replaceMaterializedSegmentAt(focusedIdx, pinyin)
         if (!changed) return
 
         applyEvent(
-            event        = CnT9StateEvent.SidebarSegmentFocused(focusedIdx),
+            event         = CnT9StateEvent.SidebarSegmentFocused(focusedIdx),
             focusOverride = focusedIdx
         )
         super.refreshCandidates()
@@ -165,7 +179,7 @@ class CnT9InputEngine(
     override fun onPinyinSidebarClick(pinyin: String, t9Code: String) {
         super.onPinyinSidebarClick(pinyin, t9Code)
         applyEvent(
-            event        = CnT9StateEvent.SidebarSegmentFocused(lastMaterializedIndexOrNull() ?: 0),
+            event         = CnT9StateEvent.SidebarSegmentFocused(lastMaterializedIndexOrNull() ?: 0),
             focusOverride = lastMaterializedIndexOrNull()
         )
     }
@@ -179,9 +193,14 @@ class CnT9InputEngine(
             if (consumed) {
                 super.refreshCandidates()
 
-                // 修复问题3：退格后检查焦点段是否仍然存在且非空，
-                // 若已被删空则不再保持原 index，而是尝试退到前一段
-                val newFocus = when {
+                // 退格后确定新焦点：
+                //  1. 原焦点段仍存在且非空 → 保持原焦点
+                //  2. 退到前一段
+                //  3. 退到末尾段
+                //  4. 无可用段 → 清空焦点
+                // 缺陷 D 修复：对候选焦点再过一次 findNearestUnlockedIndex，
+                //   确保焦点不落在已锁定段上
+                val rawNewFocus = when {
                     focusedIndex in session.pinyinStack.indices &&
                         session.pinyinStack[focusedIndex].isNotEmpty() -> focusedIndex
                     focusedIndex > 0 &&
@@ -189,10 +208,12 @@ class CnT9InputEngine(
                     session.pinyinStack.isNotEmpty() -> session.pinyinStack.lastIndex
                     else -> null
                 }
+                val newFocus = rawNewFocus?.let { findNearestUnlockedIndex(it) }
+
                 applyEvent(
-                    event        = CnT9StateEvent.BackspacePressed,
+                    event         = CnT9StateEvent.BackspacePressed,
                     focusOverride = newFocus,
-                    clearFocus   = newFocus == null
+                    clearFocus    = newFocus == null
                 )
                 return
             }
@@ -219,7 +240,7 @@ class CnT9InputEngine(
 
     override fun handleEnter(ic: InputConnection?): Boolean {
         val wasComposing = session.isComposing()
-        val consumed = super.handleEnter(ic)
+        val consumed     = super.handleEnter(ic)
         if (consumed) {
             applyEvent(
                 event = if (wasComposing && !session.isComposing())
