@@ -42,6 +42,17 @@ import kotlin.math.min
  *    让高频短词凭 priority 维度胜出。
  *
  * lockedIndices 语义：稀疏升序列表，来自 CnT9SegmentLockMap.lockedSnapshot。
+ *
+ * ── 新问题 C 修复：v↔ü 转换一致性 ────────────────────────────────
+ *  原实现 scoreAgainstPlan() 中，candidateSyllables 来自
+ *  CnT9SentencePlanner.splitConcatPinyinToSyllables()，该函数会将 v→ü。
+ *  而 plan.segments（来自 BeamDecoder）全程使用 v，不含 ü。
+ *  导致含 ü 字（旅/女/绿等）的候选在精确段比较时永远不等（"lü" != "lv"），
+ *  只能走前缀或模糊匹配路径，违反「精确匹配优先」原则（R-D04）。
+ *
+ *  修复：scoreAgainstPlan() 中对 actual 和 exactInput 的 zip 比较，
+ *  统一在比较前执行 .replace("ü", "v")，使双方均使用 v 表示 ü 声母。
+ *  不修改 candidateSyllables 本身（避免影响其他调用方），仅在比较时规范化。
  */
 object CnT9CandidateScorer {
 
@@ -198,6 +209,13 @@ object CnT9CandidateScorer {
 
     // ── 私有：单 plan 打分 ─────────────────────────────────────────
 
+    /**
+     * 新问题 C 修复：对 actual（来自 candidateSyllables）在段比较前统一执行
+     * .replace("ü", "v")，与 plan.segments（全程使用 v）保持一致，
+     * 避免含 ü 字（旅/女/绿等）的候选精确匹配维度被错误降级为前缀匹配。
+     *
+     * 同样地，exactInput 的 zip 比较中也对双方都做 v 规范化。
+     */
     private fun scoreAgainstPlan(
         cand: Candidate,
         plan: PathPlan,
@@ -226,7 +244,8 @@ object CnT9CandidateScorer {
 
         for (i in 0 until n) {
             val expected  = planSegs[i].lowercase(Locale.ROOT)
-            val actual    = candidateSyllables[i].lowercase(Locale.ROOT)
+            // 新问题 C 修复：规范化 ü→v，与 plan.segments 统一使用 v 表示 ü 声母
+            val actual    = candidateSyllables[i].lowercase(Locale.ROOT).replace("ü", "v")
             val segDigits = T9Lookup.encodeLetters(expected).length.coerceAtLeast(1)
             val isLocked  = lockedSet.contains(i)
 
@@ -260,9 +279,11 @@ object CnT9CandidateScorer {
         val uncoveredDigits  = (totalPlanDigits - consumedDigits).coerceAtLeast(0)
         val syllableDistance = abs(planSegs.size - candidateSyllables.size)
 
+        // 新问题 C 修复：exactInput 的 zip 比较中，对双方均执行 v 规范化
         val exactInput = candidateSyllables.size == planSegs.size &&
             candidateSyllables.zip(planSegs).all { (a, b) ->
-                a.lowercase(Locale.ROOT) == b.lowercase(Locale.ROOT)
+                a.lowercase(Locale.ROOT).replace("ü", "v") ==
+                    b.lowercase(Locale.ROOT).replace("ü", "v")
             }
 
         return CandidateScore(

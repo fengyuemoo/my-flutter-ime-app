@@ -11,6 +11,14 @@ package com.example.myapp.ime.mode.cn
  *  - 只在内存维护，不持久化（会话级上下文）
  *  - 加分逻辑分三层：句首加分 / bigram 接续加分 / 重复抑制
  *  - 后续可替换 getContextBoost() 内部实现接入真实 bigram 表，外部接口不变
+ *
+ * ── 新问题 A 修复 ────────────────────────────────────────────────
+ *  原实现 when 分支中，STRONG_PREV_CHARS 的判断早于重复抑制的判断，
+ *  导致：上文末字是"的/了/是"等结构词时，即使候选首字与上文末字相同
+ *  （重复词），重复抑制（REPEAT_PENALTY）也被跳过，该候选反而得到 +40。
+ *
+ *  修复：将"重复抑制"分支提到最前，优先判断，确保重复词无论如何都
+ *  先受到抑制，再考虑强接续加分。
  */
 class CnT9ContextWindow {
 
@@ -81,12 +89,16 @@ class CnT9ContextWindow {
     /**
      * 获取候选词的上下文加分。
      *
-     * 三层策略：
+     * 三层策略（新问题A修复后顺序）：
      *  1. 句首（窗口为空）→ getHeadBoost()
-     *  2. 有上文 → bigram 接续打分
-     *     a. 上文末字在 STRONG_PREV_CHARS → BIGRAM_STRONG_BOOST
-     *     b. 候选首字 ≠ 上文末字（普通非重复）→ BIGRAM_WEAK_BOOST
-     *     c. 候选首字 == 上文末字（重复抑制）→ REPEAT_PENALTY
+     *  2. 有上文 → bigram 接续打分，按以下优先级：
+     *     a. 候选首字 == 上文末字（重复抑制）→ REPEAT_PENALTY  ← 优先判断，防止被强接续分支跳过
+     *     b. 上文末字在 STRONG_PREV_CHARS → BIGRAM_STRONG_BOOST
+     *     c. 其他（普通非重复接续）→ BIGRAM_WEAK_BOOST
+     *
+     * 修复说明：原实现将 STRONG_PREV_CHARS 分支置于重复抑制之前，
+     * 导致"的/了/是"等结构词之后的重复词也得到 +40（反而被优先排序）。
+     * 修复后重复抑制先于强接续判断，语义更正确。
      */
     fun getContextBoost(word: String): Int {
         if (word.isEmpty()) return 0
@@ -97,9 +109,10 @@ class CnT9ContextWindow {
         val lastChar  = lastCommitted.lastOrNull()  ?: return 0
         val firstChar = word.firstOrNull()           ?: return 0
 
+        // 新问题 A 修复：重复抑制分支提前，确保重复词不被强接续分支跳过
         return when {
-            lastChar in STRONG_PREV_CHARS -> BIGRAM_STRONG_BOOST
             firstChar == lastChar         -> REPEAT_PENALTY
+            lastChar in STRONG_PREV_CHARS -> BIGRAM_STRONG_BOOST
             else                          -> BIGRAM_WEAK_BOOST
         }
     }

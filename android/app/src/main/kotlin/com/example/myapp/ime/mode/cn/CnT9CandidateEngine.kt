@@ -40,6 +40,13 @@ import kotlinx.coroutines.withContext
  *  当词库查询结果为空时，必须至少展示一个候选。
  *  兜底优先级：composingPreviewOverride（拼音预览）> rawDigits 直出。
  *  兜底候选在 stabilizer.stabilize() 之前注入，保证稳定化流程也能感知到候选。
+ *  兜底候选的标识：priority == 0 且为列表中唯一候选。
+ *
+ * ── 新问题 B 修复：R-E02 兜底候选不自动上屏 ──────────────────────
+ *  commitFirstCandidateOnEnter() 新增前置检查：
+ *  若当前列表仅含 1 个候选且 priority == 0（R-E02 兜底候选），
+ *  则直接返回 false，不触发 shouldAutoCommit，
+ *  避免将拼音预览文本或原始数字串盲目提交给用户。
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -228,6 +235,7 @@ class CnT9CandidateEngine(
 
             // R-E02 修复（问题4）：词库查无结果时必须至少展示一个候选（拼音直出兜底）
             // 在 stabilizer.stabilize() 之前注入，保证稳定化也能感知到该兜底候选
+            // 兜底候选标识：priority == 0，供 commitFirstCandidateOnEnter() 识别
             if (currentCandidates.isEmpty() && session.isComposing()) {
                 val fallbackWord = composingPreviewOverride?.takeIf { it.isNotEmpty() }
                     ?: snapRawDigits.takeIf { it.isNotEmpty() }
@@ -287,6 +295,11 @@ class CnT9CandidateEngine(
     fun commitFirstCandidateOnEnter(): Boolean {
         val idx  = preferredIndex() ?: return false
         val cand = preferredCandidate() ?: return false
+
+        // 新问题 B 修复：R-E02 兜底候选不触发自动上屏。
+        // 兜底候选由 updateCandidates() 以 priority == 0 注入，且此时列表中仅有该 1 个候选。
+        // 直接返回 false 让用户手动选词，避免将拼音预览或原始数字串盲目提交。
+        if (currentCandidates.size == 1 && cand.priority == 0) return false
 
         val shouldCommit = CnT9ConfidenceModel.shouldAutoCommit(
             preferredIndex  = idx,
