@@ -275,6 +275,11 @@ class ImeActionDispatcher(
                         assertSessionCleared(target,  from = "handleMainModeChanged $oldMode -> $target (new)")
                         syncSymbolPanelUi()
                         refreshComposingView()
+                        // 模式切换修复：重置 cnT9Engine 跨模式残留状态。
+                        // 场景：中文 T9 上屏后切换到英文再切回，pendingPenaltyOnBackspace
+                        // 标志若不清除，回到 T9 后第一次退格会误触发退词惩罚。
+                        // candidateController.onStartInput() 已做 enginesReady 保护，安全调用。
+                        candidateController.onStartInput()
                     }
                 }
                 val next = deferredMainMode
