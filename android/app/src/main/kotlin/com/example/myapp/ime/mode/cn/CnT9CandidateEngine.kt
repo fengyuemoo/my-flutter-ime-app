@@ -35,6 +35,11 @@ import kotlinx.coroutines.withContext
  *    snapFocusedIndex  = sidebarState.focusedSegmentIndex
  *  快照后的不可变值传入 CnT9Handler.buildFromSnapshot()，
  *  不再将可变的 sidebarState 对象本身跨线程传递。
+ *
+ * ── R-E02 修复（问题4）：无候选兜底 ────────────────────────────────
+ *  当词库查询结果为空时，必须至少展示一个候选。
+ *  兜底优先级：composingPreviewOverride（拼音预览）> rawDigits 直出。
+ *  兜底候选在 stabilizer.stabilize() 之前注入，保证稳定化流程也能感知到候选。
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -147,7 +152,7 @@ class CnT9CandidateEngine(
         return consumed
     }
 
-    // ── 候选更新（缺陷 B 修复版）──────────────────────────────────
+    // ── 候选更新（缺陷 B 修复 + R-E02 修复版）──────────────────────
 
     fun updateCandidates() {
         syncFilterButton()
@@ -197,8 +202,8 @@ class CnT9CandidateEngine(
                     singleCharMode  = snapSingleCharMode,
                     userChoiceStore = userChoiceStore,
                     contextWindow   = contextWindow,
-                    lockedIndices   = snapLockedIndices,   // 传快照值，不传 sidebarState 对象
-                    focusedIndex    = snapFocusedIndex     // 同上
+                    lockedIndices   = snapLockedIndices,
+                    focusedIndex    = snapFocusedIndex
                 )
             }
 
@@ -219,6 +224,27 @@ class CnT9CandidateEngine(
 
             if (snapRawDigits.length >= 3 && sessionSnapshot.pinyinStack.isEmpty()) {
                 injectMixedInputCandidates(snapRawDigits)
+            }
+
+            // R-E02 修复（问题4）：词库查无结果时必须至少展示一个候选（拼音直出兜底）
+            // 在 stabilizer.stabilize() 之前注入，保证稳定化也能感知到该兜底候选
+            if (currentCandidates.isEmpty() && session.isComposing()) {
+                val fallbackWord = composingPreviewOverride?.takeIf { it.isNotEmpty() }
+                    ?: snapRawDigits.takeIf { it.isNotEmpty() }
+                if (fallbackWord != null) {
+                    currentCandidates.add(
+                        Candidate(
+                            word          = fallbackWord,
+                            input         = snapRawDigits,
+                            priority      = 0,
+                            matchedLength = snapRawDigits.length,
+                            pinyinCount   = 0,
+                            pinyin        = null,
+                            syllables     = 0,
+                            acronym       = null
+                        )
+                    )
+                }
             }
 
             currentCandidates = stabilizer.stabilize(currentCandidates, snapRawDigits)

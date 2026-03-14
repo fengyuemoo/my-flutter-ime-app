@@ -2,6 +2,10 @@ package com.example.myapp.ime.mode.cn
 
 import android.content.Context
 import android.content.SharedPreferences
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -30,6 +34,10 @@ import java.util.concurrent.ConcurrentHashMap
  *     count -= PENALTY_PER_UNDO（最低降为 0，不删除条目保留时间戳）
  *     streak 重置为 1
  *   惩罚窗口：选词后 2 秒内退格视为撤销。
+ *
+ * ── R-L05 修复（问题2）──────────────────────────────────────────────
+ *   MAX_ENTRIES 超额时的清理排序操作移至 ioScope（Dispatchers.IO）异步执行，
+ *   避免主线程因大量条目排序而产生卡顿。
  */
 class CnT9UserChoiceStore(context: Context) {
 
@@ -79,6 +87,9 @@ class CnT9UserChoiceStore(context: Context) {
 
     private val cache = ConcurrentHashMap<String, Entry>()
 
+    // R-L05 修复：独立 IO 协程作用域，用于异步执行超额清理
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     @Volatile private var lastPinyinKey: String = ""
     @Volatile private var lastWord: String = ""
 
@@ -126,6 +137,9 @@ class CnT9UserChoiceStore(context: Context) {
 
     /**
      * 记录一次用户选词。
+     *
+     * 主线程同步更新 cache 和 SharedPreferences（写操作 apply() 异步）；
+     * R-L05 修复：MAX_ENTRIES 超额时的清理操作移至 ioScope 异步执行。
      */
     fun recordChoice(pinyinKey: String, word: String) {
         val key = buildKey(pinyinKey, word)
@@ -149,19 +163,35 @@ class CnT9UserChoiceStore(context: Context) {
         val newEntry = Entry(count = newCount, lastTimestamp = now, streak = newStreak)
         cache[key] = newEntry
 
-        val editor = prefs.edit()
-        editor.putString(key, newEntry.serialize())
+        // 新条目先异步写入磁盘
+        prefs.edit().putString(key, newEntry.serialize()).apply()
 
+        // R-L05 修复：超额清理移至 IO 线程，避免主线程大量排序
         if (cache.size > MAX_ENTRIES) {
-            val toRemove = cache.entries
-                .sortedWith(compareBy({ it.value.lastTimestamp }, { it.value.count }))
-                .take(cache.size - MAX_ENTRIES)
-            for (e in toRemove) {
-                cache.remove(e.key)
-                editor.remove(e.key)
+            ioScope.launch {
+                trimCacheAsync()
             }
         }
+    }
 
+    /**
+     * R-L05 修复：在 IO 线程中执行超额条目清理。
+     * 按最后使用时间 + 频次排序，淘汰最旧/最低频的条目。
+     */
+    private fun trimCacheAsync() {
+        if (cache.size <= MAX_ENTRIES) return   // double-check（并发安全）
+
+        val toRemove = cache.entries
+            .sortedWith(compareBy({ it.value.lastTimestamp }, { it.value.count }))
+            .take(cache.size - MAX_ENTRIES)
+
+        if (toRemove.isEmpty()) return
+
+        val editor = prefs.edit()
+        for (e in toRemove) {
+            cache.remove(e.key)
+            editor.remove(e.key)
+        }
         editor.apply()
     }
 

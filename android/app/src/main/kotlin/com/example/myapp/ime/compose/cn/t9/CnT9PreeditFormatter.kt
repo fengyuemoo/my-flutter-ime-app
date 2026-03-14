@@ -11,6 +11,8 @@ import java.util.Locale
  *
  * 生成规则（对应规则清单「Preedit 顶部预览」）：
  *  1. engineOverride 优先级最高（由 CnT9CandidateEngine 在特殊状态下注入）
+ *     ── 修复（问题1）：engineOverride 仅在 pinyinStack 与 committedPrefix 均为空时
+ *        才整段替换；否则作为末尾 NORMAL 段追加，不破坏锁定/焦点样式。
  *  2. committedPrefix（已物化上屏前缀汉字）直接拼在最前，样式 COMMITTED_PREFIX
  *  3. lockedSegs（pinyinStack 中锁定/物化段）接在 committedPrefix 之后，样式 LOCKED
  *  4. 当前焦点段（focusedSegmentIndex）样式覆盖为 FOCUSED（含下划线高亮）
@@ -19,9 +21,10 @@ import java.util.Locale
  *  7. dict 未加载时展示 [abc] 格式键位字母组（P2 修复），样式 FALLBACK
  *
  * ── 缓存策略（P1 修复）────────────────────────────────────────────────
- *  对 (rawDigits, lockedSegs, committedPrefix, focusedIndex, dictLoaded) 五元组做轻量缓存：
+ *  对 (rawDigits, lockedSegs, committedPrefix, focusedIndex, dictLoaded,
+ *      engineOverride) 六元组做轻量缓存：
  *  - 相同输入状态下直接复用结果，避免每帧重跑 planAll()
- *  - 任意字段变化（含 dictLoaded: false→true、焦点变化）触发自动重算
+ *  - 任意字段变化（含 dictLoaded: false→true、焦点变化、override 变化）触发自动重算
  *  - 外部调用 invalidate() 强制下次重算（Idle/选词上屏后）
  *
  * 线程安全：仅在 IME 主线程调用，无需加锁。
@@ -34,8 +37,9 @@ class CnT9PreeditFormatter {
         val rawDigits: String,
         val lockedSegs: List<String>,
         val committedPrefix: String,
-        val focusedIndex: Int,          // R-P04：焦点段下标（-1 = 无焦点）
-        val dictLoaded: Boolean
+        val focusedIndex: Int,
+        val dictLoaded: Boolean,
+        val engineOverride: String?     // 问题1修复：override 纳入缓存 key
     )
 
     private var lastKey: CacheKey? = null
@@ -58,22 +62,23 @@ class CnT9PreeditFormatter {
         engineOverride: String? = null,
         focusedSegmentIndex: Int = -1
     ): PreeditDisplay {
-        // engineOverride：优先级最高，包装为单段 NORMAL 展示
+        val committedPrefix = session.committedPrefix.trim()
+        val lockedSegs = session.pinyinStack
+            .map { it.trim().lowercase(Locale.ROOT) }
+            .filter { it.isNotEmpty() }
+        val rawDigits = session.rawT9Digits
         val override = engineOverride?.trim()?.takeIf { it.isNotEmpty() }
-        if (override != null) {
+
+        // 问题1修复：仅当 pinyinStack 与 committedPrefix 均为空时，
+        // engineOverride 才作为完整替换（单段 NORMAL），否则走完整分段流程。
+        if (override != null && committedPrefix.isEmpty() && lockedSegs.isEmpty() && rawDigits.isEmpty()) {
             return PreeditDisplay(
                 plainText = override,
                 segments  = listOf(PreeditSegment(override, PreeditSegment.Style.NORMAL))
             )
         }
 
-        val committedPrefix = session.committedPrefix.trim()
-        val lockedSegs = session.pinyinStack
-            .map { it.trim().lowercase(Locale.ROOT) }
-            .filter { it.isNotEmpty() }
-        val rawDigits = session.rawT9Digits
-
-        if (committedPrefix.isEmpty() && lockedSegs.isEmpty() && rawDigits.isEmpty()) {
+        if (committedPrefix.isEmpty() && lockedSegs.isEmpty() && rawDigits.isEmpty() && override == null) {
             invalidate()
             return PreeditDisplay.EMPTY
         }
@@ -83,7 +88,8 @@ class CnT9PreeditFormatter {
             lockedSegs      = lockedSegs,
             committedPrefix = committedPrefix,
             focusedIndex    = focusedSegmentIndex,
-            dictLoaded      = dict.isLoaded
+            dictLoaded      = dict.isLoaded,
+            engineOverride  = override
         )
         if (key == lastKey && lastResult != null) return lastResult!!
 
@@ -93,7 +99,8 @@ class CnT9PreeditFormatter {
             rawDigits           = rawDigits,
             dict                = dict,
             session             = session,
-            focusedSegmentIndex = focusedSegmentIndex
+            focusedSegmentIndex = focusedSegmentIndex,
+            engineOverride      = override
         )
         lastKey    = key
         lastResult = result
@@ -128,7 +135,8 @@ class CnT9PreeditFormatter {
         rawDigits: String,
         dict: Dictionary,
         session: ComposingSession,
-        focusedSegmentIndex: Int
+        focusedSegmentIndex: Int,
+        engineOverride: String?         // 问题1修复：传入 override 供末尾追加
     ): PreeditDisplay {
 
         // ── 1. 规划 rawDigits → plannedSegs ──────────────────────────
@@ -179,11 +187,17 @@ class CnT9PreeditFormatter {
         plannedSegs.forEachIndexed { idx, seg ->
             val globalIdx = lockedSegs.size + idx
             val style = when {
-                isFallback                  -> PreeditSegment.Style.FALLBACK
+                isFallback                       -> PreeditSegment.Style.FALLBACK
                 globalIdx == focusedSegmentIndex -> PreeditSegment.Style.FOCUSED
-                else                        -> PreeditSegment.Style.NORMAL
+                else                             -> PreeditSegment.Style.NORMAL
             }
             segments.add(PreeditSegment(seg, style))
+        }
+
+        // 问题1修复：engineOverride 不为空时，作为末尾 NORMAL 段追加
+        // （仅在有 pinyinStack 或 committedPrefix 时走此分支，否则已在 format() 入口提前返回）
+        if (engineOverride != null) {
+            segments.add(PreeditSegment(engineOverride, PreeditSegment.Style.NORMAL))
         }
 
         if (segments.isEmpty()) return PreeditDisplay.EMPTY
