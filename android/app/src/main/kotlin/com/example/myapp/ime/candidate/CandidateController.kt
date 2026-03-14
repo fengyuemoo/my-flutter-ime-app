@@ -112,6 +112,21 @@ class CandidateController(
         }
     }
 
+    // ── 生命周期 ───────────────────────────────────────────────────
+
+    /**
+     * 输入焦点切换到新输入框时由 ImeBootstrapper.resetUiForNewInput() 调用。
+     *
+     * ContextWindow 跨会话污染修复：
+     *  转发给 cnT9Engine.onStartInput()，同时重置 pendingPenaltyOnBackspace。
+     *  其他 engine 目前无焦点切换状态，无需转发。
+     */
+    fun onStartInput() {
+        cnT9Engine.onStartInput()
+    }
+
+    // ── 其余方法（与修复前完全相同）──────────────────────────────────
+
     fun getComposingPreviewOverride(): String? {
         return when (currentModeKey()) {
             ModeKey.CN_QWERTY -> cnQwertyEngine.getComposingPreviewOverride()

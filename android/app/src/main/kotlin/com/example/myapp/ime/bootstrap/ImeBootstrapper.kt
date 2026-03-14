@@ -22,7 +22,11 @@ class ImeBootstrapper(
 
     fun resetUiForNewInput() {
         graph.dispatcher.clearComposing()
-        graph.clearContextWindow()          // ← 新增：切换输入框时清空跨 field 上下文
+        graph.clearContextWindow()                      // 清空跨 field 上下文（ImeGraph 层）
+        graph.candidateController.onStartInput()        // ContextWindow 跨会话污染修复：
+                                                        // 转发给 cnT9Engine，重置
+                                                        // pendingPenaltyOnBackspace 并
+                                                        // 再次确保 contextWindow.clear()
         graph.ui.setExpanded(false, isComposing = false)
     }
 
