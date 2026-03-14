@@ -14,6 +14,16 @@ import java.util.Locale
  * 算法细节（Beam Search 单段解码）委托给 CnT9BeamDecoder。
  * 拼音切分工具委托给 CnT9PinyinSplitter。
  * 本类不依赖任何 UI 或 Session，可独立测试。
+ *
+ * ── splitConcatPinyinToSyllables 清理说明 ────────────────────────
+ * 原实现在返回值中执行 .map { it.replace("v", "ü") }，
+ * 与系统"内部统一用 v 表示 ü 声母"的约定相悖，是维护陷阱。
+ * 所有调用方（CnT9CandidateFilter / CnT9CandidateScorer）在比较时
+ * 都已做了 .replace("ü","v") 来抵消此反转，造成双重转换的混乱。
+ *
+ * 修复：去掉 v→ü 反转，直接返回 CnT9PinyinSplitter.splitToSyllables()
+ * 的原始结果（全程 v 格式）。调用方的 .replace("ü","v") 仍保留
+ * （对已经是 v 的字符串无害，且保持防御性）。
  */
 object CnT9SentencePlanner {
 
@@ -116,14 +126,19 @@ object CnT9SentencePlanner {
     /**
      * 把连写拼音字母串切分为音节列表。
      *
-     * 委托给 CnT9PinyinSplitter.splitToSyllables()，
-     * 并把 'v' 还原为 'ü' 与历史行为保持一致。
+     * 直接委托给 CnT9PinyinSplitter.splitToSyllables()。
+     * 返回值全程使用 v 表示 ü 声母（与系统内部约定一致）。
      *
-     * @deprecated 优先直接调用 CnT9PinyinSplitter.splitToSyllables()；
-     *             此函数仅为向后兼容保留，后续版本将移除。
+     * 历史说明：
+     *  原实现在返回值中执行 .map { it.replace("v", "ü") }，
+     *  导致调用方需要反向 replace("ü","v") 来抵消，造成双重转换。
+     *  现已去掉该反转，调用方的 replace("ü","v") 对 v 字符串无害，
+     *  可安全保留作为防御性代码，无需修改调用方。
      */
     fun splitConcatPinyinToSyllables(rawLower: String): List<String> {
         return CnT9PinyinSplitter.splitToSyllables(rawLower)
-            .map { it.replace("v", "ü") }
+        // 注意：不再执行 .map { it.replace("v", "ü") }
+        // 调用方（CnT9CandidateFilter / CnT9CandidateScorer）中
+        // 已有的 .replace("ü","v") 对全 v 字符串无害，可安全保留。
     }
 }

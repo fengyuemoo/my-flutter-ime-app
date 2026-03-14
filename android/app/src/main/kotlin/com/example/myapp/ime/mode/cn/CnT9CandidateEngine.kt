@@ -53,6 +53,16 @@ import kotlinx.coroutines.withContext
  *  composing）不再调用 stabilizer.invalidate()。
  *  只有 PickResult.Commit（完整上屏、会话结束）才调用 invalidate()，
  *  防止连打场景下后续段候选顺序不必要地强制重排，损害肌肉记忆。
+ *
+ * ── ContextWindow 跨会话污染修复 ────────────────────────────────
+ *  新增 onStartInput() 方法，在输入法焦点切换到新输入框时调用，
+ *  执行 contextWindow?.clear()，防止上一个输入框的上下文词
+ *  错误影响新输入框的候选排序。
+ *  同时在 S0 Idle 分支（session 结束 composing）也调用 clear()，
+ *  确保每次 composing 结束后上下文干净（适用于同一输入框内换行等场景）。
+ *
+ *  调用方（ImeService 或等价宿主）须在 onStartInputView() / onStartInput()
+ *  生命周期回调中调用 engine.onStartInput()。
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -103,6 +113,20 @@ class CnT9CandidateEngine(
 
     private fun preferredCandidate(): Candidate? =
         preferredIndex()?.let { currentCandidates.getOrNull(it) }
+
+    // ── 生命周期 ───────────────────────────────────────────────────
+
+    /**
+     * 输入焦点切换到新输入框时调用（由 ImeService.onStartInputView 或
+     * onStartInput 触发）。
+     *
+     * ContextWindow 跨会话污染修复：
+     *  清除上一个输入框遗留的上下文窗口，防止跨输入框 bigram 偏置污染。
+     */
+    fun onStartInput() {
+        contextWindow?.clear()
+        pendingPenaltyOnBackspace = false
+    }
 
     // ── UI 状态 ────────────────────────────────────────────────────
 
@@ -183,6 +207,11 @@ class CnT9CandidateEngine(
             stabilizer.reset()
             onPreeditInvalidate?.invoke()
             if (isExpanded) isExpanded = false
+
+            // ContextWindow 跨会话污染修复：
+            // composing 结束（换行、清空、焦点切换后的 Idle）时清除上下文，
+            // 防止同一输入框内句间上下文串扰（如换行后首字被上一句末词偏置）。
+            contextWindow?.clear()
 
             CnT9PunctuationCandidates.injectIdlePunctuations(
                 candidates  = currentCandidates,
@@ -373,7 +402,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    stabilizer.invalidate()         // 缺陷4修复：仅 Commit 时 invalidate
+                    stabilizer.invalidate()
                     onPreeditInvalidate?.invoke()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
@@ -383,8 +412,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    // 缺陷4修复：Updated（连打继续）不调用 stabilizer.invalidate()，
-                    // 避免后续段候选强制重排导致顺序抖动，损害肌肉记忆。
+                    // 缺陷4修复：Updated（连打继续）不调用 stabilizer.invalidate()
                     onPreeditInvalidate?.invoke()
                     updateCandidates()
                 }
@@ -404,7 +432,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    stabilizer.invalidate()         // 缺陷4修复：仅 Commit 时 invalidate
+                    stabilizer.invalidate()
                     onPreeditInvalidate?.invoke()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
@@ -424,7 +452,7 @@ class CnT9CandidateEngine(
 
         resetUiSelectionToTop()
         sidebarState.clearAll()
-        stabilizer.invalidate()                     // 缺陷4修复：直接 commitRaw 属于完整上屏
+        stabilizer.invalidate()
         onPreeditInvalidate?.invoke()
         commitRaw(cand.word)
         contextWindow?.record(cand.word)
