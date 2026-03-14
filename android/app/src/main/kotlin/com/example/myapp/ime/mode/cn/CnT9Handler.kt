@@ -11,6 +11,17 @@ object CnT9Handler : ImeModeHandler {
 
     private const val MAX_DISPLAY_CANDIDATES = 120
 
+    /**
+     * 单字保底可见位置：前 SINGLE_CHAR_VISIBLE_WINDOW 个候选中若无单字，
+     * 则将最高分单字强制提升至位置 SINGLE_CHAR_INJECT_POSITION。
+     *
+     * 规则来源：R-D03 单字候选必须在首屏可见范围内（位置 2–4）。
+     * 实现为位置 1（0-indexed），即第二个候选槽，保证首位仍是最佳多字词，
+     * 同时用户不需要翻页即可找到单字入口。
+     */
+    private const val SINGLE_CHAR_VISIBLE_WINDOW = 6
+    private const val SINGLE_CHAR_INJECT_POSITION = 1
+
     // ── 公开入口 1：来自主线程 Session（原有接口，零破坏）────────────────────
 
     override fun build(
@@ -34,7 +45,6 @@ object CnT9Handler : ImeModeHandler {
         contextWindow: CnT9ContextWindow?,
         sidebarState: CnT9SidebarState?
     ): ImeModeHandler.Output {
-        // 主线程内同步快照 sidebarState 的两个不可变值，再进入 buildInternal
         val lockedIndices   = sidebarState?.lockMap?.lockedSnapshot?.toList() ?: emptyList()
         val focusedIndex    = sidebarState?.focusedSegmentIndex ?: -1
         return buildInternal(
@@ -50,14 +60,6 @@ object CnT9Handler : ImeModeHandler {
 
     // ── 公开入口 2：来自后台线程快照（缺陷 B 修复版）────────────────────────
 
-    /**
-     * 快照版入口。调用方须在**主线程**完成 sidebarState 的快照，再把两个
-     * 不可变值传入，不得将可变的 CnT9SidebarState 对象跨线程传递。
-     *
-     * @param snapshot          来自 [ComposingSession.buildSnapshot] 的只读快照
-     * @param lockedIndices     主线程快照的已锁定段下标列表（来自 sidebarState.lockMap.lockedSnapshot）
-     * @param focusedIndex      主线程快照的当前焦点段下标（来自 sidebarState.focusedSegmentIndex）
-     */
     fun buildFromSnapshot(
         snapshot: ComposingSessionSnapshot,
         dictEngine: Dictionary,
@@ -78,7 +80,7 @@ object CnT9Handler : ImeModeHandler {
         )
     }
 
-    // ── 内部核心实现（两个公开入口共用）────────────────────────────────────
+    // ── 内部核心实现 ────────────────────────────────────────────────────────
 
     private fun buildInternal(
         snapshot: ComposingSessionSnapshot,
@@ -86,8 +88,8 @@ object CnT9Handler : ImeModeHandler {
         singleCharMode: Boolean,
         userChoiceStore: CnT9UserChoiceStore?,
         contextWindow: CnT9ContextWindow?,
-        lockedIndices: List<Int>,       // 缺陷 B 修复：改为直接接收快照值，不再持有可变 sidebarState
-        focusedIndex: Int               // 缺陷 B 修复：同上
+        lockedIndices: List<Int>,
+        focusedIndex: Int
     ): ImeModeHandler.Output {
         val rawDigits = snapshot.rawT9Digits
         val stackSegs = snapshot.pinyinStack.map { it.lowercase(Locale.ROOT) }
@@ -111,7 +113,6 @@ object CnT9Handler : ImeModeHandler {
 
         val plans = buildPlans(stackSegs, autoPlans, lockedIndices)
 
-        // 缺陷 A 修复：queryCandidates 补传 lockedIndices，锁定段模糊音禁止正式生效
         val queried = if (dictEngine.isLoaded && plans.isNotEmpty()) {
             CnT9CandidateFilter.queryCandidates(dictEngine, plans, lockedIndices)
         } else emptyList()
@@ -130,6 +131,14 @@ object CnT9Handler : ImeModeHandler {
         )
 
         CnT9CandidateScorer.sortCandidates(finalList, scoreCache)
+
+        // ── R-D03 修复：单字首屏保证 ─────────────────────────────────────
+        // singleCharMode 下全是单字，无需额外处理。
+        // 普通模式下：若前 SINGLE_CHAR_VISIBLE_WINDOW 个候选中无单字，
+        // 则将第一个出现的单字候选提升到 SINGLE_CHAR_INJECT_POSITION 位置。
+        if (!singleCharMode) {
+            ensureSingleCharVisible(finalList)
+        }
 
         if (finalList.size > MAX_DISPLAY_CANDIDATES) {
             finalList.subList(MAX_DISPLAY_CANDIDATES, finalList.size).clear()
@@ -164,6 +173,38 @@ object CnT9Handler : ImeModeHandler {
             composingPreviewText = null,
             enterCommitText      = null
         )
+    }
+
+    /**
+     * R-D03：单字首屏保证。
+     *
+     * 遍历 finalList 前 SINGLE_CHAR_VISIBLE_WINDOW 个候选，
+     * 若其中已有单字候选则直接返回（不操作）；
+     * 若没有，则在 finalList 中找到第一个单字候选，
+     * 将其移动到 SINGLE_CHAR_INJECT_POSITION（位置1，即第二候选槽）。
+     *
+     * 设计选择：
+     *  - 注入位置为 1 而非 0，保证首位仍是打分最高的多字词（最佳首选）。
+     *  - 只移动，不复制，finalList 中该候选不会出现两次。
+     *  - 若列表中根本没有单字候选（如 singleCharMode 的反向 filter 后），
+     *    则静默跳过，不插入占位符。
+     */
+    private fun ensureSingleCharVisible(finalList: ArrayList<Candidate>) {
+        if (finalList.size <= SINGLE_CHAR_INJECT_POSITION) return
+
+        // 检查前 SINGLE_CHAR_VISIBLE_WINDOW 个候选中是否已有单字
+        val windowEnd = minOf(SINGLE_CHAR_VISIBLE_WINDOW, finalList.size)
+        val alreadyVisible = (0 until windowEnd).any { finalList[it].word.length == 1 }
+        if (alreadyVisible) return
+
+        // 找到 window 之后第一个单字候选
+        val singleCharIndex = (windowEnd until finalList.size)
+            .firstOrNull { finalList[it].word.length == 1 }
+            ?: return  // 列表中根本没有单字候选，跳过
+
+        // 将其移动到注入位置
+        val singleChar = finalList.removeAt(singleCharIndex)
+        finalList.add(SINGLE_CHAR_INJECT_POSITION, singleChar)
     }
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────

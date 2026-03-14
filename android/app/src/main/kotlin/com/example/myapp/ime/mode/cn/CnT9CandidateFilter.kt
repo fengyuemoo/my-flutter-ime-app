@@ -22,6 +22,12 @@ import kotlin.math.min
  * 违反了"锁定段必须精确匹配"的规则。
  * 修复后：锁定段任意不匹配（无论前面有无匹配段）一律返回 false，彻底拒绝该候选。
  *
+ * ── 缺陷3修复：ü/v 规范化一致性 ────────────────────────────────────
+ * matchesPlanFuzzy() 和 countMatchingPrefixSegments() 中，对 actual
+ * 补加 .replace("ü", "v")，与 scoreAgainstPlan()（打分层）保持完全一致，
+ * 避免含 ü 字（旅/女/绿等）的候选在过滤层被误判为不精确而走模糊路径，
+ * 进而因锁定段不允许模糊音被错误拒绝出列。
+ *
  * lockedIndices 为空时退化为原有逻辑，不影响无锁定段的场景。
  */
 object CnT9CandidateFilter {
@@ -143,16 +149,19 @@ object CnT9CandidateFilter {
     }
 
     /**
-     * 模糊音匹配（R-S07 加强修复版）。
+     * 模糊音匹配（R-S07 加强修复版 + 缺陷3 ü/v 规范化修复版）。
      *
      * 对于位于 lockedSet 中的段（锁定段），仅允许精确匹配或前缀匹配通过；
      * 模糊音扩展（CnT9FuzzyPinyin.isFuzzyMatch）在锁定段上被明确禁止。
      * 对于未锁定段，行为与修复前相同（允许模糊音兜底）。
      *
      * ── 问题3修复 ──────────────────────────────────────────────────────
-     * 原实现：锁定段不匹配时返回 `i > 0`（前置段已匹配则截断通过）。
-     * 修复后：锁定段不匹配时无条件返回 false，彻底拒绝候选，
-     *         不允许"前面恰好有段匹配"这种情况绕过锁定段约束。
+     * 锁定段不匹配时无条件返回 false，彻底拒绝候选。
+     *
+     * ── 缺陷3修复 ──────────────────────────────────────────────────────
+     * 对 actual 在段比较前统一执行 .replace("ü", "v")，与 plan.segments
+     * （全程使用 v）及 scoreAgainstPlan() 保持一致，避免含 ü 字的候选
+     * 在此层被误判为不精确而被锁定段规则错误拒绝。
      */
     private fun matchesPlanFuzzy(
         candidateSyllables: List<String>,
@@ -165,7 +174,8 @@ object CnT9CandidateFilter {
         val n = min(candidateSyllables.size, planSegments.size)
         for (i in 0 until n) {
             val expected = planSegments[i].lowercase(Locale.ROOT)
-            val actual   = candidateSyllables[i].lowercase(Locale.ROOT)
+            // 缺陷3修复：规范化 ü→v，与 plan.segments 及 scoreAgainstPlan() 保持一致
+            val actual   = candidateSyllables[i].lowercase(Locale.ROOT).replace("ü", "v")
 
             // 精确或前缀匹配：无论是否锁定都允许
             if (expected == actual || actual.startsWith(expected) || expected.startsWith(actual)) {
@@ -185,6 +195,13 @@ object CnT9CandidateFilter {
         return true
     }
 
+    /**
+     * 统计候选音节与规划段的连续前缀匹配数。
+     *
+     * ── 缺陷3修复 ──────────────────────────────────────────────────────
+     * 对 actual 补加 .replace("ü", "v")，与 matchesPlanFuzzy() 保持一致，
+     * 避免含 ü 字的候选在 matchesPlanHard 阶段计数为 0 而进入模糊路径。
+     */
     private fun countMatchingPrefixSegments(
         candidateSyllables: List<String>,
         planSegments: List<String>
@@ -193,7 +210,8 @@ object CnT9CandidateFilter {
         var matched = 0
         for (i in 0 until n) {
             val expected = planSegments[i].lowercase(Locale.ROOT)
-            val actual = candidateSyllables[i].lowercase(Locale.ROOT)
+            // 缺陷3修复：规范化 ü→v
+            val actual   = candidateSyllables[i].lowercase(Locale.ROOT).replace("ü", "v")
             if (expected == actual || actual.startsWith(expected)) {
                 matched++
             } else {

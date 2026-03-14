@@ -47,6 +47,12 @@ import kotlinx.coroutines.withContext
  *  若当前列表仅含 1 个候选且 priority == 0（R-E02 兜底候选），
  *  则直接返回 false，不触发 shouldAutoCommit，
  *  避免将拼音预览文本或原始数字串盲目提交给用户。
+ *
+ * ── 缺陷4修复：连打重排时机 ─────────────────────────────────────────
+ *  commitCandidateAt() 的 PickResult.Updated 分支（选短词、剩余段继续
+ *  composing）不再调用 stabilizer.invalidate()。
+ *  只有 PickResult.Commit（完整上屏、会话结束）才调用 invalidate()，
+ *  防止连打场景下后续段候选顺序不必要地强制重排，损害肌肉记忆。
  */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
@@ -297,8 +303,6 @@ class CnT9CandidateEngine(
         val cand = preferredCandidate() ?: return false
 
         // 新问题 B 修复：R-E02 兜底候选不触发自动上屏。
-        // 兜底候选由 updateCandidates() 以 priority == 0 注入，且此时列表中仅有该 1 个候选。
-        // 直接返回 false 让用户手动选词，避免将拼音预览或原始数字串盲目提交。
         if (currentCandidates.size == 1 && cand.priority == 0) return false
 
         val shouldCommit = CnT9ConfidenceModel.shouldAutoCommit(
@@ -369,7 +373,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    stabilizer.invalidate()
+                    stabilizer.invalidate()         // 缺陷4修复：仅 Commit 时 invalidate
                     onPreeditInvalidate?.invoke()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
@@ -379,7 +383,8 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    stabilizer.invalidate()
+                    // 缺陷4修复：Updated（连打继续）不调用 stabilizer.invalidate()，
+                    // 避免后续段候选强制重排导致顺序抖动，损害肌肉记忆。
                     onPreeditInvalidate?.invoke()
                     updateCandidates()
                 }
@@ -399,7 +404,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Commit -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    stabilizer.invalidate()
+                    stabilizer.invalidate()         // 缺陷4修复：仅 Commit 时 invalidate
                     onPreeditInvalidate?.invoke()
                     commitRaw(r.text)
                     contextWindow?.record(cand.word)
@@ -409,7 +414,7 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    stabilizer.invalidate()
+                    // 缺陷4修复：Updated 不 invalidate stabilizer
                     onPreeditInvalidate?.invoke()
                     updateCandidates()
                 }
@@ -419,7 +424,7 @@ class CnT9CandidateEngine(
 
         resetUiSelectionToTop()
         sidebarState.clearAll()
-        stabilizer.invalidate()
+        stabilizer.invalidate()                     // 缺陷4修复：直接 commitRaw 属于完整上屏
         onPreeditInvalidate?.invoke()
         commitRaw(cand.word)
         contextWindow?.record(cand.word)
