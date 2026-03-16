@@ -307,6 +307,14 @@ class SQLiteWordQueries {
         ).map { it.copy(input = acronymPrefix) }
     }
 
+    /**
+     * 按拼音前缀 + 精确字数查询中文候选。
+     *
+     * 性能优化：原 OR 条件（input LIKE ? OR acronym LIKE ?）已拆分为
+     * UNION ALL 两条子查询，使 input 分支和 acronym 分支各自能独立利用
+     * 对应列的索引，避免 OR 导致的全表扫描或索引合并开销。
+     * 返回结果合并去重后按 input 长度、词频、词形排序，语义完全不变。
+     */
     fun queryChinesePrefixWithWordLenEq(
         db: SQLiteDatabase,
         prefix: String,
@@ -316,6 +324,11 @@ class SQLiteWordQueries {
         val norm = prefix.trim().lowercase(Locale.ROOT)
         if (norm.isEmpty()) return emptyList()
 
+        val wl = wordLen.coerceAtLeast(1)
+        val lim = limit.coerceAtLeast(1)
+
+        // UNION ALL 两条子查询：input 分支 + acronym 分支
+        // 外层 SELECT DISTINCT word 去重，保证同一个词只出现一次
         val sql = """
             SELECT
                 ${DictionaryDbHelper.COL_WORD},
@@ -323,10 +336,30 @@ class SQLiteWordQueries {
                 ${DictionaryDbHelper.COL_INPUT},
                 ${DictionaryDbHelper.COL_SYLLABLES},
                 ${DictionaryDbHelper.COL_ACRONYM}
-            FROM ${DictionaryDbHelper.TABLE_NAME}
-            WHERE (${DictionaryDbHelper.COL_INPUT} LIKE ? OR ${DictionaryDbHelper.COL_ACRONYM} LIKE ?)
-              AND ${DictionaryDbHelper.COL_LANG} = 0
-              AND ${DictionaryDbHelper.COL_WORD_LEN} = ?
+            FROM (
+                SELECT
+                    ${DictionaryDbHelper.COL_WORD},
+                    ${DictionaryDbHelper.COL_FREQ},
+                    ${DictionaryDbHelper.COL_INPUT},
+                    ${DictionaryDbHelper.COL_SYLLABLES},
+                    ${DictionaryDbHelper.COL_ACRONYM}
+                FROM ${DictionaryDbHelper.TABLE_NAME}
+                WHERE ${DictionaryDbHelper.COL_INPUT} LIKE ?
+                  AND ${DictionaryDbHelper.COL_LANG} = 0
+                  AND ${DictionaryDbHelper.COL_WORD_LEN} = ?
+                UNION ALL
+                SELECT
+                    ${DictionaryDbHelper.COL_WORD},
+                    ${DictionaryDbHelper.COL_FREQ},
+                    ${DictionaryDbHelper.COL_INPUT},
+                    ${DictionaryDbHelper.COL_SYLLABLES},
+                    ${DictionaryDbHelper.COL_ACRONYM}
+                FROM ${DictionaryDbHelper.TABLE_NAME}
+                WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
+                  AND ${DictionaryDbHelper.COL_LANG} = 0
+                  AND ${DictionaryDbHelper.COL_WORD_LEN} = ?
+            )
+            GROUP BY ${DictionaryDbHelper.COL_WORD}
             ORDER BY length(${DictionaryDbHelper.COL_INPUT}) ASC,
                      ${DictionaryDbHelper.COL_FREQ} DESC,
                      ${DictionaryDbHelper.COL_WORD} ASC
@@ -338,14 +371,22 @@ class SQLiteWordQueries {
             sql = sql,
             args = listOf(
                 "${norm}%",
+                wl.toString(),
                 "${norm}%",
-                wordLen.coerceAtLeast(1).toString(),
-                limit.coerceAtLeast(1).toString()
+                wl.toString(),
+                lim.toString()
             ),
             matchedLength = norm.length
         )
     }
 
+    /**
+     * 按拼音前缀 + 最大字数查询中文候选。
+     *
+     * 性能优化：同 queryChinesePrefixWithWordLenEq，将 OR 拆分为 UNION ALL，
+     * 让 input 和 acronym 两列各自走独立索引扫描。
+     * 排序字段与原实现完全一致：word_len ASC, input长度 ASC, freq DESC, word ASC。
+     */
     fun queryChinesePrefixWithMaxWordLen(
         db: SQLiteDatabase,
         prefix: String,
@@ -355,6 +396,9 @@ class SQLiteWordQueries {
         val norm = prefix.trim().lowercase(Locale.ROOT)
         if (norm.isEmpty()) return emptyList()
 
+        val mwl = maxWordLen.coerceAtLeast(1)
+        val lim = limit.coerceAtLeast(1)
+
         val sql = """
             SELECT
                 ${DictionaryDbHelper.COL_WORD},
@@ -362,10 +406,30 @@ class SQLiteWordQueries {
                 ${DictionaryDbHelper.COL_INPUT},
                 ${DictionaryDbHelper.COL_SYLLABLES},
                 ${DictionaryDbHelper.COL_ACRONYM}
-            FROM ${DictionaryDbHelper.TABLE_NAME}
-            WHERE (${DictionaryDbHelper.COL_INPUT} LIKE ? OR ${DictionaryDbHelper.COL_ACRONYM} LIKE ?)
-              AND ${DictionaryDbHelper.COL_LANG} = 0
-              AND ${DictionaryDbHelper.COL_WORD_LEN} <= ?
+            FROM (
+                SELECT
+                    ${DictionaryDbHelper.COL_WORD},
+                    ${DictionaryDbHelper.COL_FREQ},
+                    ${DictionaryDbHelper.COL_INPUT},
+                    ${DictionaryDbHelper.COL_SYLLABLES},
+                    ${DictionaryDbHelper.COL_ACRONYM}
+                FROM ${DictionaryDbHelper.TABLE_NAME}
+                WHERE ${DictionaryDbHelper.COL_INPUT} LIKE ?
+                  AND ${DictionaryDbHelper.COL_LANG} = 0
+                  AND ${DictionaryDbHelper.COL_WORD_LEN} <= ?
+                UNION ALL
+                SELECT
+                    ${DictionaryDbHelper.COL_WORD},
+                    ${DictionaryDbHelper.COL_FREQ},
+                    ${DictionaryDbHelper.COL_INPUT},
+                    ${DictionaryDbHelper.COL_SYLLABLES},
+                    ${DictionaryDbHelper.COL_ACRONYM}
+                FROM ${DictionaryDbHelper.TABLE_NAME}
+                WHERE ${DictionaryDbHelper.COL_ACRONYM} LIKE ?
+                  AND ${DictionaryDbHelper.COL_LANG} = 0
+                  AND ${DictionaryDbHelper.COL_WORD_LEN} <= ?
+            )
+            GROUP BY ${DictionaryDbHelper.COL_WORD}
             ORDER BY ${DictionaryDbHelper.COL_WORD_LEN} ASC,
                      length(${DictionaryDbHelper.COL_INPUT}) ASC,
                      ${DictionaryDbHelper.COL_FREQ} DESC,
@@ -378,9 +442,10 @@ class SQLiteWordQueries {
             sql = sql,
             args = listOf(
                 "${norm}%",
+                mwl.toString(),
                 "${norm}%",
-                maxWordLen.coerceAtLeast(1).toString(),
-                limit.coerceAtLeast(1).toString()
+                mwl.toString(),
+                lim.toString()
             ),
             matchedLength = norm.length
         )

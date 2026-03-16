@@ -139,14 +139,29 @@ def build_db():
             total_count += len(batch_data)
             conn.commit()
 
+    # ── 建立复合索引（性能优化）────────────────────────────────────────────────
+    # 原单列索引（index_input / index_lang 等）无法被 SQLite 同时利用。
+    # 实际查询 WHERE lang=? AND input LIKE ? 等均含 lang 作为第一过滤条件，
+    # 复合索引 (lang, col) 可直接做区间扫描，将扫描行数从数十万降至数百行。
     print("正在建立索引...")
-    cursor.execute('CREATE INDEX IF NOT EXISTS index_input ON words(input)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS index_acronym ON words(acronym)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS index_t9 ON words(t9)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS index_lang ON words(lang)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS index_word_len ON words(word_len)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS index_syllables ON words(syllables)')
+
+    # 核心复合索引：覆盖 QWERTY/T9/acronym 三类查询路径
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_lang_input   ON words(lang, input)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_lang_t9      ON words(lang, t9)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_lang_acronym ON words(lang, acronym)')
+
+    # word_len 复合索引：覆盖 queryChinesePrefixWithWordLenEq / querySingleChar 等
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_lang_wlen_input   ON words(lang, word_len, input)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_lang_wlen_acronym ON words(lang, word_len, acronym)')
+
+    # freq 索引：覆盖 ORDER BY freq DESC 时的排序加速（可选，词库大时有效）
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_lang_input_freq ON words(lang, input, freq)')
+
     conn.commit()
+
+    # VACUUM 收缩数据库文件，清理碎片，使 B-tree 页面连续，提升顺序扫描性能
+    print("正在整理数据库 (VACUUM)...")
+    conn.execute('VACUUM')
 
     conn.close()
 

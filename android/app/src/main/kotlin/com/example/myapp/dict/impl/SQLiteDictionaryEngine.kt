@@ -1,6 +1,7 @@
 package com.example.myapp.dict.impl
 
 import android.content.Context
+import android.util.LruCache
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.db.DictionaryDbHelper
 import com.example.myapp.dict.model.Candidate
@@ -37,6 +38,27 @@ class SQLiteDictionaryEngine(
         queries = queries
     )
 
+    // ── 性能优化：预计算所有拼音的 T9 编码，避免热路径中反复调用 encodeLetters ──
+    // key = 拼音小写字符串（如 "zhong"），value = 对应 T9 数字串（如 "96664"）
+    // 包含 "zh"/"ch"/"sh" 声母和所有 allPinyinsLower 条目，启动时一次性建立
+    private val pinyinToT9Cache: Map<String, String> by lazy {
+        val map = HashMap<String, String>(allPinyinsLower.size + 10)
+        for (py in allPinyinsLower) {
+            val code = T9Lookup.encodeLetters(py)
+            if (code.isNotEmpty()) map[py] = code
+        }
+        for (initial in listOf("zh", "ch", "sh")) {
+            val code = T9Lookup.encodeLetters(initial)
+            if (code.isNotEmpty()) map[initial] = code
+        }
+        map
+    }
+
+    // ── 性能优化：getPinyinPossibilities 结果缓存 ────────────────────────────
+    // 相同 digits 输入的结果完全确定，缓存后消除 T9 Beam Search 中的重复计算
+    // 容量 64 覆盖用户连续输入 8 位数字时所有前缀的缓存需求（1~8位 = 8条 × 多路径）
+    private val pinyinPossibilityCache = LruCache<String, List<String>>(64)
+
     private data class ScoredStackCandidate(
         val candidate: Candidate,
         val sourceRank: Int,
@@ -67,6 +89,9 @@ class SQLiteDictionaryEngine(
         val normalizedDigits = digits.filter { it in '0'..'9' }
         if (normalizedDigits.isEmpty()) return emptyList()
 
+        // 命中缓存直接返回，完全跳过后续所有计算
+        pinyinPossibilityCache.get(normalizedDigits)?.let { return it }
+
         data class Item(
             val text: String,
             val code: String,
@@ -84,7 +109,8 @@ class SQLiteDictionaryEngine(
             val normalized = normalizePinyinToken(text)
             if (normalized.isEmpty()) return
 
-            val code = T9Lookup.encodeLetters(normalized)
+            // 优先从预计算缓存中取 T9 编码，避免重复调用 encodeLetters
+            val code = pinyinToT9Cache[normalized] ?: T9Lookup.encodeLetters(normalized)
             if (code.isEmpty()) return
             if (!normalizedDigits.startsWith(code)) return
             if (!seen.add(normalized)) return
@@ -136,7 +162,7 @@ class SQLiteDictionaryEngine(
             }
         }
 
-        return out
+        val result = out
             .sortedWith(
                 compareByDescending<Item> { it.score }
                     .thenByDescending { if (it.exactLenMatch) 1 else 0 }
@@ -149,6 +175,10 @@ class SQLiteDictionaryEngine(
             )
             .map { it.text }
             .take(24)
+
+        // 写入缓存
+        pinyinPossibilityCache.put(normalizedDigits, result)
+        return result
     }
 
     override fun getSuggestionsFromPinyinStack(
@@ -361,18 +391,18 @@ class SQLiteDictionaryEngine(
         return score
     }
 
+    /**
+     * 判断 digits 前缀是否有可能对应某个合法拼音或声母的开头。
+     *
+     * 性能优化：使用预计算的 [pinyinToT9Cache] 直接查 Map，
+     * 避免在热路径（getPinyinPossibilities 内循环）中反复调用 T9Lookup.encodeLetters()。
+     * 原逻辑：每次遍历 ~420 个拼音并重新 encodeLetters → O(N × encodeLetters 耗时)
+     * 优化后：直接 Map.values 遍历，O(N) 且无字符串编码开销
+     */
     private fun hasLikelyContinuation(digits: String): Boolean {
         if (digits.isEmpty()) return true
 
-        for (pinyin in allPinyinsLower) {
-            val code = T9Lookup.encodeLetters(pinyin)
-            if (code.isNotEmpty() && digits.startsWith(code)) {
-                return true
-            }
-        }
-
-        for (initial in listOf("zh", "ch", "sh")) {
-            val code = T9Lookup.encodeLetters(initial)
+        for ((_, code) in pinyinToT9Cache) {
             if (code.isNotEmpty() && digits.startsWith(code)) {
                 return true
             }
