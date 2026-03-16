@@ -16,54 +16,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * CN-T9 候选引擎（协调器）。
- *
- * ── R-Perf01：后台异步候选生成 ──────────────────────────────────────
- *  updateCandidates() 分发到 Dispatchers.Default 后台线程执行，
- *  结果通过 withContext(Dispatchers.Main) 回到主线程更新 UI。
- *
- * ── R-L04（问题7修复）：退词惩罚触发 ────────────────────────────────
- *  handleBackspace() 在上屏后第一次被调用时，触发
- *  userChoiceStore.penalizeLastChoiceIfRecent()。
- *  标志位 pendingPenaltyOnBackspace 在每次 commitCandidateAt() 上屏后置 true，
- *  退格时消费一次后立即重置为 false，防止多次退格叠加惩罚。
- *
- * ── 缺陷 B 修复：sidebarState 跨线程竞态消除 ────────────────────────
- *  updateCandidates() 在进入协程前于主线程完成 sidebarState 快照：
- *    snapLockedIndices = sidebarState.lockMap.lockedSnapshot.toList()
- *    snapFocusedIndex  = sidebarState.focusedSegmentIndex
- *  快照后的不可变值传入 CnT9Handler.buildFromSnapshot()，
- *  不再将可变的 sidebarState 对象本身跨线程传递。
- *
- * ── R-E02 修复（问题4）：无候选兜底 ────────────────────────────────
- *  当词库查询结果为空时，必须至少展示一个候选。
- *  兜底优先级：composingPreviewOverride（拼音预览）> rawDigits 直出。
- *  兜底候选在 stabilizer.stabilize() 之前注入，保证稳定化流程也能感知到候选。
- *  兜底候选的标识：priority == 0 且为列表中唯一候选。
- *
- * ── 新问题 B 修复：R-E02 兜底候选不自动上屏 ──────────────────────
- *  commitFirstCandidateOnEnter() 新增前置检查：
- *  若当前列表仅含 1 个候选且 priority == 0（R-E02 兜底候选），
- *  则直接返回 false，不触发 shouldAutoCommit，
- *  避免将拼音预览文本或原始数字串盲目提交给用户。
- *
- * ── 缺陷4修复：连打重排时机 ─────────────────────────────────────────
- *  commitCandidateAt() 的 PickResult.Updated 分支（选短词、剩余段继续
- *  composing）不再调用 stabilizer.invalidate()。
- *  只有 PickResult.Commit（完整上屏、会话结束）才调用 invalidate()，
- *  防止连打场景下后续段候选顺序不必要地强制重排，损害肌肉记忆。
- *
- * ── ContextWindow 跨会话污染修复 ────────────────────────────────
- *  新增 onStartInput() 方法，在输入法焦点切换到新输入框时调用，
- *  执行 contextWindow?.clear()，防止上一个输入框的上下文词
- *  错误影响新输入框的候选排序。
- *  同时在 S0 Idle 分支（session 结束 composing）也调用 clear()，
- *  确保每次 composing 结束后上下文干净（适用于同一输入框内换行等场景）。
- *
- *  调用方（ImeService 或等价宿主）须在 onStartInputView() / onStartInput()
- *  生命周期回调中调用 engine.onStartInput()。
- */
 class CnT9CandidateEngine(
     private val ui: ImeUi,
     private val keyboardController: KeyboardController,
@@ -89,10 +41,6 @@ class CnT9CandidateEngine(
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var candidateJob: Job? = null
 
-    /**
-     * R-L04：标记"上次上屏后尚未收到第一次退格"。
-     * commitCandidateAt() 成功上屏后置 true；handleBackspace() 消费一次后置 false。
-     */
     private var pendingPenaltyOnBackspace: Boolean = false
 
     fun getComposingPreviewOverride(): String? = composingPreviewOverride
@@ -116,16 +64,11 @@ class CnT9CandidateEngine(
 
     // ── 生命周期 ───────────────────────────────────────────────────
 
-    /**
-     * 输入焦点切换到新输入框时调用（由 ImeService.onStartInputView 或
-     * onStartInput 触发）。
-     *
-     * ContextWindow 跨会话污染修复：
-     *  清除上一个输入框遗留的上下文窗口，防止跨输入框 bigram 偏置污染。
-     */
     fun onStartInput() {
         contextWindow?.clear()
         pendingPenaltyOnBackspace = false
+        // 新输入框开始时清除 plan/query 缓存，防止跨输入框缓存污染
+        CnT9Handler.invalidateCaches()
     }
 
     // ── UI 状态 ────────────────────────────────────────────────────
@@ -136,6 +79,8 @@ class CnT9CandidateEngine(
         isSingleCharMode = !isSingleCharMode
         syncFilterButton()
         resetUiSelectionToTop()
+        // 切换单字模式时 query 结果过滤条件改变，清除 query 缓存
+        CnT9CandidateFilter.invalidateQueryCache()
         updateCandidates()
     }
 
@@ -158,13 +103,14 @@ class CnT9CandidateEngine(
         sidebarState.clearLocksFrom(segmentIndex)
         session.rollbackMaterializedSegmentsFrom(segmentIndex)
         sidebarState.setFocus(segmentIndex)
+        // locked 状态改变，清除 query 缓存（plan 缓存不受影响）
+        CnT9CandidateFilter.invalidateQueryCache()
         updateCandidates()
     }
 
-    // ── 退格（含焦点同步 + R-L04 退词惩罚触发）────────────────────
+    // ── 退格 ───────────────────────────────────────────────────────
 
     fun handleBackspace(): Boolean {
-        // R-L04：上屏后第一次退格，触发退词惩罚（时间窗口内才生效）
         if (pendingPenaltyOnBackspace) {
             pendingPenaltyOnBackspace = false
             userChoiceStore?.penalizeLastChoiceIfRecent()
@@ -174,6 +120,9 @@ class CnT9CandidateEngine(
         val stackSizeBefore = session.pinyinStack.size
 
         val consumed = session.backspace(useT9Layout = true)
+
+        // 退格后 digits 发生变化，plan 和 query 缓存均失效
+        CnT9Handler.invalidateCaches()
 
         when {
             !session.isComposing() -> sidebarState.clearAll()
@@ -189,12 +138,11 @@ class CnT9CandidateEngine(
         return consumed
     }
 
-    // ── 候选更新（缺陷 B 修复 + R-E02 修复版）──────────────────────
+    // ── 候选更新 ───────────────────────────────────────────────────
 
     fun updateCandidates() {
         syncFilterButton()
 
-        // ── S0 Idle ───────────────────────────────────────────────
         if (!session.isComposing()) {
             candidateJob?.cancel()
             candidateJob = null
@@ -208,10 +156,9 @@ class CnT9CandidateEngine(
             onPreeditInvalidate?.invoke()
             if (isExpanded) isExpanded = false
 
-            // ContextWindow 跨会话污染修复：
-            // composing 结束（换行、清空、焦点切换后的 Idle）时清除上下文，
-            // 防止同一输入框内句间上下文串扰（如换行后首字被上一句末词偏置）。
             contextWindow?.clear()
+            // 会话结束，清除所有缓存
+            CnT9Handler.invalidateCaches()
 
             CnT9PunctuationCandidates.injectIdlePunctuations(
                 candidates  = currentCandidates,
@@ -225,14 +172,12 @@ class CnT9CandidateEngine(
             return
         }
 
-        // ── S1/S2 Composing（后台异步）──────────────────────────
         candidateJob?.cancel()
 
         val snapSingleCharMode = isSingleCharMode
         val snapRawDigits      = session.rawT9Digits
         val sessionSnapshot    = session.buildSnapshot()
 
-        // 缺陷 B 修复：在主线程完成 sidebarState 快照，避免可变对象跨线程传递
         val snapLockedIndices = sidebarState.lockMap.lockedSnapshot.toList()
         val snapFocusedIndex  = sidebarState.focusedSegmentIndex
 
@@ -268,9 +213,6 @@ class CnT9CandidateEngine(
                 injectMixedInputCandidates(snapRawDigits)
             }
 
-            // R-E02 修复（问题4）：词库查无结果时必须至少展示一个候选（拼音直出兜底）
-            // 在 stabilizer.stabilize() 之前注入，保证稳定化也能感知到该兜底候选
-            // 兜底候选标识：priority == 0，供 commitFirstCandidateOnEnter() 识别
             if (currentCandidates.isEmpty() && session.isComposing()) {
                 val fallbackWord = composingPreviewOverride?.takeIf { it.isNotEmpty() }
                     ?: snapRawDigits.takeIf { it.isNotEmpty() }
@@ -331,7 +273,6 @@ class CnT9CandidateEngine(
         val idx  = preferredIndex() ?: return false
         val cand = preferredCandidate() ?: return false
 
-        // 新问题 B 修复：R-E02 兜底候选不触发自动上屏。
         if (currentCandidates.size == 1 && cand.priority == 0) return false
 
         val shouldCommit = CnT9ConfidenceModel.shouldAutoCommit(
@@ -363,7 +304,6 @@ class CnT9CandidateEngine(
         ui.setSelectedCandidateIndex(index)
         val cand = currentCandidates[index]
 
-        // 标点候选：直接上屏，不触发退词惩罚机制
         if (CnT9PunctuationCandidates.isPunctCandidate(cand)) {
             stabilizer.invalidate()
             onPreeditInvalidate?.invoke()
@@ -412,7 +352,6 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    // 缺陷4修复：Updated（连打继续）不调用 stabilizer.invalidate()
                     onPreeditInvalidate?.invoke()
                     updateCandidates()
                 }
@@ -442,7 +381,6 @@ class CnT9CandidateEngine(
                 is ComposingSession.PickResult.Updated -> {
                     resetUiSelectionToTop()
                     sidebarState.clearAll()
-                    // 缺陷4修复：Updated 不 invalidate stabilizer
                     onPreeditInvalidate?.invoke()
                     updateCandidates()
                 }

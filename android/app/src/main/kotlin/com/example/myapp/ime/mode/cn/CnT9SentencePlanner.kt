@@ -1,30 +1,10 @@
 package com.example.myapp.ime.mode.cn
 
+import android.util.LruCache
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.impl.T9Lookup
 import java.util.Locale
 
-/**
- * CN-T9 句级路径规划器。
- *
- * 职责：
- *  把数字串（含手动切分点）解码为一组候选拼音路径（PathPlan），
- *  供 CnT9CandidateFilter / CnT9CandidateScorer 使用。
- *
- * 算法细节（Beam Search 单段解码）委托给 CnT9BeamDecoder。
- * 拼音切分工具委托给 CnT9PinyinSplitter。
- * 本类不依赖任何 UI 或 Session，可独立测试。
- *
- * ── splitConcatPinyinToSyllables 清理说明 ────────────────────────
- * 原实现在返回值中执行 .map { it.replace("v", "ü") }，
- * 与系统"内部统一用 v 表示 ü 声母"的约定相悖，是维护陷阱。
- * 所有调用方（CnT9CandidateFilter / CnT9CandidateScorer）在比较时
- * 都已做了 .replace("ü","v") 来抵消此反转，造成双重转换的混乱。
- *
- * 修复：去掉 v→ü 反转，直接返回 CnT9PinyinSplitter.splitToSyllables()
- * 的原始结果（全程 v 格式）。调用方的 .replace("ü","v") 仍保留
- * （对已经是 v 的字符串无害，且保持防御性）。
- */
 object CnT9SentencePlanner {
 
     private const val MAX_PLAN_COUNT = 12
@@ -42,11 +22,19 @@ object CnT9SentencePlanner {
         val score: Int
     )
 
+    // ── 性能优化：planAll 结果缓存 ──────────────────────────────────
+    // key = "$digits|${manualCuts.joinToString(",")}"
+    // 相同输入状态的 planAll 结果完全确定，缓存后消除 Beam Search 重复计算。
+    // 容量 32 覆盖用户连续输入时所有活跃前缀（最长8位 × 多切分组合）。
+    // 注意：dict 是无状态查询器，planAll 结果只依赖 digits 和 manualCuts。
+    private val planCache = LruCache<String, List<PathPlan>>(32)
+
+    fun invalidatePlanCache() {
+        planCache.evictAll()
+    }
+
     // ── 公开 API ──────────────────────────────────────────────────
 
-    /**
-     * 对整串 digits 规划，返回最多 MAX_PLAN_COUNT 条路径，按分数降序。
-     */
     fun planAll(
         digits: String,
         manualCuts: List<Int>,
@@ -54,6 +42,21 @@ object CnT9SentencePlanner {
     ): List<PathPlan> {
         if (digits.isEmpty()) return emptyList()
 
+        val cacheKey = if (manualCuts.isEmpty()) digits
+                       else "$digits|${manualCuts.sorted().joinToString(",")}"
+
+        planCache.get(cacheKey)?.let { return it }
+
+        val result = planAllInternal(digits, manualCuts, dict)
+        planCache.put(cacheKey, result)
+        return result
+    }
+
+    private fun planAllInternal(
+        digits: String,
+        manualCuts: List<Int>,
+        dict: Dictionary
+    ): List<PathPlan> {
         val parts = CnT9BeamDecoder.splitDigitsByCuts(digits, manualCuts)
         if (parts.isEmpty()) return emptyList()
 
@@ -63,7 +66,6 @@ object CnT9SentencePlanner {
             val decodedPart = CnT9BeamDecoder.decodePart(part, dict, MAX_PLAN_COUNT)
 
             if (decodedPart.isEmpty()) {
-                // 无法解码的段：用首字母占位
                 val fallback = CnT9BeamDecoder.buildChoices(part, dict)
                     .firstOrNull()?.text ?: part.first().toString()
                 combined = combined.map { state ->
@@ -103,9 +105,6 @@ object CnT9SentencePlanner {
         }
     }
 
-    /**
-     * 只解码 digits 的第一个音节（materialize 逐步推进时使用）。
-     */
     fun decodeNextSegment(
         digits: String,
         manualCuts: List<Int>,
@@ -115,7 +114,7 @@ object CnT9SentencePlanner {
         return planAll(digits, manualCuts, dict).firstOrNull()?.segments?.firstOrNull()
     }
 
-    // ── 工具函数（供内部 + CnT9CandidateFilter 使用）────────────
+    // ── 工具函数 ──────────────────────────────────────────────────
 
     fun joinedCodeLength(segments: List<String>): Int {
         var total = 0
@@ -123,22 +122,7 @@ object CnT9SentencePlanner {
         return total
     }
 
-    /**
-     * 把连写拼音字母串切分为音节列表。
-     *
-     * 直接委托给 CnT9PinyinSplitter.splitToSyllables()。
-     * 返回值全程使用 v 表示 ü 声母（与系统内部约定一致）。
-     *
-     * 历史说明：
-     *  原实现在返回值中执行 .map { it.replace("v", "ü") }，
-     *  导致调用方需要反向 replace("ü","v") 来抵消，造成双重转换。
-     *  现已去掉该反转，调用方的 replace("ü","v") 对 v 字符串无害，
-     *  可安全保留作为防御性代码，无需修改调用方。
-     */
     fun splitConcatPinyinToSyllables(rawLower: String): List<String> {
         return CnT9PinyinSplitter.splitToSyllables(rawLower)
-        // 注意：不再执行 .map { it.replace("v", "ü") }
-        // 调用方（CnT9CandidateFilter / CnT9CandidateScorer）中
-        // 已有的 .replace("ü","v") 对全 v 字符串无害，可安全保留。
     }
 }
