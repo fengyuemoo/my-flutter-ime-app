@@ -3,6 +3,7 @@ package com.example.myapp.ime.mode.cn
 import android.content.pm.ApplicationInfo
 import android.util.Log
 import com.example.myapp.dict.api.Dictionary
+import com.example.myapp.dict.impl.SQLiteDictionaryEngine
 import com.example.myapp.dict.model.Candidate
 import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.keyboard.KeyboardController
@@ -62,13 +63,18 @@ class CnT9CandidateEngine(
     private fun preferredCandidate(): Candidate? =
         preferredIndex()?.let { currentCandidates.getOrNull(it) }
 
+    // ── 全局缓存失效（plan + query + stack）────────────────────────
+    private fun invalidateAllCaches() {
+        CnT9Handler.invalidateCaches()
+        (dictEngine as? SQLiteDictionaryEngine)?.invalidateStackCache()
+    }
+
     // ── 生命周期 ───────────────────────────────────────────────────
 
     fun onStartInput() {
         contextWindow?.clear()
         pendingPenaltyOnBackspace = false
-        // 新输入框开始时清除 plan/query 缓存，防止跨输入框缓存污染
-        CnT9Handler.invalidateCaches()
+        invalidateAllCaches()
     }
 
     // ── UI 状态 ────────────────────────────────────────────────────
@@ -79,7 +85,6 @@ class CnT9CandidateEngine(
         isSingleCharMode = !isSingleCharMode
         syncFilterButton()
         resetUiSelectionToTop()
-        // 切换单字模式时 query 结果过滤条件改变，清除 query 缓存
         CnT9CandidateFilter.invalidateQueryCache()
         updateCandidates()
     }
@@ -103,7 +108,6 @@ class CnT9CandidateEngine(
         sidebarState.clearLocksFrom(segmentIndex)
         session.rollbackMaterializedSegmentsFrom(segmentIndex)
         sidebarState.setFocus(segmentIndex)
-        // locked 状态改变，清除 query 缓存（plan 缓存不受影响）
         CnT9CandidateFilter.invalidateQueryCache()
         updateCandidates()
     }
@@ -121,8 +125,8 @@ class CnT9CandidateEngine(
 
         val consumed = session.backspace(useT9Layout = true)
 
-        // 退格后 digits 发生变化，plan 和 query 缓存均失效
-        CnT9Handler.invalidateCaches()
+        // 退格后 digits/stack 发生变化，所有缓存均失效
+        invalidateAllCaches()
 
         when {
             !session.isComposing() -> sidebarState.clearAll()
@@ -157,8 +161,8 @@ class CnT9CandidateEngine(
             if (isExpanded) isExpanded = false
 
             contextWindow?.clear()
-            // 会话结束，清除所有缓存
-            CnT9Handler.invalidateCaches()
+            // 会话结束，清除所有缓存（含 stack 缓存）
+            invalidateAllCaches()
 
             CnT9PunctuationCandidates.injectIdlePunctuations(
                 candidates  = currentCandidates,

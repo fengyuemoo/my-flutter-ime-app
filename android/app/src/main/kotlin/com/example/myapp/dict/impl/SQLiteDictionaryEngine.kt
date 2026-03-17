@@ -38,9 +38,7 @@ class SQLiteDictionaryEngine(
         queries = queries
     )
 
-    // ── 性能优化：预计算所有拼音的 T9 编码，避免热路径中反复调用 encodeLetters ──
-    // key = 拼音小写字符串（如 "zhong"），value = 对应 T9 数字串（如 "96664"）
-    // 包含 "zh"/"ch"/"sh" 声母和所有 allPinyinsLower 条目，启动时一次性建立
+    // ── 性能优化：预计算所有拼音的 T9 编码 ──────────────────────────
     private val pinyinToT9Cache: Map<String, String> by lazy {
         val map = HashMap<String, String>(allPinyinsLower.size + 10)
         for (py in allPinyinsLower) {
@@ -54,10 +52,19 @@ class SQLiteDictionaryEngine(
         map
     }
 
-    // ── 性能优化：getPinyinPossibilities 结果缓存 ────────────────────────────
-    // 相同 digits 输入的结果完全确定，缓存后消除 T9 Beam Search 中的重复计算
-    // 容量 64 覆盖用户连续输入 8 位数字时所有前缀的缓存需求（1~8位 = 8条 × 多路径）
+    // ── 性能优化：getPinyinPossibilities 结果缓存 ────────────────────
     private val pinyinPossibilityCache = LruCache<String, List<String>>(64)
+
+    // ── 性能优化：getSuggestionsFromPinyinStack 结果缓存 ─────────────
+    // key = "pinyin1'pinyin2'...|rawDigits"
+    // pinyinStack + rawDigits 完全确定查询结果，缓存消除每次按键的重复 SQL。
+    // 容量 32：活跃输入会话中不同 stack/digits 组合数有限。
+    // 由 invalidateStackCache() 在退格/会话结束时主动清除。
+    private val stackSuggestionsCache = LruCache<String, List<Candidate>>(32)
+
+    fun invalidateStackCache() {
+        stackSuggestionsCache.evictAll()
+    }
 
     private data class ScoredStackCandidate(
         val candidate: Candidate,
@@ -89,7 +96,6 @@ class SQLiteDictionaryEngine(
         val normalizedDigits = digits.filter { it in '0'..'9' }
         if (normalizedDigits.isEmpty()) return emptyList()
 
-        // 命中缓存直接返回，完全跳过后续所有计算
         pinyinPossibilityCache.get(normalizedDigits)?.let { return it }
 
         data class Item(
@@ -109,7 +115,6 @@ class SQLiteDictionaryEngine(
             val normalized = normalizePinyinToken(text)
             if (normalized.isEmpty()) return
 
-            // 优先从预计算缓存中取 T9 编码，避免重复调用 encodeLetters
             val code = pinyinToT9Cache[normalized] ?: T9Lookup.encodeLetters(normalized)
             if (code.isEmpty()) return
             if (!normalizedDigits.startsWith(code)) return
@@ -176,7 +181,6 @@ class SQLiteDictionaryEngine(
             .map { it.text }
             .take(24)
 
-        // 写入缓存
         pinyinPossibilityCache.put(normalizedDigits, result)
         return result
     }
@@ -193,10 +197,17 @@ class SQLiteDictionaryEngine(
 
         if (normalizedStack.isEmpty()) return emptyList()
 
-        val db = dbHelper.readableDatabase
-        val result = LinkedHashMap<String, ScoredStackCandidate>()
         val normalizedRawDigits = rawDigits.filter { it in '0'..'9' }
+        val cacheKey = normalizedStack.joinToString("'") + "|" + normalizedRawDigits
+
+        stackSuggestionsCache.get(cacheKey)?.let { return it }
+
+        val db = dbHelper.readableDatabase
+        val result = LinkedHashMap<String, ScoredStackCandidate>(300)
         val totalLimit = 300
+
+        // 局部 T9 encode 缓存：消除 scoreStackCandidate 中对相同 input 的重复 encodeLetters
+        val t9EncodeCache = HashMap<String, String>(64)
 
         fun pushAll(
             list: List<Candidate>,
@@ -209,7 +220,8 @@ class SQLiteDictionaryEngine(
                     stack = normalizedStack,
                     rawDigits = normalizedRawDigits,
                     sourceRank = sourceRank,
-                    forcedPinyinCount = forcedPinyinCount
+                    forcedPinyinCount = forcedPinyinCount,
+                    t9EncodeCache = t9EncodeCache
                 )
 
                 val existing = result[scored.candidate.word]
@@ -284,7 +296,7 @@ class SQLiteDictionaryEngine(
             if (result.size >= totalLimit) break
         }
 
-        return result.values
+        val sorted = result.values
             .sortedWith(
                 compareByDescending<ScoredStackCandidate> { it.score }
                     .thenByDescending { if (it.exactInput) 1 else 0 }
@@ -301,6 +313,9 @@ class SQLiteDictionaryEngine(
             )
             .map { it.candidate }
             .take(totalLimit)
+
+        stackSuggestionsCache.put(cacheKey, sorted)
+        return sorted
     }
 
     override fun getSuggestions(
@@ -351,12 +366,6 @@ class SQLiteDictionaryEngine(
         }
     }
 
-    // ── 新增：生僻字兜底接口实现 ───────────────────────────────────
-
-    /**
-     * 按拼音前缀查单字候选，供 [CnT9UnicodeFallback] 生僻字兜底使用。
-     * 内部直接复用已有的 [SQLiteWordQueries.querySingleCharByInputPrefix]。
-     */
     override fun querySingleCharsWithPinyinPrefix(prefix: String): List<Candidate> {
         if (!isLoaded) return emptyList()
         val norm = prefix.trim().lowercase(Locale.ROOT)
@@ -391,14 +400,6 @@ class SQLiteDictionaryEngine(
         return score
     }
 
-    /**
-     * 判断 digits 前缀是否有可能对应某个合法拼音或声母的开头。
-     *
-     * 性能优化：使用预计算的 [pinyinToT9Cache] 直接查 Map，
-     * 避免在热路径（getPinyinPossibilities 内循环）中反复调用 T9Lookup.encodeLetters()。
-     * 原逻辑：每次遍历 ~420 个拼音并重新 encodeLetters → O(N × encodeLetters 耗时)
-     * 优化后：直接 Map.values 遍历，O(N) 且无字符串编码开销
-     */
     private fun hasLikelyContinuation(digits: String): Boolean {
         if (digits.isEmpty()) return true
 
@@ -417,12 +418,17 @@ class SQLiteDictionaryEngine(
         stack: List<String>,
         rawDigits: String,
         sourceRank: Int,
-        forcedPinyinCount: Int
+        forcedPinyinCount: Int,
+        t9EncodeCache: HashMap<String, String> = HashMap()
     ): ScoredStackCandidate {
         val normalizedInput = normalizePinyinConcat(cand.pinyin ?: cand.input)
         val stackConcat = normalizePinyinConcat(stack.joinToString(""))
         val rawT9 = rawDigits
-        val candT9 = T9Lookup.encodeLetters(normalizedInput)
+
+        // 使用局部缓存消除对相同 input 的重复 encodeLetters 调用
+        val candT9 = t9EncodeCache.getOrPut(normalizedInput) {
+            T9Lookup.encodeLetters(normalizedInput)
+        }
 
         val exactInput = normalizedInput.isNotEmpty() && normalizedInput == stackConcat
         val prefixInput = normalizedInput.isNotEmpty() &&
