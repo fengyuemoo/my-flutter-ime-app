@@ -191,6 +191,11 @@ object CnT9Handler : ImeModeHandler {
             )
         }
 
+        // ── 性能优化：stackSegs 为空时直接复用 autoPlans，跳过重新构造 ──
+        // autoPlans 来自 planCache，segments 已预计算 segDigitLengths/totalDigitLength。
+        // 重新构造只会产生相同内容的新对象并触发无意义的重新计算。
+        if (stackSegs.isEmpty()) return autoPlans
+
         return autoPlans.map { auto ->
             CnT9SentencePlanner.PathPlan(
                 rank           = auto.rank,
