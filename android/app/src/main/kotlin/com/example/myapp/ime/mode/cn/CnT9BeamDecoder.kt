@@ -5,23 +5,29 @@ import com.example.myapp.dict.impl.PinyinTable
 import com.example.myapp.dict.impl.T9Lookup
 import java.util.Locale
 
-/**
- * CN-T9 单段 Beam Search 解码器。
- *
- * 职责：
- *  1. splitDigitsByCuts  — 按手动切分点把数字串切为若干段
- *  2. decodePart         — 对单段数字串做 Beam Search，输出所有有效拼音路径
- *  3. buildChoices       — 对剩余数字串的当前前缀，查字典拼音可能性并打分
- *
- * 本类不依赖 UI / Session，可独立单元测试。
- * 被 CnT9SentencePlanner 调用，不直接暴露给其他模块。
- */
 internal object CnT9BeamDecoder {
 
     private val normalizedPinyinSet: Set<String> by lazy {
         PinyinTable.allPinyins
             .map { it.lowercase(Locale.ROOT).replace("ü", "v") }
             .toHashSet()
+    }
+
+    // ── 性能优化：预计算拼音→T9编码映射，消除 buildChoices 中的重复 encodeLetters ──
+    // 与 SQLiteDictionaryEngine.pinyinToT9Cache 独立，避免跨层依赖。
+    // 启动时 lazy 初始化一次，热路径中直接 map 查找，O(1)。
+    private val pinyinCodeMap: Map<String, Int> by lazy {
+        val map = HashMap<String, Int>(PinyinTable.allPinyins.size + 10)
+        for (py in PinyinTable.allPinyins) {
+            val norm = py.lowercase(Locale.ROOT).replace("ü", "v")
+            val code = T9Lookup.encodeLetters(norm)
+            if (code.isNotEmpty()) map[norm] = code.length
+        }
+        for (initial in listOf("zh", "ch", "sh")) {
+            val code = T9Lookup.encodeLetters(initial)
+            if (code.isNotEmpty()) map[initial] = code.length
+        }
+        map
     }
 
     internal const val PART_BEAM_WIDTH = 8
@@ -31,7 +37,13 @@ internal object CnT9BeamDecoder {
         val pos: Int,
         val segments: List<String>,
         val score: Int
-    )
+    ) {
+        // ── 性能优化：预计算 key，消除 distinctBy/thenBy 中的重复 joinToString ──
+        // decodePart 主循环每步对最多 64 个状态做 distinctBy + 排序，
+        // 原来每次都调用 segments.joinToString("'")，产生大量临时字符串。
+        // 改为构建时计算一次，后续所有比较直接用 .key，零额外分配。
+        val key: String = "$pos|${segments.joinToString("'")}"
+    }
 
     internal data class Choice(
         val text: String,
@@ -100,9 +112,9 @@ internal object CnT9BeamDecoder {
                 .sortedWith(
                     compareByDescending<DecodeState> { it.score }
                         .thenByDescending { it.pos }
-                        .thenBy { it.segments.joinToString("'") }
+                        .thenBy { it.key }           // 直接用预计算 key，无额外分配
                 )
-                .distinctBy { "${it.pos}|${it.segments.joinToString("'")}" }
+                .distinctBy { it.key }               // 直接用预计算 key
                 .take(PART_BEAM_WIDTH)
 
             if (beam.isEmpty()) break
@@ -113,9 +125,9 @@ internal object CnT9BeamDecoder {
             .filter { it.pos >= part.length }
             .sortedWith(
                 compareByDescending<DecodeState> { it.score }
-                    .thenBy { it.segments.joinToString("'") }
+                    .thenBy { it.key }               // 直接用预计算 key
             )
-            .distinctBy { it.segments.joinToString("'") }
+            .distinctBy { it.segments.joinToString("'") }  // 最终去重仍按 segments
             .take(maxPlanCount)
     }
 
@@ -131,12 +143,15 @@ internal object CnT9BeamDecoder {
 
         for (item in items) {
             if (!seen.add(item)) continue
-            val codeLen = T9Lookup.encodeLetters(item)
-                .length
+
+            val normalized = item.replace("ü", "v")
+
+            // ── 性能优化：优先从预计算 map 中取 codeLen，避免重复 encodeLetters ──
+            val codeLen = (pinyinCodeMap[normalized]
+                ?: T9Lookup.encodeLetters(item).length)
                 .coerceAtLeast(1)
                 .coerceAtMost(digits.length)
 
-            val normalized = item.replace("ü", "v")
             val score = when {
                 normalizedPinyinSet.contains(normalized) -> 300 + codeLen * 30
                 item == "zh" || item == "ch" || item == "sh" -> 240 + codeLen * 25
@@ -162,7 +177,6 @@ internal object CnT9BeamDecoder {
 
     // ── 工具函数 ──────────────────────────────────────────────────
 
-    // 修复：传 Char 而非 String
     private fun defaultLetterForDigit(d: Char): String =
         T9Lookup.charsFromDigit(d)
             .firstOrNull()
