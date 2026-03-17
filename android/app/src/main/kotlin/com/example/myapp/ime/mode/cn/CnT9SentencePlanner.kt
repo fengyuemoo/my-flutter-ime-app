@@ -15,6 +15,16 @@ object CnT9SentencePlanner {
         val consumedDigits: Int
     ) {
         val text: String = segments.joinToString("'")
+
+        // ── 性能优化：预计算每段的 T9 编码长度 ──────────────────────
+        // scoreAgainstPlan 和 sumOf(totalPlanDigits) 需要对每个 segment 调用
+        // T9Lookup.encodeLetters()，plan 构建后 segments 不再变化，
+        // 提前计算一次，消除 CnT9CandidateScorer 热路径中的重复调用。
+        val segDigitLengths: List<Int> = segments.map {
+            T9Lookup.encodeLetters(it).length.coerceAtLeast(1)
+        }
+
+        val totalDigitLength: Int = segDigitLengths.sum()
     }
 
     private data class PlanState(

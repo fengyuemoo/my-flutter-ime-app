@@ -53,6 +53,12 @@ import kotlin.math.min
  *  修复：scoreAgainstPlan() 中对 actual 和 exactInput 的 zip 比较，
  *  统一在比较前执行 .replace("ü", "v")，使双方均使用 v 表示 ü 声母。
  *  不修改 candidateSyllables 本身（避免影响其他调用方），仅在比较时规范化。
+ *
+ * ── 性能优化：PathPlan.segDigitLengths / totalDigitLength ───────────
+ *  scoreAgainstPlan 原来在主循环每段调用 T9Lookup.encodeLetters(expected)，
+ *  以及 sumOf { encodeLetters(it) } 计算 totalPlanDigits。
+ *  plan 构建后 segments 不再变化，将这两组值提前计算并存入 PathPlan，
+ *  scorer 直接取预计算值，消除热路径中重复的字符→数字编码运算。
  */
 object CnT9CandidateScorer {
 
@@ -211,10 +217,11 @@ object CnT9CandidateScorer {
 
     /**
      * 新问题 C 修复：对 actual（来自 candidateSyllables）在段比较前统一执行
-     * .replace("ü", "v")，与 plan.segments（全程使用 v）保持一致，
-     * 避免含 ü 字（旅/女/绿等）的候选精确匹配维度被错误降级为前缀匹配。
+     * .replace("ü", "v")，与 plan.segments（全程使用 v）保持一致。
      *
-     * 同样地，exactInput 的 zip 比较中也对双方都做 v 规范化。
+     * 性能优化：segDigits 改为直接取 plan.segDigitLengths[i]，
+     * totalPlanDigits 改为直接取 plan.totalDigitLength，
+     * 消除热路径中对每段重复调用 T9Lookup.encodeLetters 的开销。
      */
     private fun scoreAgainstPlan(
         cand: Candidate,
@@ -246,7 +253,8 @@ object CnT9CandidateScorer {
             val expected  = planSegs[i].lowercase(Locale.ROOT)
             // 新问题 C 修复：规范化 ü→v，与 plan.segments 统一使用 v 表示 ü 声母
             val actual    = candidateSyllables[i].lowercase(Locale.ROOT).replace("ü", "v")
-            val segDigits = T9Lookup.encodeLetters(expected).length.coerceAtLeast(1)
+            // 性能优化：直接取预计算值，不再调用 encodeLetters
+            val segDigits = plan.segDigitLengths[i]
             val isLocked  = lockedSet.contains(i)
 
             when {
@@ -266,6 +274,7 @@ object CnT9CandidateScorer {
                 }
                 expected.startsWith(actual) -> {
                     prefixSegments++; prefixChars += actual.length
+                    // actual 来自候选拼音，不在 plan 预计算范围内，保留 encodeLetters
                     consumedDigits += T9Lookup.encodeLetters(actual).length.coerceAtLeast(1)
                     if (isLocked) lockedPrefixSegments++
                 }
@@ -273,9 +282,8 @@ object CnT9CandidateScorer {
             }
         }
 
-        val totalPlanDigits = planSegs.sumOf {
-            T9Lookup.encodeLetters(it).length.coerceAtLeast(1)
-        }
+        // 性能优化：使用预计算的 totalDigitLength，消除 sumOf + encodeLetters
+        val totalPlanDigits  = plan.totalDigitLength
         val uncoveredDigits  = (totalPlanDigits - consumedDigits).coerceAtLeast(0)
         val syllableDistance = abs(planSegs.size - candidateSyllables.size)
 
