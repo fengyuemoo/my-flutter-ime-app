@@ -56,15 +56,22 @@ class SQLiteDictionaryEngine(
     private val pinyinPossibilityCache = LruCache<String, List<String>>(64)
 
     // ── 性能优化：getSuggestionsFromPinyinStack 结果缓存 ─────────────
-    // key = "pinyin1'pinyin2'...|rawDigits"
-    // pinyinStack + rawDigits 完全确定查询结果，缓存消除每次按键的重复 SQL。
-    // 容量 32：活跃输入会话中不同 stack/digits 组合数有限。
-    // 由 invalidateStackCache() 在退格/会话结束时主动清除。
     private val stackSuggestionsCache = LruCache<String, List<Candidate>>(32)
 
     fun invalidateStackCache() {
         stackSuggestionsCache.evictAll()
     }
+
+    // ── 修复：持久化数据库连接 ──────────────────────────────────────
+    // 原实现在每个查询方法里调用 dbHelper.readableDatabase，
+    // SQLiteOpenHelper 首次调用时会同步执行文件 I/O，
+    // 若恰逢 DictionaryInstaller 正在向同一文件写入，则会等待文件锁，
+    // 导致在 Dispatchers.Default 协程里阻塞长达 30-60 秒。
+    //
+    // 修复方案：setReady(true) 在 installer 后台线程调用，此时文件写入已完成，
+    // 可以安全地一次性打开连接并持久化。后续所有查询直接使用 _db，零额外开销。
+    @Volatile
+    private var _db: android.database.sqlite.SQLiteDatabase? = null
 
     private data class ScoredStackCandidate(
         val candidate: Candidate,
@@ -89,6 +96,12 @@ class SQLiteDictionaryEngine(
         isLoaded = ready
         if (info != null) {
             debugInfo = info
+        }
+        // 修复：installer 完成后（此处仍在后台线程）立即预热连接。
+        // readableDatabase 此时不再竞争文件锁，调用安全且迅速。
+        // 后续所有查询直接复用 _db，主线程和协程均不再触发额外 I/O。
+        if (ready && _db == null) {
+            _db = dbHelper.readableDatabase
         }
     }
 
@@ -191,6 +204,9 @@ class SQLiteDictionaryEngine(
     ): List<Candidate> {
         if (!isLoaded) return emptyList()
 
+        // 修复：使用持久连接 _db，若尚未就绪则安全返回空列表
+        val db = _db ?: return emptyList()
+
         val normalizedStack = pinyinStack
             .map { normalizePinyinToken(it) }
             .filter { it.isNotEmpty() }
@@ -202,11 +218,9 @@ class SQLiteDictionaryEngine(
 
         stackSuggestionsCache.get(cacheKey)?.let { return it }
 
-        val db = dbHelper.readableDatabase
         val result = LinkedHashMap<String, ScoredStackCandidate>(300)
         val totalLimit = 300
 
-        // 局部 T9 encode 缓存：消除 scoreStackCandidate 中对相同 input 的重复 encodeLetters
         val t9EncodeCache = HashMap<String, String>(64)
 
         fun pushAll(
@@ -325,7 +339,9 @@ class SQLiteDictionaryEngine(
     ): List<Candidate> {
         if (!isLoaded) return emptyList()
 
-        val db = dbHelper.readableDatabase
+        // 修复：使用持久连接 _db，若尚未就绪则安全返回空列表
+        val db = _db ?: return emptyList()
+
         val normalized = if (isT9) {
             input.filter { it in '0'..'9' }
         } else {
@@ -370,7 +386,8 @@ class SQLiteDictionaryEngine(
         if (!isLoaded) return emptyList()
         val norm = prefix.trim().lowercase(Locale.ROOT)
         if (norm.isEmpty()) return emptyList()
-        val db = dbHelper.readableDatabase
+        // 修复：使用持久连接 _db
+        val db = _db ?: return emptyList()
         return queries.querySingleCharByInputPrefix(db = db, prefix = norm).take(20)
     }
 
@@ -425,7 +442,6 @@ class SQLiteDictionaryEngine(
         val stackConcat = normalizePinyinConcat(stack.joinToString(""))
         val rawT9 = rawDigits
 
-        // 使用局部缓存消除对相同 input 的重复 encodeLetters 调用
         val candT9 = t9EncodeCache.getOrPut(normalizedInput) {
             T9Lookup.encodeLetters(normalizedInput)
         }

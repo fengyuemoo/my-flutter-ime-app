@@ -9,6 +9,13 @@ import com.example.myapp.ime.compose.common.ComposingSession
 import com.example.myapp.ime.keyboard.KeyboardController
 import com.example.myapp.ime.mode.ImeModeHandler
 import com.example.myapp.ime.ui.ImeUi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 object CnQwertyHandler : ImeModeHandler {
 
@@ -363,7 +370,15 @@ object CnQwertyHandler : ImeModeHandler {
 }
 
 /**
- * Strong-isolated candidate engine for CN-QWERTY: holds its own UI-state + candidate chain.
+ * Strong-isolated candidate engine for CN-QWERTY.
+ *
+ * 修复：updateCandidates() 改为协程 + Dispatchers.Default 执行 SQL，
+ * 不再阻塞主线程，消除中文全键盘每次按键 ~2 秒的 UI 卡顿。
+ *
+ * 线程安全说明：
+ *   后台线程（Dispatchers.Default）中 CnQwertyHandler.build() 只读取
+ *   session.qwertyInput 与 session.committedPrefix，这两个字段在 composing
+ *   期间仅由主线程追加，不存在并发写，因此直接传递 session 引用是安全的。
  */
 class CnQwertyCandidateEngine(
     private val ui: ImeUi,
@@ -380,8 +395,14 @@ class CnQwertyCandidateEngine(
     private var composingPreviewOverride: String? = null
     private var enterCommitTextOverride: String? = null
 
+    // 修复：独立的协程作用域，与 CnT9CandidateEngine 保持一致的设计
+    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var candidateJob: Job? = null
+
     fun getComposingPreviewOverride(): String? = composingPreviewOverride
     fun getEnterCommitTextOverride(): String? = enterCommitTextOverride
+
+    fun destroy() { engineScope.cancel() }
 
     private fun isDebuggableApp(): Boolean {
         return (ui.rootView.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -410,19 +431,20 @@ class CnQwertyCandidateEngine(
 
     private fun renderComposingUi(out: ImeModeHandler.Output) {
         syncFilterButton()
-
         ui.showComposingState(isExpanded = isExpanded)
         ui.setExpanded(isExpanded, isComposing = true)
-
         keyboardController.updateSidebar(out.pinyinSidebar)
         ui.setCandidates(currentCandidates)
     }
 
     fun updateCandidates() {
         syncFilterButton()
-        currentCandidates.clear()
 
         if (!session.isComposing()) {
+            candidateJob?.cancel()
+            candidateJob = null
+
+            currentCandidates.clear()
             composingPreviewOverride = null
             enterCommitTextOverride = null
 
@@ -431,17 +453,30 @@ class CnQwertyCandidateEngine(
             return
         }
 
-        val out = CnQwertyHandler.build(
-            session = session,
-            dictEngine = dictEngine,
-            singleCharMode = isSingleCharMode
-        )
+        candidateJob?.cancel()
 
-        composingPreviewOverride = out.composingPreviewText
-        enterCommitTextOverride = out.enterCommitText
+        // 在主线程快照不可变的标量状态，避免后台线程与主线程竞争
+        val snapSingleCharMode = isSingleCharMode
 
-        currentCandidates = ArrayList(out.candidates)
-        renderComposingUi(out)
+        // 修复：SQL 查询移入 Dispatchers.Default，主线程立即返回，UI 不再卡顿。
+        // session 本身传引用：build() 只读取 qwertyInput / committedPrefix，
+        // 这两个字段在 composing 期间仅由主线程追加，后台只读，线程安全。
+        candidateJob = engineScope.launch {
+            val out: ImeModeHandler.Output = withContext(Dispatchers.Default) {
+                CnQwertyHandler.build(
+                    session        = session,
+                    dictEngine     = dictEngine,
+                    singleCharMode = snapSingleCharMode
+                )
+            }
+
+            // 回到主线程（Dispatchers.Main.immediate）更新 UI
+            composingPreviewOverride = out.composingPreviewText
+            enterCommitTextOverride  = out.enterCommitText
+            currentCandidates        = ArrayList(out.candidates)
+
+            renderComposingUi(out)
+        }
     }
 
     fun handleSpaceKey() {

@@ -24,4 +24,14 @@ class DictionaryDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
     override fun onCreate(db: SQLiteDatabase) { /* 词库来自 assets，首次复制后直接可用 */ }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { /* 同上 */ }
+
+    // 修复：数据库打开后立即启用 WAL 模式，允许读写并发。
+    // 这样 installer 写入词库文件期间，读操作不会被文件锁阻塞长达30-60秒。
+    override fun onOpen(db: SQLiteDatabase) {
+        super.onOpen(db)
+        if (!db.isReadOnly) {
+            db.execSQL("PRAGMA journal_mode=WAL")
+            db.execSQL("PRAGMA synchronous=NORMAL")
+        }
+    }
 }
