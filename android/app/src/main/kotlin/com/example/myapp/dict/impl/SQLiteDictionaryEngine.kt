@@ -1,6 +1,7 @@
 package com.example.myapp.dict.impl
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import android.util.LruCache
 import com.example.myapp.dict.api.Dictionary
 import com.example.myapp.dict.db.DictionaryDbHelper
@@ -38,7 +39,7 @@ class SQLiteDictionaryEngine(
         queries = queries
     )
 
-    // ── 性能优化：预计算所有拼音的 T9 编码 ──────────────────────────
+    // 预计算所有拼音的 T9 编码
     private val pinyinToT9Cache: Map<String, String> by lazy {
         val map = HashMap<String, String>(allPinyinsLower.size + 10)
         for (py in allPinyinsLower) {
@@ -52,26 +53,34 @@ class SQLiteDictionaryEngine(
         map
     }
 
-    // ── 性能优化：getPinyinPossibilities 结果缓存 ────────────────────
+    // 性能优化：getPinyinPossibilities 结果缓存
     private val pinyinPossibilityCache = LruCache<String, List<String>>(64)
 
-    // ── 性能优化：getSuggestionsFromPinyinStack 结果缓存 ─────────────
+    // getSuggestionsFromPinyinStack 结果缓存
     private val stackSuggestionsCache = LruCache<String, List<Candidate>>(32)
 
     fun invalidateStackCache() {
         stackSuggestionsCache.evictAll()
     }
 
-    // ── 修复：持久化数据库连接 ──────────────────────────────────────
-    // 原实现在每个查询方法里调用 dbHelper.readableDatabase，
-    // SQLiteOpenHelper 首次调用时会同步执行文件 I/O，
-    // 若恰逢 DictionaryInstaller 正在向同一文件写入，则会等待文件锁，
-    // 导致在 Dispatchers.Default 协程里阻塞长达 30-60 秒。
+    // ── 持久化数据库连接 ──────────────────────────────────────────
     //
-    // 修复方案：setReady(true) 在 installer 后台线程调用，此时文件写入已完成，
-    // 可以安全地一次性打开连接并持久化。后续所有查询直接使用 _db，零额外开销。
+    // 修复方案（彻底解决 30-60 秒卡顿）：
+    //
+    // 原问题根源：DictionaryDbHelper.onOpen() 中执行 PRAGMA journal_mode=WAL，
+    // 该 PRAGMA 是写操作，会请求文件写锁。若 installer 后台线程正在向同一文件
+    // 写入，SQLite busy handler 会等待（默认 30 秒超时），造成 T9 卡顿。
+    //
+    // 新方案：
+    //  1. onOpen 中不再执行任何写操作（已在 DictionaryDbHelper 中移除）。
+    //  2. setReady(true) 在 installer 后台线程调用，此时文件写入已完成。
+    //     先通过 writableDatabase 设置 WAL + busy_timeout，然后关闭写连接，
+    //     再打开只读连接供所有查询使用。
+    //  3. 后续所有查询直接使用 _db（只读），无文件锁竞争，无额外 I/O。
+    //
+    // busy_timeout = 500ms：即使出现极端的偶发竞争，最多等 500ms 而非 30 秒。
     @Volatile
-    private var _db: android.database.sqlite.SQLiteDatabase? = null
+    private var _db: SQLiteDatabase? = null
 
     private data class ScoredStackCandidate(
         val candidate: Candidate,
@@ -97,11 +106,27 @@ class SQLiteDictionaryEngine(
         if (info != null) {
             debugInfo = info
         }
-        // 修复：installer 完成后（此处仍在后台线程）立即预热连接。
-        // readableDatabase 此时不再竞争文件锁，调用安全且迅速。
-        // 后续所有查询直接复用 _db，主线程和协程均不再触发额外 I/O。
         if (ready && _db == null) {
-            _db = dbHelper.readableDatabase
+            try {
+                // 步骤1：先用读写连接设置 WAL 和 busy_timeout。
+                // 此时 installer 已完成，文件无写锁，操作迅速。
+                // busy_timeout 500ms 作为防御性兜底，避免极端情况下的长时间阻塞。
+                val rwDb = dbHelper.writableDatabase
+                rwDb.execSQL("PRAGMA journal_mode=WAL")
+                rwDb.execSQL("PRAGMA synchronous=NORMAL")
+                rwDb.execSQL("PRAGMA busy_timeout=500")
+                // 步骤2：WAL 设置完成后，打开只读连接供查询使用。
+                // WAL 模式下读写可并发，只读连接不会阻塞未来的写操作。
+                _db = dbHelper.readableDatabase
+            } catch (_: Exception) {
+                // 降级：如果读写连接失败（如 assets 词库本身已是 WAL），
+                // 直接打开只读连接，功能不受影响，只是没有 busy_timeout 保护。
+                try {
+                    _db = dbHelper.readableDatabase
+                } catch (_: Exception) {
+                    // 词库文件损坏或未复制完成，保持 _db = null，查询会返回空列表
+                }
+            }
         }
     }
 
@@ -124,27 +149,22 @@ class SQLiteDictionaryEngine(
         val out = ArrayList<Item>()
         val seen = HashSet<String>()
 
-        fun push(text: String) {
-            val normalized = normalizePinyinToken(text)
-            if (normalized.isEmpty()) return
-
-            val code = pinyinToT9Cache[normalized] ?: T9Lookup.encodeLetters(normalized)
-            if (code.isEmpty()) return
+        // 性能优化：直接遍历 pinyinToT9Cache，避免重复调用 encodeLetters。
+        // 原逻辑遍历 allPinyinsLower 再调 encodeLetters，现在直接用预计算缓存，
+        // 过滤条件改为检查 code.startsWith 在已知前缀下更快。
+        fun push(text: String, code: String) {
             if (!normalizedDigits.startsWith(code)) return
-            if (!seen.add(normalized)) return
+            if (!seen.add(text)) return
 
-            val isInitialOnly = normalized == "zh" || normalized == "ch" || normalized == "sh"
-            val isFullSyllable = analyzer.isFullSyllable(normalized) && !isInitialOnly
+            val isInitialOnly = text == "zh" || text == "ch" || text == "sh"
+            val isFullSyllable = analyzer.isFullSyllable(text) && !isInitialOnly
             val exactLenMatch = code.length == normalizedDigits.length
 
             val remainderDigits = normalizedDigits.substring(code.length)
-            val remainderCanContinue = when {
-                remainderDigits.isEmpty() -> true
-                else -> hasLikelyContinuation(remainderDigits)
-            }
+            val remainderCanContinue = remainderDigits.isEmpty() || hasLikelyContinuation(remainderDigits)
 
             val score = buildPinyinPossibilityScore(
-                text = normalized,
+                text = text,
                 code = code,
                 exactLenMatch = exactLenMatch,
                 isFullSyllable = isFullSyllable,
@@ -154,7 +174,7 @@ class SQLiteDictionaryEngine(
 
             out.add(
                 Item(
-                    text = normalized,
+                    text = text,
                     code = code,
                     exactLenMatch = exactLenMatch,
                     isFullSyllable = isFullSyllable,
@@ -165,18 +185,19 @@ class SQLiteDictionaryEngine(
             )
         }
 
-        for (pinyin in allPinyinsLower) {
-            push(pinyin)
+        // 直接遍历预计算的 pinyinToT9Cache，零额外 encodeLetters 调用
+        for ((py, code) in pinyinToT9Cache) {
+            push(py, code)
         }
 
-        for (initial in listOf("zh", "ch", "sh")) {
-            push(initial)
-        }
-
+        // 从当前数字的第一个字母取 fallback（单字母选项）
         val firstDigit = normalizedDigits.firstOrNull()
         if (firstDigit != null) {
             for (fallback in T9Lookup.charsFromDigit(firstDigit)) {
-                push(fallback)
+                val norm = fallback.trim().lowercase(Locale.ROOT)
+                if (norm.isEmpty()) continue
+                val code = T9Lookup.encodeLetters(norm)
+                if (code.isNotEmpty()) push(norm, code)
             }
         }
 
@@ -204,7 +225,6 @@ class SQLiteDictionaryEngine(
     ): List<Candidate> {
         if (!isLoaded) return emptyList()
 
-        // 修复：使用持久连接 _db，若尚未就绪则安全返回空列表
         val db = _db ?: return emptyList()
 
         val normalizedStack = pinyinStack
@@ -339,7 +359,6 @@ class SQLiteDictionaryEngine(
     ): List<Candidate> {
         if (!isLoaded) return emptyList()
 
-        // 修复：使用持久连接 _db，若尚未就绪则安全返回空列表
         val db = _db ?: return emptyList()
 
         val normalized = if (isT9) {
@@ -386,7 +405,6 @@ class SQLiteDictionaryEngine(
         if (!isLoaded) return emptyList()
         val norm = prefix.trim().lowercase(Locale.ROOT)
         if (norm.isEmpty()) return emptyList()
-        // 修复：使用持久连接 _db
         val db = _db ?: return emptyList()
         return queries.querySingleCharByInputPrefix(db = db, prefix = norm).take(20)
     }

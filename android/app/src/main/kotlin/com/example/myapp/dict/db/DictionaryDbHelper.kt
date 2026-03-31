@@ -25,13 +25,17 @@ class DictionaryDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { /* 同上 */ }
 
-    // 修复：数据库打开后立即启用 WAL 模式，允许读写并发。
-    // 这样 installer 写入词库文件期间，读操作不会被文件锁阻塞长达30-60秒。
-    override fun onOpen(db: SQLiteDatabase) {
-        super.onOpen(db)
-        if (!db.isReadOnly) {
-            db.execSQL("PRAGMA journal_mode=WAL")
-            db.execSQL("PRAGMA synchronous=NORMAL")
-        }
-    }
+    // 修复：移除 onOpen 中的 WAL PRAGMA。
+    //
+    // 原问题：onOpen 在 readableDatabase 首次打开时由 SQLiteOpenHelper 调用，
+    // 此时 Android 内部会先尝试以读写模式打开文件。若 DictionaryInstaller
+    // 后台线程正在向同一文件写入，PRAGMA journal_mode=WAL 会请求写锁，
+    // 触发 SQLite busy timeout（默认 30 秒），造成 T9 模式 30~60 秒卡顿。
+    //
+    // 正确做法：WAL 模式应由 SQLiteDictionaryEngine.setReady() 在
+    // installer 完成后（文件写入已结束）通过专用读写连接设置，
+    // 不在 onOpen 里做任何写操作。
+    //
+    // 注意：如果词库文件从 assets 复制时已经是 WAL 模式（通过打包工具预设），
+    // 则完全不需要在运行时设置，直接删除即可。
 }
